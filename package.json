@@ -5,11 +5,10 @@
   "type": "module",
   "packageManager": "bun@1.3.13",
   "engines": {
-    "bun": ">=1.3.13",
-    "node": ">=24.15.0"
+    "bun": ">=1.3.13"
   },
   "scripts": {
-    "check": "tsgo --noEmit",
+    "check": "bun node_modules/@typescript/native-preview/bin/tsgo.js --noEmit",
     "build": "bun build ./src/tools/lintWiki.ts ./src/tools/pullGranola.ts ./src/tools/pullSlack.ts ./src/tools/pullNotion.ts --outdir=dist --target=bun",
     "lint:wiki": "bun src/tools/lintWiki.ts",
     "pull:granola": "bun src/tools/pullGranola.ts",

@@ -4,7 +4,7 @@ import path from "node:path";
 import { appendLog, dateDiffDays, parseIsoDate, slugify, splitFrontmatter, todayIso, wikiRoot } from "./common.js";
 
 const skipDirs = new Set([".git", "dist", "meta", "node_modules", "raw", "tools"]);
-const skipOrphanNames = new Set(["CLAUDE.md", "index.md", "log.md", "me.md", "priorities.md", "mine.md", "theirs.md"]);
+const skipOrphanNames = new Set(["CLAUDE.md", "PLAN.md", "index.md", "log.md", "me.md", "priorities.md", "mine.md", "theirs.md"]);
 
 type Args = {
   dryRun: boolean;
