@@ -1,0 +1,21 @@
+{
+  "name": "work-wiki",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.19"
+  },
+  "scripts": {
+    "check": "tsgo --noEmit",
+    "build": "tsgo",
+    "lint:wiki": "npm run build --silent && node dist/tools/lintWiki.js",
+    "pull:granola": "npm run build --silent && node dist/tools/pullGranola.js",
+    "pull:slack": "npm run build --silent && node dist/tools/pullSlack.js",
+    "pull:notion": "npm run build --silent && node dist/tools/pullNotion.js"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.120",
+    "@typescript/native-preview": "beta"
+  }
+}

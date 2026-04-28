@@ -2,6 +2,8 @@ raw/.cache/
 .env
 .env.*
 !.env.example
+dist/
+node_modules/
 *.pem
 *.key
 *.p12
