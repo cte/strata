@@ -22,10 +22,14 @@ Connector output is raw source material. Treat generated files under `raw/` as i
 Run scripts from the wiki root:
 
 ```sh
+mise install
 bun install
 bun run check
 bun run lint:wiki
 ```
+
+The repo pins tool versions in `.tool-versions`. Run commands through an
+activated mise shell, or use `mise exec -- <command>` if mise is not activated.
 
 Optional bundled outputs can be generated with `bun run build`.
 
