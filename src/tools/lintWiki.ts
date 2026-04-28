@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appendLog, dateDiffDays, parseIsoDate, slugify, splitFrontmatter, todayIso, wikiRoot } from "./common.js";

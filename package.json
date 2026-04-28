@@ -3,19 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.3.13",
   "engines": {
-    "node": ">=18.19"
+    "bun": ">=1.3.13"
   },
   "scripts": {
     "check": "tsgo --noEmit",
-    "build": "tsgo",
-    "lint:wiki": "npm run build --silent && node dist/tools/lintWiki.js",
-    "pull:granola": "npm run build --silent && node dist/tools/pullGranola.js",
-    "pull:slack": "npm run build --silent && node dist/tools/pullSlack.js",
-    "pull:notion": "npm run build --silent && node dist/tools/pullNotion.js"
+    "build": "bun build ./src/tools/lintWiki.ts ./src/tools/pullGranola.ts ./src/tools/pullSlack.ts ./src/tools/pullNotion.ts --outdir=dist --target=bun",
+    "lint:wiki": "bun src/tools/lintWiki.ts",
+    "pull:granola": "bun src/tools/pullGranola.ts",
+    "pull:slack": "bun src/tools/pullSlack.ts",
+    "pull:notion": "bun src/tools/pullNotion.ts"
   },
   "devDependencies": {
-    "@types/node": "^18.19.120",
+    "@types/bun": "^1.3.13",
     "@typescript/native-preview": "beta"
   }
 }
