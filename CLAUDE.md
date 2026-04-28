@@ -1,4 +1,4 @@
-# Work Wiki — Schema and Operating Manual
+# Cortex — Schema and Operating Manual
 
 This wiki exists so the user never loses track of priorities and can quickly recall past work, decisions, and commitments.
 

@@ -151,7 +151,7 @@ export async function appendLog(op: string, title: string): Promise<void> {
   const entry = `\n\n## [${timestamp}] ${op} | ${title}\n`;
   const existing = (await exists(logPath))
     ? await readFile(logPath, "utf8")
-    : "# Work Wiki — Activity Log\n";
+    : "# Cortex — Activity Log\n";
   await writeFile(logPath, `${existing.trimEnd()}${entry}`, "utf8");
 }
 

@@ -3,7 +3,7 @@ type: index
 last_updated: null
 ---
 
-# Work Wiki Index
+# Cortex Index
 
 ## People
 

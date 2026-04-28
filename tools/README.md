@@ -1,4 +1,4 @@
-# Work Wiki Tools
+# Cortex Tools
 
 These scripts are small helpers around the workflows in `CLAUDE.md`.
 

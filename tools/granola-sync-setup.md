@@ -10,7 +10,7 @@ Use this path when Granola API access is unavailable. The goal is to move export
 
 ## launchd job
 
-Create `~/Library/LaunchAgents/dev.exe.work-wiki.granola-sync.plist` on the Mac:
+Create `~/Library/LaunchAgents/dev.exe.cortex.granola-sync.plist` on the Mac:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,7 +19,7 @@ Create `~/Library/LaunchAgents/dev.exe.work-wiki.granola-sync.plist` on the Mac:
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.exe.work-wiki.granola-sync</string>
+  <string>dev.exe.cortex.granola-sync</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
@@ -39,7 +39,7 @@ Create `~/Library/LaunchAgents/dev.exe.work-wiki.granola-sync.plist` on the Mac:
 Load it:
 
 ```sh
-launchctl load ~/Library/LaunchAgents/dev.exe.work-wiki.granola-sync.plist
+launchctl load ~/Library/LaunchAgents/dev.exe.cortex.granola-sync.plist
 ```
 
 ## Git remote option
@@ -51,7 +51,7 @@ Create `~/bin/granola-sync-to-wiki.sh`:
 set -euo pipefail
 
 EXPORT_DIR="$HOME/Documents/Granola Exports"
-WIKI_DIR="$HOME/Documents/work-wiki"
+WIKI_DIR="$HOME/Documents/cortex"
 
 mkdir -p "$WIKI_DIR/raw/granola"
 rsync -a --ignore-existing "$EXPORT_DIR/" "$WIKI_DIR/raw/granola/"
