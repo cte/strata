@@ -1,0 +1,12 @@
+raw/.cache/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store
+__pycache__/
+*.py[cod]
+meta/lint/*.tmp
