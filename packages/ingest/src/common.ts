@@ -12,7 +12,7 @@ export type JsonValue =
 export type JsonObject = { [key: string]: JsonValue };
 export type YamlValue = null | boolean | number | string | string[];
 
-export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 export const wikiRoot = path.join(repoRoot, "wiki");
 
 export function utcNow(): Date {

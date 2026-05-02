@@ -17,12 +17,12 @@
     "format:check": "biome format .",
     "biome:check": "biome check .",
     "test": "bun test",
-    "build": "bun build ./src/tools/lintWiki.ts ./src/tools/pullGranola.ts ./src/tools/pullSlack.ts ./src/tools/pullNotion.ts ./packages/cli/src/index.ts --outdir=dist --target=bun",
+    "build": "bun build ./packages/ingest/src/lintWiki.ts ./packages/ingest/src/pullGranola.ts ./packages/ingest/src/pullSlack.ts ./packages/ingest/src/pullNotion.ts ./packages/cli/src/index.ts --outdir=dist --target=bun",
     "cortex": "bun packages/cli/src/index.ts",
-    "lint:wiki": "bun src/tools/lintWiki.ts",
-    "pull:granola": "bun src/tools/pullGranola.ts",
-    "pull:slack": "bun src/tools/pullSlack.ts",
-    "pull:notion": "bun src/tools/pullNotion.ts"
+    "lint:wiki": "bun packages/ingest/src/lintWiki.ts",
+    "pull:granola": "bun packages/ingest/src/pullGranola.ts",
+    "pull:slack": "bun packages/ingest/src/pullSlack.ts",
+    "pull:notion": "bun packages/ingest/src/pullNotion.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.14",

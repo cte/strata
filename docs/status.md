@@ -15,8 +15,8 @@ The system is not yet a self-maintaining wiki agent. The next major gap is the e
 | Roadmap area | Status | Current implementation | Next work |
 |---|---:|---|---|
 | Work wiki skeleton | Mostly present | Wiki Markdown files and directories live under `wiki/`, including `wiki/priorities.md`, `wiki/me.md`, `wiki/index.md`, `wiki/log.md`, `wiki/actions/`, `wiki/people/`, `wiki/projects/`, `wiki/meetings/`, `wiki/decisions/`, `wiki/threads/`, and `wiki/raw/`. | Continue schema and content quality work after the harness can safely maintain pages. |
-| Source connectors | Partial | TypeScript scripts exist under `src/tools/` for Granola, Slack, Notion, and wiki linting. | Defer deeper ingestion automation until the harness has guarded write tools and learning loops. |
-| Bun workspace | Present | Packages exist for `@cortex/core`, `@cortex/agent`, `@cortex/tools`, `@cortex/cli`, and `@cortex/tui`. | Keep package boundaries stable while adding tools and learning modules. |
+| Source connectors | Partial | TypeScript scripts exist under `packages/ingest/` for Granola, Slack, Notion, and wiki linting. | Defer deeper ingestion automation until the harness has guarded write tools and learning loops. |
+| Bun workspace | Present | Packages exist for `@cortex/core`, `@cortex/agent`, `@cortex/tools`, `@cortex/cli`, `@cortex/tui`, and `@cortex/ingest`. | Keep package boundaries stable while adding tools and learning modules. |
 | Model/auth layer | Present | OpenAI-compatible and ChatGPT/OpenAI Codex auth code exists in `packages/agent`; CLI exposes auth commands. | Improve provider UX in the TUI as the runtime matures. |
 | Agent loop | Present, read-only oriented | `packages/agent/src/agentLoop.ts` runs bounded model/tool iterations and records sessions. Current system prompt tells the agent this phase is read-only. | Generalize context construction for memory, skills, active todos, and richer tool profiles. |
 | Session storage | Present | `packages/core/src/sessionStore.ts` persists sessions, messages, events, and JSONL traces in `.cortex/`. | Add FTS-backed session recall and expose it as tools. |

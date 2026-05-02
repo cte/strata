@@ -35,6 +35,10 @@
       "name": "@cortex/core",
       "version": "0.1.0",
     },
+    "packages/ingest": {
+      "name": "@cortex/ingest",
+      "version": "0.1.0",
+    },
     "packages/tools": {
       "name": "@cortex/tools",
       "version": "0.1.0",
@@ -76,6 +80,8 @@
     "@cortex/cli": ["@cortex/cli@workspace:packages/cli"],
 
     "@cortex/core": ["@cortex/core@workspace:packages/core"],
+
+    "@cortex/ingest": ["@cortex/ingest@workspace:packages/ingest"],
 
     "@cortex/tools": ["@cortex/tools@workspace:packages/tools"],
 
