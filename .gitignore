@@ -4,8 +4,6 @@ wiki/raw/.cache/
 !.env.example
 dist/
 node_modules/
-.agents/
-.claude/
 skills-lock.json
 *.pem
 *.key
@@ -15,9 +13,4 @@ skills-lock.json
 __pycache__/
 *.py[cod]
 wiki/meta/lint/*.tmp
-.cortex/auth.json
-.cortex/state.sqlite*
-.cortex/traces/
-.cortex/reports/
-.cortex/memory/
-.cortex/proposals/
+.cortex/
