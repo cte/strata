@@ -1,5 +1,7 @@
 # Cortex — Personal Work Wiki Build Plan
 
+Current prerequisite: build the agentic harness before continuing deeper wiki automation. See `AGENTIC_HARNESS_PLAN.md` for the detailed Bun/TypeScript implementation plan, especially the learning loops for trace persistence, memory, skills, session search, reflection, and curator passes.
+
 A plan for Claude Code to build and maintain a personal work wiki, following the LLM Wiki pattern (Karpathy, 2026).
 
 ---

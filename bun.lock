@@ -9,8 +9,47 @@
         "@typescript/native-preview": "beta",
       },
     },
+    "packages/agent": {
+      "name": "@cortex/agent",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cortex/core": "workspace:*",
+        "@cortex/tools": "workspace:*",
+      },
+    },
+    "packages/cli": {
+      "name": "@cortex/cli",
+      "version": "0.1.0",
+      "bin": {
+        "cortex": "./src/index.ts",
+      },
+      "dependencies": {
+        "@cortex/agent": "workspace:*",
+        "@cortex/core": "workspace:*",
+        "@cortex/tools": "workspace:*",
+      },
+    },
+    "packages/core": {
+      "name": "@cortex/core",
+      "version": "0.1.0",
+    },
+    "packages/tools": {
+      "name": "@cortex/tools",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cortex/core": "workspace:*",
+      },
+    },
   },
   "packages": {
+    "@cortex/agent": ["@cortex/agent@workspace:packages/agent"],
+
+    "@cortex/cli": ["@cortex/cli@workspace:packages/cli"],
+
+    "@cortex/core": ["@cortex/core@workspace:packages/core"],
+
+    "@cortex/tools": ["@cortex/tools@workspace:packages/tools"],
+
     "@types/bun": ["@types/bun@1.3.13", "", { "dependencies": { "bun-types": "1.3.13" } }, "sha512-9fqXWk5YIHGGnUau9TEi+qdlTYDAnOj+xLCmSTwXfAIqXr2x4tytJb43E9uCvt09zJURKXwAtkoH4nLQfzeTXw=="],
 
     "@types/node": ["@types/node@18.19.130", "", { "dependencies": { "undici-types": "~5.26.4" } }, "sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg=="],

@@ -1,0 +1,25 @@
+{
+  "name": "@cortex/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent-loop": "./src/agentLoop.ts",
+    "./auth-store": "./src/authStore.ts",
+    "./chatgpt-oauth": "./src/chatgptOAuth.ts",
+    "./model": "./src/model.ts",
+    "./openai-codex": "./src/openaiCodex.ts",
+    "./openai-compatible": "./src/openaiCompatible.ts",
+    "./provider-tool-names": "./src/providerToolNames.ts",
+    "./types": "./src/types.ts"
+  },
+  "dependencies": {
+    "@cortex/core": "workspace:*",
+    "@cortex/tools": "workspace:*"
+  },
+  "scripts": {
+    "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",
+    "test": "bun test"
+  }
+}

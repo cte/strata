@@ -12,3 +12,9 @@ node_modules/
 __pycache__/
 *.py[cod]
 meta/lint/*.tmp
+.cortex/auth.json
+.cortex/state.sqlite*
+.cortex/traces/
+.cortex/reports/
+.cortex/memory/
+.cortex/proposals/

@@ -1,0 +1,20 @@
+{
+  "name": "@cortex/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./policy": "./src/policy.ts",
+    "./registry": "./src/registry.ts",
+    "./wiki-tools": "./src/wikiTools.ts",
+    "./types": "./src/types.ts"
+  },
+  "dependencies": {
+    "@cortex/core": "workspace:*"
+  },
+  "scripts": {
+    "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",
+    "test": "bun test"
+  }
+}
