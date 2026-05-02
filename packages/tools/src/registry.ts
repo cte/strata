@@ -5,6 +5,9 @@ import type {
   ToolErrorPayload,
   ToolExecutionResult,
   ToolMetadata,
+  ToolMode,
+  ToolProfile,
+  ToolRegistryOptions,
 } from "./types.js";
 
 export class ToolRegistryError extends Error {
@@ -19,6 +22,11 @@ export class ToolRegistryError extends Error {
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
+  private readonly profile: ToolProfile;
+
+  constructor(options: ToolRegistryOptions = {}) {
+    this.profile = options.profile ?? "dangerous";
+  }
 
   register(tool: ToolDefinition): this {
     validateToolName(tool.name);
@@ -37,8 +45,13 @@ export class ToolRegistry {
     return tool;
   }
 
+  getProfile(): ToolProfile {
+    return this.profile;
+  }
+
   list(): ToolMetadata[] {
     return [...this.tools.values()]
+      .filter((tool) => toolProfileAllowsMode(this.profile, tool.mode))
       .map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -50,7 +63,7 @@ export class ToolRegistry {
   }
 
   async execute(name: string, args: JsonObject, context: ToolContext): Promise<JsonValue> {
-    const tool = this.get(name);
+    const tool = this.getAvailable(name);
     return tool.handler(args, context);
   }
 
@@ -60,7 +73,7 @@ export class ToolRegistry {
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
     try {
-      const tool = this.get(name);
+      const tool = this.getAvailable(name);
       const result = await tool.handler(args, context);
       const limited = limitJsonValue(result, tool.maxResultChars);
       return {
@@ -78,6 +91,28 @@ export class ToolRegistry {
       };
     }
   }
+
+  private getAvailable(name: string): ToolDefinition {
+    const tool = this.get(name);
+    if (!toolProfileAllowsMode(this.profile, tool.mode)) {
+      throw new ToolRegistryError(
+        "tool_unavailable",
+        `Tool is not available in the ${this.profile} profile: ${name}`,
+      );
+    }
+    return tool;
+  }
+}
+
+const TOOL_PROFILE_MODES: Record<ToolProfile, ReadonlySet<ToolMode>> = {
+  "read-only": new Set(["read"]),
+  maintenance: new Set(["read", "write"]),
+  learning: new Set(["read", "learning"]),
+  dangerous: new Set(["read", "write", "learning", "dangerous"]),
+};
+
+export function toolProfileAllowsMode(profile: ToolProfile, mode: ToolMode): boolean {
+  return TOOL_PROFILE_MODES[profile].has(mode);
 }
 
 function validateToolName(name: string): void {

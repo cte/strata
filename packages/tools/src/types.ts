@@ -1,6 +1,11 @@
 import type { JsonObject, JsonValue } from "@cortex/core";
 
 export type ToolMode = "read" | "write" | "learning" | "dangerous";
+export type ToolProfile = "read-only" | "maintenance" | "learning" | "dangerous";
+
+export interface ToolRegistryOptions {
+  profile?: ToolProfile;
+}
 
 export interface ToolContext {
   repoRoot: string;

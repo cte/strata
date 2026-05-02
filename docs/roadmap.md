@@ -108,9 +108,9 @@ We should copy good implementation ideas from Hermes and Pi. Pi is especially re
 
 The immediate build focus is the agentic harness, because the wiki cannot become self-maintaining until the harness has enough tool and learning infrastructure.
 
-The next implementation sequence should be:
+The next implementation sequence is:
 
-1. Expand the tool foundation with registry profiles and safe filesystem read/search tools.
+1. Expand the tool foundation with registry profiles and safe filesystem read/search tools. Status: complete.
 2. Add guarded edit/write tools for wiki maintenance.
 3. Add a gated shell tool for tests, formatting, and local automation.
 4. Add todo, memory, session-search, and skill tools.

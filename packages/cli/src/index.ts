@@ -18,7 +18,7 @@ import {
   type JsonObject,
   type SessionRecord,
 } from "@cortex/core";
-import { createDefaultToolRegistry } from "@cortex/tools";
+import { createDefaultToolRegistry, type ToolProfile } from "@cortex/tools";
 import { runTui } from "@cortex/tui";
 
 type CommandResult = number;
@@ -36,8 +36,8 @@ commands:
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions
   sessions search <query>      search sessions using the current simple index
-  tools list                   list registered harness tools
-  tools call <name> [json]     call a registered tool with JSON args
+  tools list [--profile P]     list registered harness tools
+  tools call [--profile P] <name> [json]
 `;
 }
 
@@ -232,12 +232,16 @@ async function cmdSessions(args: string[]): Promise<CommandResult> {
 
 async function cmdTools(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
-  const registry = createDefaultToolRegistry();
 
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: cortex tools <list|call>`);
+    console.log(
+      `usage: cortex tools <list|call> [--profile read-only|maintenance|learning|dangerous]`,
+    );
     return 0;
   }
+
+  const profile = parseToolProfile(args);
+  const registry = createDefaultToolRegistry({ profile });
 
   if (subcommand === "list") {
     if (args.length !== 0) {
@@ -320,6 +324,24 @@ function parseJsonObject(raw: string | undefined): JsonObject {
     throw new Error("Tool args must be a JSON object");
   }
   return parsed as JsonObject;
+}
+
+function parseToolProfile(args: string[]): ToolProfile {
+  const index = args.indexOf("--profile");
+  if (index === -1) {
+    return "read-only";
+  }
+  const value = args[index + 1];
+  if (
+    value !== "read-only" &&
+    value !== "maintenance" &&
+    value !== "learning" &&
+    value !== "dangerous"
+  ) {
+    throw new Error("--profile must be read-only, maintenance, learning, or dangerous");
+  }
+  args.splice(index, 2);
+  return value;
 }
 
 function parseQueryOptions(args: string[]): QueryOptions {
