@@ -35,6 +35,16 @@
       "name": "@cortex/core",
       "version": "0.1.0",
     },
+    "packages/e2e": {
+      "name": "@cortex/e2e",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cortex/agent": "workspace:*",
+        "@cortex/core": "workspace:*",
+        "@cortex/tools": "workspace:*",
+        "@cortex/tui": "workspace:*",
+      },
+    },
     "packages/ingest": {
       "name": "@cortex/ingest",
       "version": "0.1.0",
@@ -80,6 +90,8 @@
     "@cortex/cli": ["@cortex/cli@workspace:packages/cli"],
 
     "@cortex/core": ["@cortex/core@workspace:packages/core"],
+
+    "@cortex/e2e": ["@cortex/e2e@workspace:packages/e2e"],
 
     "@cortex/ingest": ["@cortex/ingest@workspace:packages/ingest"],
 
