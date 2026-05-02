@@ -92,6 +92,26 @@ export class ToolRegistry {
     }
   }
 
+  async safeExecuteText(
+    name: string,
+    argumentsText: string,
+    context: ToolContext,
+  ): Promise<ToolExecutionResult> {
+    const parsedArgs = parseToolArgumentsText(argumentsText);
+    if (!parsedArgs.ok) {
+      return {
+        ok: false,
+        toolName: name,
+        error: {
+          code: "invalid_tool_args",
+          message: parsedArgs.message,
+        },
+        truncated: false,
+      };
+    }
+    return this.safeExecute(name, parsedArgs.value, context);
+  }
+
   private getAvailable(name: string): ToolDefinition {
     const tool = this.get(name);
     if (!toolProfileAllowsMode(this.profile, tool.mode)) {
@@ -113,6 +133,31 @@ const TOOL_PROFILE_MODES: Record<ToolProfile, ReadonlySet<ToolMode>> = {
 
 export function toolProfileAllowsMode(profile: ToolProfile, mode: ToolMode): boolean {
   return TOOL_PROFILE_MODES[profile].has(mode);
+}
+
+type ParsedToolArguments =
+  | {
+      ok: true;
+      value: JsonObject;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+function parseToolArgumentsText(argumentsText: string): ParsedToolArguments {
+  try {
+    const parsed: unknown = JSON.parse(argumentsText);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { ok: false, message: "Tool arguments must be a JSON object" };
+    }
+    return { ok: true, value: parsed as JsonObject };
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function validateToolName(name: string): void {

@@ -14,7 +14,6 @@ import type {
   AgentRunResult,
   AgentToolCall,
   ModelResponse,
-  ToolArgumentParseResult,
 } from "./types.js";
 
 const DEFAULT_MAX_ITERATIONS = 12;
@@ -312,58 +311,18 @@ async function executeToolCall(
   tools: ToolRegistry,
   toolCall: AgentToolCall,
 ): Promise<ToolExecutionResult> {
-  const parsedArgs = parseToolArguments(toolCall.argumentsText);
   await store.appendEvent(sessionId, "tool.call", {
     toolCallId: toolCall.id,
     toolName: toolCall.name,
     argumentsText: toolCall.argumentsText,
-    arguments: parsedArgs.ok ? parsedArgs.value : null,
   });
 
-  if (!parsedArgs.ok) {
-    const invalidResult: ToolExecutionResult = {
-      ok: false,
-      toolName: toolCall.name,
-      error: {
-        code: "invalid_tool_args",
-        message: String(parsedArgs.error.message ?? "Tool arguments must be a JSON object"),
-      },
-      truncated: false,
-    };
-    await store.appendEvent(
-      sessionId,
-      "tool.result",
-      toolResultEventPayload(toolCall.id, invalidResult),
-    );
-    return invalidResult;
-  }
-
-  const result = await tools.safeExecute(toolCall.name, parsedArgs.value, {
+  const result = await tools.safeExecuteText(toolCall.name, toolCall.argumentsText, {
     repoRoot,
     sessionId,
   });
   await store.appendEvent(sessionId, "tool.result", toolResultEventPayload(toolCall.id, result));
   return result;
-}
-
-function parseToolArguments(argumentsText: string): ToolArgumentParseResult {
-  try {
-    const parsed: unknown = JSON.parse(argumentsText);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return {
-        ok: false,
-        error: { message: "Tool arguments must be a JSON object" },
-      };
-    }
-    return { ok: true, value: parsed as JsonObject };
-  } catch (error: unknown) {
-    return {
-      ok: false,
-      error: {
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
 }
 
 function toolCallsToJson(toolCalls: AgentToolCall[]): JsonValue {

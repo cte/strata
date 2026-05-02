@@ -1,7 +1,13 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@cortex/core";
-import { isMarkdownPath, isRawPath, PolicyViolationError } from "./policy.js";
+import {
+  assertReadAllowed,
+  isBlockedPathSegment,
+  isMarkdownPath,
+  isRawPath,
+  PolicyViolationError,
+} from "./policy.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolContext, ToolDefinition } from "./types.js";
 
@@ -42,7 +48,6 @@ const DEFAULT_LIST_LIMIT = 200;
 const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_MAX_PAGE_CHARS = 64_000;
 const DEFAULT_MAX_SEARCH_FILE_BYTES = 512_000;
-const EXCLUDED_DIRS = new Set([".git", ".cortex", "node_modules", "dist"]);
 const WIKI_DIR = "wiki";
 
 interface ResolvedWikiPath {
@@ -207,7 +212,7 @@ async function listMarkdownPages(
       }
 
       if (entry.isDirectory()) {
-        if (EXCLUDED_DIRS.has(entry.name)) {
+        if (isBlockedPathSegment(entry.name)) {
           continue;
         }
         await walk(absolutePath);
@@ -274,33 +279,25 @@ function resolveWikiPath(
 
   const wikiRoot = path.join(path.resolve(repoRoot), WIKI_DIR);
   const normalizedPath = normalizeWikiRequestPath(requestedPath);
-  const absolutePath = path.resolve(wikiRoot, normalizedPath);
-
-  if (!isPathInside(wikiRoot, absolutePath)) {
+  if (isAbsoluteRequestPath(normalizedPath)) {
     throw new PolicyViolationError(
       "outside_wiki",
       `Path escapes the wiki directory: ${requestedPath}`,
     );
   }
-
-  const relativePath = toPosixPath(path.relative(wikiRoot, absolutePath));
+  const resolved = assertReadAllowed(repoRoot, `${WIKI_DIR}/${normalizedPath}`, {
+    allowRoot: true,
+    allowRawRead: options.allowRawRead === true,
+  });
+  const relativePath = toWikiRelativePath(resolved.relativePath, requestedPath);
   if (relativePath === "") {
     if (options.allowRoot === true) {
-      return { absolutePath, relativePath, wikiRoot };
+      return { absolutePath: resolved.absolutePath, relativePath, wikiRoot };
     }
     throw new PolicyViolationError("root_path", "Path must point to a wiki file or subdirectory");
   }
 
-  rejectBlockedSegments(relativePath);
-
-  if (isRawPath(relativePath) && options.allowRawRead !== true) {
-    throw new PolicyViolationError(
-      "raw_read_not_enabled",
-      `Reading raw/ requires includeRaw: true: ${relativePath}`,
-    );
-  }
-
-  return { absolutePath, relativePath, wikiRoot };
+  return { absolutePath: resolved.absolutePath, relativePath, wikiRoot };
 }
 
 function normalizeWikiRequestPath(requestedPath: string): string {
@@ -314,19 +311,21 @@ function normalizeWikiRequestPath(requestedPath: string): string {
   return normalized;
 }
 
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+function toWikiRelativePath(repoRelativePath: string, requestedPath: string): string {
+  if (repoRelativePath === WIKI_DIR) {
+    return "";
+  }
+  if (repoRelativePath.startsWith(`${WIKI_DIR}/`)) {
+    return repoRelativePath.slice(WIKI_DIR.length + 1);
+  }
+  throw new PolicyViolationError(
+    "outside_wiki",
+    `Path escapes the wiki directory: ${requestedPath}`,
+  );
 }
 
-function rejectBlockedSegments(relativePath: string): void {
-  const blocked = relativePath.split("/").find((segment) => EXCLUDED_DIRS.has(segment));
-  if (blocked !== undefined) {
-    throw new PolicyViolationError(
-      "blocked_path_segment",
-      `Path includes blocked segment "${blocked}": ${relativePath}`,
-    );
-  }
+function isAbsoluteRequestPath(requestedPath: string): boolean {
+  return requestedPath.startsWith("/") || /^[A-Za-z]:\//.test(requestedPath);
 }
 
 function requiredString(value: JsonValue | undefined, name: string): string {

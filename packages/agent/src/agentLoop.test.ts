@@ -113,4 +113,41 @@ describe("runAgentLoop", () => {
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
+
+  test("returns invalid tool argument errors to the model", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    try {
+      const model = new SequenceModelAdapter([
+        {
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_1",
+              name: "wiki.search",
+              argumentsText: "[]",
+            },
+          ],
+        },
+        {
+          content: "The tool arguments were invalid.",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+
+      const result = await runAgentLoop({
+        question: "Use invalid tool args.",
+        model,
+        repoRoot,
+      });
+
+      expect(result.status).toBe("completed");
+      const toolMessage = model.requests[1]?.messages.at(-1);
+      expect(toolMessage?.role).toBe("tool");
+      expect(toolMessage?.content).toContain("invalid_tool_args");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
 });

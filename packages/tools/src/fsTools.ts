@@ -2,7 +2,12 @@ import type { Stats } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@cortex/core";
-import { assertReadAllowed, isRawPath, PolicyViolationError } from "./policy.js";
+import {
+  assertReadAllowed,
+  isBlockedPathSegment,
+  isRawPath,
+  PolicyViolationError,
+} from "./policy.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolDefinition } from "./types.js";
 
@@ -65,7 +70,6 @@ const MAX_LIMIT = 5_000;
 const MAX_READ_BYTES = 10_000_000;
 const MAX_READ_CHARS = 1_000_000;
 const MAX_GREP_FILE_BYTES = 5_000_000;
-const BLOCKED_DIRS = new Set([".git", ".cortex", "node_modules", "dist"]);
 
 export function registerFileSystemTools(registry: ToolRegistry): ToolRegistry {
   for (const tool of createFileSystemTools()) {
@@ -477,7 +481,7 @@ async function walkDirectory(
   entries.sort((left, right) => left.name.localeCompare(right.name));
 
   for (const entry of entries) {
-    if (BLOCKED_DIRS.has(entry.name)) {
+    if (isBlockedPathSegment(entry.name)) {
       continue;
     }
 

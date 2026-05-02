@@ -59,6 +59,28 @@ describe("wiki tools", () => {
       ).resolves.toMatchObject({
         count: 2,
       });
+
+      for (const requestedPath of ["../package.json", "..", "/tmp/outside.md"]) {
+        const outside = await registry.safeExecute(
+          "wiki.readPage",
+          { path: requestedPath },
+          context,
+        );
+        expect(outside.ok).toBe(false);
+        if (!outside.ok) {
+          expect(outside.error.code).toBe("outside_wiki");
+        }
+      }
+
+      const blocked = await registry.safeExecute(
+        "wiki.readPage",
+        { path: ".cortex/secret.md" },
+        context,
+      );
+      expect(blocked.ok).toBe(false);
+      if (!blocked.ok) {
+        expect(blocked.error.code).toBe("blocked_path_segment");
+      }
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

@@ -11,13 +11,7 @@ import {
   runAgentLoop,
   setChatGptCredentials,
 } from "@cortex/agent";
-import {
-  ensureRuntimeDirs,
-  getCortexPaths,
-  SessionStore,
-  type JsonObject,
-  type SessionRecord,
-} from "@cortex/core";
+import { ensureRuntimeDirs, getCortexPaths, SessionStore, type SessionRecord } from "@cortex/core";
 import { createDefaultToolRegistry, type ToolProfile } from "@cortex/tools";
 import { runTui } from "@cortex/tui";
 
@@ -261,7 +255,7 @@ async function cmdTools(args: string[]): Promise<CommandResult> {
     if (args.length > 1) {
       throw new Error("tools call accepts at most one JSON argument object");
     }
-    const result = await registry.safeExecute(name, parseJsonObject(args[0]), {
+    const result = await registry.safeExecuteText(name, args[0] ?? "{}", {
       repoRoot: getCortexPaths().repoRoot,
     });
     console.log(JSON.stringify(result, null, 2));
@@ -313,18 +307,6 @@ main(process.argv.slice(2)).then(
     process.exitCode = 1;
   },
 );
-
-function parseJsonObject(raw: string | undefined): JsonObject {
-  if (raw === undefined) {
-    return {};
-  }
-
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Tool args must be a JSON object");
-  }
-  return parsed as JsonObject;
-}
 
 function parseToolProfile(args: string[]): ToolProfile {
   const index = args.indexOf("--profile");

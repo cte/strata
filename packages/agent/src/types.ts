@@ -55,18 +55,6 @@ export interface AgentRunResult {
   toolCalls: number;
 }
 
-export interface ParsedToolArguments {
-  ok: true;
-  value: JsonObject;
-}
-
-export interface InvalidToolArguments {
-  ok: false;
-  error: JsonObject;
-}
-
-export type ToolArgumentParseResult = ParsedToolArguments | InvalidToolArguments;
-
 export type ToolResultContent = JsonValue;
 
 export type AgentRunEvent =

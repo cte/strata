@@ -94,6 +94,10 @@ export function isRawPath(relativePath: string): boolean {
   );
 }
 
+export function isBlockedPathSegment(segment: string): boolean {
+  return BLOCKED_PATH_SEGMENTS.has(segment);
+}
+
 function isPathInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -101,7 +105,7 @@ function isPathInside(root: string, target: string): boolean {
 
 function rejectBlockedSegments(relativePath: string): void {
   const segments = relativePath.split("/");
-  const blocked = segments.find((segment) => BLOCKED_PATH_SEGMENTS.has(segment));
+  const blocked = segments.find((segment) => isBlockedPathSegment(segment));
   if (blocked !== undefined) {
     throw new PolicyViolationError(
       "blocked_path_segment",
