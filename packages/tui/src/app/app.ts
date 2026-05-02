@@ -109,7 +109,35 @@ export class CortexApp implements Component {
         col: editor.cursor.col,
       };
     }
+
+    const overlay = this.activeOverlay()?.render(ctx);
+    if (overlay !== undefined && overlay.lines.length > 0) {
+      const overlayHeight = Math.min(overlay.lines.length, layoutHeight - reservedTop);
+      const startRow = Math.max(reservedTop, layoutHeight - footer.lines.length - overlayHeight);
+      for (let i = 0; i < overlayHeight; i += 1) {
+        const target = startRow + i;
+        if (target >= lines.length) {
+          break;
+        }
+        lines[target] = overlay.lines[i] ?? "";
+      }
+      cursor = undefined;
+    }
+
     return cursor === undefined ? { lines } : { lines, cursor };
+  }
+
+  private activeOverlay(): Component | undefined {
+    if (this.help.active) {
+      return this.help;
+    }
+    if (this.authDialog.active) {
+      return this.authDialog;
+    }
+    if (this.sessionSelector.active) {
+      return this.sessionSelector;
+    }
+    return undefined;
   }
 
   handleInput(event: import("../keys.js").InputEvent): "consumed" | "passthrough" {
