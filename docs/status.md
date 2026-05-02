@@ -6,9 +6,9 @@ This document tracks where the repo currently stands against [roadmap.md](./road
 
 ## Current Snapshot
 
-Cortex currently has a Bun/TypeScript monorepo, an initial Markdown wiki skeleton, a bounded model/tool agent loop, ChatGPT/OpenAI Codex auth, SQLite-backed session traces, a small read-only wiki toolset, and a first-party TUI package.
+Cortex currently has a Bun/TypeScript monorepo, an initial Markdown wiki skeleton, a bounded model/tool agent loop, ChatGPT/OpenAI Codex auth, SQLite-backed session traces, read-only wiki and filesystem tools, registry profiles, and a first-party TUI package.
 
-The system is not yet a self-maintaining wiki agent. The next major gap is the expanded tool and learning surface: safe filesystem tools, guarded write/edit tools, shell execution, todo state, persistent memory, session-search tools, skills, reflection, and scheduled maintenance.
+The system is not yet a self-maintaining wiki agent. The next major gap is the guarded write and learning surface: wiki/file edit tools, shell execution, todo state, persistent memory, session-search tools, skills, reflection, and scheduled maintenance.
 
 ## Roadmap Status
 
@@ -20,8 +20,8 @@ The system is not yet a self-maintaining wiki agent. The next major gap is the e
 | Model/auth layer | Present | OpenAI-compatible and ChatGPT/OpenAI Codex auth code exists in `packages/agent`; CLI exposes auth commands. | Improve provider UX in the TUI as the runtime matures. |
 | Agent loop | Present, read-only oriented | `packages/agent/src/agentLoop.ts` runs bounded model/tool iterations and records sessions. Current system prompt tells the agent this phase is read-only. | Generalize context construction for memory, skills, active todos, and richer tool profiles. |
 | Session storage | Present | `packages/core/src/sessionStore.ts` persists sessions, messages, events, and JSONL traces in `.cortex/`. | Add FTS-backed session recall and expose it as tools. |
-| Tool registry | Basic | `packages/tools/src/registry.ts` registers and safely executes tools with modes and result truncation. | Add registry profiles, availability checks, stronger schema validation, and richer tool context. |
-| Current tools | Basic read-only wiki tools | Registered tools are `wiki.listPages`, `wiki.readPage`, and `wiki.search`. | Add Pi-style `fs.read`, `fs.list`, `fs.find`, `fs.grep`, then guarded `fs.edit` and `fs.write`. |
+| Tool registry | Partial | `packages/tools/src/registry.ts` registers and safely executes tools with modes, read-only/maintenance/learning/dangerous profiles, and result truncation. | Add availability checks, stronger schema validation, and richer tool context. |
+| Current tools | Read-only foundation present | Registered read tools are `wiki.listPages`, `wiki.readPage`, `wiki.search`, `fs.list`, `fs.read`, `fs.find`, and `fs.grep`. Filesystem tools stay repo-bound, skip blocked runtime/build directories, reject symlink reads, reject binary reads, and require `includeRaw` for raw sources. | Add guarded `fs.edit`, `fs.write`, and wiki write tools. |
 | Shell tool | Not implemented | No agent-callable shell tool exists. | Add gated Pi-style `shell.run` for tests, formatting, and local automation. |
 | Todo tool | Not implemented | No session todo tool exists. | Add Hermes-style todo state and inject active todos into agent context. |
 | Memory | Storage dirs only | `.cortex/memory` is created by runtime setup, but no memory tool or prompt injection exists. | Add `memory.*` tools and bounded user/project memory files. |
@@ -33,12 +33,12 @@ The system is not yet a self-maintaining wiki agent. The next major gap is the e
 
 ## Immediate Next Milestone
 
-The next milestone is the tool expansion milestone:
+The next milestone is guarded write tools:
 
-1. Add registry profiles for read-only, maintenance, learning, and dangerous tool sets.
-2. Add safe Pi-style filesystem read/search tools.
-3. Preserve Cortex repo-boundary and raw-source immutability policies.
-4. Keep existing wiki tools as focused wrappers on top of the broader file tools.
-5. Add tests for policy behavior, truncation, path handling, and registry profile filtering.
+1. Add guarded `fs.write` for new files and explicit overwrites.
+2. Add targeted `fs.edit` or `fs.patch` that fails on ambiguous matches.
+3. Add `wiki.writePage`, `wiki.patchPage`, `wiki.appendLog`, and `wiki.updateIndex` as focused wrappers.
+4. Preserve repo-boundary checks, raw-source immutability, and no hidden writes to runtime/build directories.
+5. Record file-change events in traces with before/after hashes or previews.
 
-Completing this milestone moves Cortex from a read-only wiki query harness toward a maintainable local agent runtime.
+Completing this milestone moves Cortex from a read-only query harness toward an agent that can safely maintain the wiki.

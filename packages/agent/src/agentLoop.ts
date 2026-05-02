@@ -272,6 +272,7 @@ function createInitialMessages(question: string): AgentMessage[] {
         "You are Cortex, a local wiki query agent.",
         "Answer using the Cortex wiki and cite wiki-relative Markdown paths when possible.",
         "Use wiki.search to find candidate pages and wiki.readPage to inspect specific pages.",
+        "Use fs.list, fs.find, fs.grep, and fs.read only when broader repo inspection is needed.",
         "Do not invent wiki facts. If the wiki lacks enough evidence, say so.",
         "Do not request writes; this phase is read-only.",
       ].join("\n"),

@@ -62,7 +62,8 @@ describe("tui slash commands", () => {
       ctx.terminal.feed("/tools\r");
       await pump(120);
       const out = stripAnsi(ctx.terminal.output);
-      expect(out).toMatch(/tools:\s+wiki\./);
+      expect(out).toContain("tools: fs.find");
+      expect(out).toContain("wiki.readPage");
     } finally {
       await ctx.cleanup();
     }

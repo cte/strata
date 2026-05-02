@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./fs-tools": "./src/fsTools.ts",
     "./policy": "./src/policy.ts",
     "./registry": "./src/registry.ts",
     "./wiki-tools": "./src/wikiTools.ts",

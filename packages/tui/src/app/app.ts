@@ -104,7 +104,8 @@ export class CortexApp implements Component {
     let cursor: Frame["cursor"] | undefined;
     if (editor.cursor !== undefined) {
       cursor = {
-        row: header.lines.length + transcript.lines.length + status.lines.length + editor.cursor.row,
+        row:
+          header.lines.length + transcript.lines.length + status.lines.length + editor.cursor.row,
         col: editor.cursor.col,
       };
     }
