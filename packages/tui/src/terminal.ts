@@ -1,7 +1,5 @@
 import process from "node:process";
 import {
-  ALT_SCREEN_OFF,
-  ALT_SCREEN_ON,
   BRACKETED_PASTE_OFF,
   BRACKETED_PASTE_ON,
   CLEAR_SCREEN,
@@ -109,7 +107,6 @@ export class ProcessTerminal implements Terminal {
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", this.onInputBound);
     process.stdout.on("resize", this.onResizeBound);
-    this.write(ALT_SCREEN_ON);
     this.write(BRACKETED_PASTE_ON);
     this.hideCursor();
     process.stdin.resume();
@@ -124,7 +121,6 @@ export class ProcessTerminal implements Terminal {
     process.stdout.off("resize", this.onResizeBound);
     this.write(BRACKETED_PASTE_OFF);
     this.showCursor();
-    this.write(ALT_SCREEN_OFF);
     if (typeof process.stdin.setRawMode === "function") {
       process.stdin.setRawMode(this.rawWasEnabled);
     }

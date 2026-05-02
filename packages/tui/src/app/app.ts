@@ -6,7 +6,6 @@ import {
   type ModelAdapter,
 } from "@cortex/agent";
 import { SessionStore, getCortexPaths } from "@cortex/core";
-import { padToWidth } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { SlashCommandRegistry } from "../commands.js";
 import { Editor } from "../editor.js";
@@ -88,29 +87,24 @@ export class CortexApp implements Component {
   }
 
   render(ctx: RenderContext): Frame {
-    const lines: string[] = [];
-    const layoutHeight = ctx.height;
     const header = new Header(this.state, this.repoRoot).render(ctx);
-    const footer = new Footer(this.state).render(ctx);
-    const status = new StatusLine(this.state).render(ctx);
     const transcript = new Transcript(this.state.transcript).render(ctx);
+    const status = new StatusLine(this.state).render(ctx);
     const editor = this.editor.render(ctx);
+    const footer = new Footer(this.state).render(ctx);
 
-    const reservedTop = header.lines.length;
-    const reservedBottom = status.lines.length + editor.lines.length + footer.lines.length;
-    const transcriptHeight = Math.max(1, layoutHeight - reservedTop - reservedBottom);
-    const transcriptLines = trimToHeight(transcript.lines, transcriptHeight, ctx.width);
-
-    lines.push(...header.lines);
-    lines.push(...transcriptLines);
-    lines.push(...status.lines);
-    lines.push(...editor.lines);
-    lines.push(...footer.lines);
+    const lines: string[] = [
+      ...header.lines,
+      ...transcript.lines,
+      ...status.lines,
+      ...editor.lines,
+      ...footer.lines,
+    ];
 
     let cursor: Frame["cursor"] | undefined;
     if (editor.cursor !== undefined) {
       cursor = {
-        row: reservedTop + transcriptLines.length + status.lines.length + editor.cursor.row,
+        row: header.lines.length + transcript.lines.length + status.lines.length + editor.cursor.row,
         col: editor.cursor.col,
       };
     }
@@ -447,17 +441,6 @@ function buildHelpLines(registry: SlashCommandRegistry): string[] {
     "",
     "Press Esc or Enter to dismiss.",
   ];
-}
-
-function trimToHeight(lines: string[], maxHeight: number, width: number): string[] {
-  if (lines.length === maxHeight) {
-    return lines;
-  }
-  if (lines.length > maxHeight) {
-    return lines.slice(lines.length - maxHeight);
-  }
-  const filler = Array.from({ length: maxHeight - lines.length }, () => padToWidth("", width));
-  return [...lines, ...filler];
 }
 
 export async function buildAppOptions(repoRoot: string): Promise<{

@@ -1,17 +1,14 @@
 import {
-  CLEAR_LINE,
   CLEAR_SCREEN,
   HIDE_CURSOR,
   SHOW_CURSOR,
   SYNC_BEGIN,
   SYNC_END,
-  moveCursor,
   padToWidth,
   sliceByWidth,
   visibleWidth,
 } from "./ansi.js";
 import type { Component, Frame } from "./component.js";
-import { emptyFrame } from "./component.js";
 import type { InputEvent } from "./keys.js";
 import { InputBuffer } from "./keys.js";
 import type { Terminal } from "./terminal.js";
@@ -25,6 +22,18 @@ export interface RuntimeOptions {
 
 const FRAME_INTERVAL_MS = 16;
 
+/**
+ * TuiRuntime — pi-style scrollback-friendly renderer.
+ *
+ * The runtime renders all components into one logical line array. The terminal's
+ * visible viewport is the last `rows` lines of that array; older lines have
+ * already scrolled into native scrollback. When the rendered content grows past
+ * the previous viewport bottom, the runtime writes `\r\n` at the bottom of the
+ * viewport so the terminal scrolls top lines into scrollback. Within the viewport,
+ * only changed lines are rewritten.
+ *
+ * No alt-screen, no full-screen takeover. The chat history flows naturally.
+ */
 export class TuiRuntime {
   private readonly terminal: Terminal;
   private readonly inputBuffer = new InputBuffer();
@@ -32,6 +41,9 @@ export class TuiRuntime {
   private overlay: Component | undefined;
   private prevLines: string[] = [];
   private prevWidth = 0;
+  private prevHeight = 0;
+  private prevViewportTop = 0;
+  private hardwareCursorRow = 0;
   private renderScheduled = false;
   private renderTimer: ReturnType<typeof setTimeout> | undefined;
   private escapeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -77,6 +89,18 @@ export class TuiRuntime {
       clearTimeout(this.escapeTimer);
       this.escapeTimer = undefined;
     }
+    // Move cursor below the rendered content so the next shell prompt
+    // starts on a fresh line instead of overwriting our last frame.
+    if (this.prevLines.length > 0) {
+      const targetRow = this.prevLines.length;
+      const delta = targetRow - this.hardwareCursorRow;
+      if (delta > 0) {
+        this.terminal.write(`\x1b[${delta}B`);
+      } else if (delta < 0) {
+        this.terminal.write(`\x1b[${-delta}A`);
+      }
+      this.terminal.write("\r\n");
+    }
     this.terminal.write(SHOW_CURSOR);
     this.terminal.stop();
     this.exitHandler?.();
@@ -89,7 +113,7 @@ export class TuiRuntime {
 
   setOverlay(component: Component | undefined): void {
     this.overlay = component;
-    this.invalidate(true);
+    this.invalidate();
   }
 
   onInput(handler: (event: InputEvent) => void): void {
@@ -102,14 +126,16 @@ export class TuiRuntime {
     }
     if (forceFullRedraw) {
       this.prevLines = [];
+      this.prevWidth = 0;
+      this.prevHeight = 0;
+      this.prevViewportTop = 0;
+      this.hardwareCursorRow = 0;
     }
     this.scheduleRender();
   }
 
   forceRedraw(): void {
-    this.prevLines = [];
-    this.terminal.write(CLEAR_SCREEN);
-    this.renderNow();
+    this.invalidate(true);
   }
 
   get width(): number {
@@ -124,19 +150,22 @@ export class TuiRuntime {
     const events = this.inputBuffer.push(data);
     this.scheduleEscapeFlush();
     for (const event of events) {
-      const overlay = this.overlay;
-      if (overlay !== undefined && overlay.handleInput?.(event) === "consumed") {
-        this.invalidate();
-        continue;
-      }
-      const handled = this.root.handleInput?.(event);
-      if (handled === "consumed") {
-        this.invalidate();
-        continue;
-      }
-      this.inputHandler?.(event);
+      this.routeInput(event);
     }
     this.invalidate();
+  }
+
+  private routeInput(event: InputEvent): void {
+    const overlay = this.overlay;
+    if (overlay !== undefined && overlay.handleInput?.(event) === "consumed") {
+      this.invalidate();
+      return;
+    }
+    if (this.root.handleInput?.(event) === "consumed") {
+      this.invalidate();
+      return;
+    }
+    this.inputHandler?.(event);
   }
 
   private scheduleEscapeFlush(): void {
@@ -146,22 +175,8 @@ export class TuiRuntime {
     this.escapeTimer = setTimeout(() => {
       this.escapeTimer = undefined;
       this.guarded(() => {
-        const flushed = this.inputBuffer.flush();
-        if (flushed.length === 0) {
-          return;
-        }
-        for (const event of flushed) {
-          const overlay = this.overlay;
-          if (overlay !== undefined && overlay.handleInput?.(event) === "consumed") {
-            this.invalidate();
-            continue;
-          }
-          const handled = this.root.handleInput?.(event);
-          if (handled === "consumed") {
-            this.invalidate();
-            continue;
-          }
-          this.inputHandler?.(event);
+        for (const event of this.inputBuffer.flush()) {
+          this.routeInput(event);
         }
         this.invalidate();
       });
@@ -188,41 +203,200 @@ export class TuiRuntime {
     }
     const width = this.terminal.columns;
     const height = this.terminal.rows;
-    const widthChanged = width !== this.prevWidth;
-    const baseFrame = safeRender(this.root, width, height);
-    const overlayFrame = this.overlay ? safeRender(this.overlay, width, height) : emptyFrame();
-    const frame = composeFrame(baseFrame, overlayFrame, width, height);
-
-    if (widthChanged || this.prevLines.length === 0) {
-      this.terminal.write(SYNC_BEGIN);
-      this.terminal.write(CLEAR_SCREEN);
-      this.terminal.write(HIDE_CURSOR);
-      for (let row = 0; row < frame.lines.length; row += 1) {
-        this.terminal.write(moveCursor(row, 0));
-        this.terminal.write(frame.lines[row] ?? "");
-      }
-      this.applyCursor(frame);
-      this.terminal.write(SYNC_END);
-    } else {
-      this.terminal.write(SYNC_BEGIN);
-      this.terminal.write(HIDE_CURSOR);
-      const maxRows = Math.max(frame.lines.length, this.prevLines.length);
-      for (let row = 0; row < maxRows; row += 1) {
-        const next = frame.lines[row] ?? "";
-        const prev = this.prevLines[row] ?? "";
-        if (next !== prev) {
-          this.terminal.write(moveCursor(row, 0));
-          this.terminal.write(CLEAR_LINE);
-          this.terminal.write(next);
-        }
-      }
-      this.applyCursor(frame);
-      this.terminal.write(SYNC_END);
+    if (width <= 0 || height <= 0) {
+      return;
     }
 
-    this.prevLines = frame.lines.slice();
+    const baseFrame = this.root.render({ width, height });
+    const lines = baseFrame.lines.map((line) => clampLineWidth(line, width));
+    let cursor = baseFrame.cursor;
+
+    if (this.overlay !== undefined) {
+      const overlayFrame = this.overlay.render({ width, height });
+      const overlayLines = overlayFrame.lines.map((line) => clampLineWidth(line, width));
+      // Anchor overlay to the visible viewport's bottom so it always covers the
+      // editor/footer area, no matter how short the base content is.
+      const minTotal = Math.max(lines.length, overlayLines.length, height);
+      while (lines.length < minTotal) {
+        lines.push(padToWidth("", width));
+      }
+      const overlayStart = lines.length - overlayLines.length;
+      for (let i = 0; i < overlayLines.length; i += 1) {
+        const target = overlayStart + i;
+        if (target >= 0 && target < lines.length) {
+          lines[target] = overlayLines[i] ?? "";
+        }
+      }
+      cursor =
+        overlayFrame.cursor !== undefined
+          ? { row: overlayStart + overlayFrame.cursor.row, col: overlayFrame.cursor.col }
+          : undefined;
+    }
+
+    const widthChanged = this.prevWidth !== 0 && this.prevWidth !== width;
+    const heightChanged = this.prevHeight !== 0 && this.prevHeight !== height;
+    const firstRender = this.prevLines.length === 0;
+
+    if (firstRender || widthChanged || heightChanged) {
+      this.fullRedraw(lines, width, height, cursor, !firstRender);
+      return;
+    }
+
+    this.diffRedraw(lines, width, height, cursor);
+  }
+
+  private fullRedraw(
+    lines: string[],
+    width: number,
+    height: number,
+    cursor: Frame["cursor"],
+    clear: boolean,
+  ): void {
+    let buffer = SYNC_BEGIN + HIDE_CURSOR;
+    if (clear) {
+      buffer += CLEAR_SCREEN;
+    }
+    for (let i = 0; i < lines.length; i += 1) {
+      if (i > 0) {
+        buffer += "\r\n";
+      }
+      buffer += "\x1b[2K";
+      buffer += lines[i] ?? "";
+    }
+    const lastRow = Math.max(0, lines.length - 1);
+    this.hardwareCursorRow = lastRow;
+    this.prevLines = lines.slice();
     this.prevWidth = width;
+    this.prevHeight = height;
+    this.prevViewportTop = Math.max(0, lines.length - height);
+    buffer += this.applyCursor(cursor, lines.length);
+    buffer += SYNC_END;
+    this.terminal.write(buffer);
     this.lastRenderAt = Date.now();
+  }
+
+  private diffRedraw(
+    lines: string[],
+    width: number,
+    height: number,
+    cursor: Frame["cursor"],
+  ): void {
+    let buffer = SYNC_BEGIN + HIDE_CURSOR;
+
+    const prevTop = this.prevViewportTop;
+    const prevBottom = prevTop + height - 1;
+
+    let firstChanged = -1;
+    let lastChanged = -1;
+    const maxLines = Math.max(lines.length, this.prevLines.length);
+    for (let i = 0; i < maxLines; i += 1) {
+      const prev = i < this.prevLines.length ? this.prevLines[i] : "";
+      const next = i < lines.length ? lines[i] : "";
+      if (prev !== next) {
+        if (firstChanged === -1) {
+          firstChanged = i;
+        }
+        lastChanged = i;
+      }
+    }
+
+    if (firstChanged === -1) {
+      buffer += this.applyCursor(cursor, lines.length);
+      buffer += SYNC_END;
+      this.terminal.write(buffer);
+      return;
+    }
+
+    // Differential rendering can only touch what was actually visible.
+    // If the first changed line is above the previous viewport, fall back
+    // to a full redraw — otherwise we'd write to a region the terminal
+    // has already scrolled into native scrollback.
+    if (firstChanged < prevTop) {
+      this.fullRedraw(lines, width, height, cursor, true);
+      return;
+    }
+
+    let viewportTop = prevTop;
+    let cursorRow = this.hardwareCursorRow;
+
+    // If the new content extends past the previous viewport bottom, scroll the
+    // terminal by writing \r\n at the bottom of the viewport. Each \r\n pushes
+    // one line off the top into native scrollback and advances viewportTop.
+    if (lastChanged > prevBottom) {
+      const toBottom = prevBottom - cursorRow;
+      if (toBottom > 0) {
+        buffer += `\x1b[${toBottom}B`;
+      } else if (toBottom < 0) {
+        buffer += `\x1b[${-toBottom}A`;
+      }
+      cursorRow = prevBottom;
+      const scroll = lastChanged - prevBottom;
+      buffer += "\r\n".repeat(scroll);
+      viewportTop += scroll;
+      cursorRow += scroll;
+    }
+
+    // Move cursor to firstChanged.
+    const targetRow = firstChanged;
+    const delta = targetRow - cursorRow;
+    if (delta > 0) {
+      buffer += `\x1b[${delta}B`;
+    } else if (delta < 0) {
+      buffer += `\x1b[${-delta}A`;
+    }
+    buffer += "\r";
+    cursorRow = targetRow;
+
+    // Write changed lines.
+    const renderEnd = Math.min(lastChanged, lines.length - 1);
+    for (let i = firstChanged; i <= renderEnd; i += 1) {
+      if (i > firstChanged) {
+        buffer += "\r\n";
+        cursorRow += 1;
+      }
+      buffer += "\x1b[2K";
+      buffer += lines[i] ?? "";
+    }
+
+    // If old content was longer than new, clear the trailing rows.
+    if (this.prevLines.length > lines.length) {
+      const extra = this.prevLines.length - lines.length;
+      for (let i = 0; i < extra; i += 1) {
+        buffer += "\r\n\x1b[2K";
+        cursorRow += 1;
+      }
+      const back = extra;
+      buffer += `\x1b[${back}A`;
+      cursorRow -= back;
+    }
+
+    this.hardwareCursorRow = cursorRow;
+    this.prevLines = lines.slice();
+    this.prevWidth = width;
+    this.prevHeight = height;
+    this.prevViewportTop = Math.max(viewportTop, lines.length - height);
+    buffer += this.applyCursor(cursor, lines.length);
+    buffer += SYNC_END;
+    this.terminal.write(buffer);
+    this.lastRenderAt = Date.now();
+  }
+
+  private applyCursor(cursor: Frame["cursor"], totalLines: number): string {
+    if (cursor === undefined) {
+      return HIDE_CURSOR;
+    }
+    const targetRow = Math.max(0, Math.min(cursor.row, Math.max(0, totalLines - 1)));
+    const delta = targetRow - this.hardwareCursorRow;
+    let buffer = "";
+    if (delta > 0) {
+      buffer += `\x1b[${delta}B`;
+    } else if (delta < 0) {
+      buffer += `\x1b[${-delta}A`;
+    }
+    buffer += `\x1b[${cursor.col + 1}G`;
+    this.hardwareCursorRow = targetRow;
+    buffer += SHOW_CURSOR;
+    return buffer;
   }
 
   private guarded(fn: () => void): void {
@@ -244,51 +418,9 @@ export class TuiRuntime {
     }
     throw error;
   }
-
-  private applyCursor(frame: Frame): void {
-    if (frame.cursor === undefined) {
-      this.terminal.write(HIDE_CURSOR);
-      return;
-    }
-    this.terminal.write(moveCursor(frame.cursor.row, frame.cursor.col));
-    this.terminal.write(SHOW_CURSOR);
-  }
 }
 
-function safeRender(component: Component, width: number, height: number): Frame {
-  if (width <= 0) {
-    return emptyFrame();
-  }
-  return component.render({ width, height });
-}
-
-function composeFrame(base: Frame, overlay: Frame, width: number, height: number): Frame {
-  const overlayLines = overlay.lines.map((line) => normalizeLine(line, width));
-  if (overlayLines.length > 0) {
-    while (overlayLines.length < height) {
-      overlayLines.push(padToWidth("", width));
-    }
-    if (overlayLines.length > height) {
-      overlayLines.length = height;
-    }
-    const result: Frame = { lines: overlayLines };
-    if (overlay.cursor !== undefined) {
-      result.cursor = clampCursor(overlay.cursor, width, overlayLines.length);
-    }
-    return result;
-  }
-  const baseLines = base.lines.map((line) => normalizeLine(line, width));
-  if (baseLines.length > height) {
-    baseLines.splice(0, baseLines.length - height);
-  }
-  const result: Frame = { lines: baseLines };
-  if (base.cursor !== undefined) {
-    result.cursor = clampCursor(base.cursor, width, baseLines.length);
-  }
-  return result;
-}
-
-function normalizeLine(line: string, width: number): string {
+function clampLineWidth(line: string, width: number): string {
   const w = visibleWidth(line);
   if (w === width) {
     return line;
@@ -297,15 +429,4 @@ function normalizeLine(line: string, width: number): string {
     return sliceByWidth(line, width);
   }
   return padToWidth(line, width);
-}
-
-function clampCursor(
-  cursor: { row: number; col: number },
-  width: number,
-  rows: number,
-): { row: number; col: number } {
-  return {
-    row: Math.max(0, Math.min(cursor.row, Math.max(0, rows - 1))),
-    col: Math.max(0, Math.min(cursor.col, Math.max(0, width - 1))),
-  };
 }

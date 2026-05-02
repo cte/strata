@@ -60,6 +60,45 @@ describe("TuiRuntime", () => {
     expect(stopped.value).toBe(true);
   });
 
+  test("does not enter alt-screen mode (transcript flows into native scrollback)", async () => {
+    const terminal = new FakeTerminal(20, 6);
+    const root = new Container([new Text("hi")]);
+    const runtime = new TuiRuntime({ terminal, root });
+    runtime.start();
+    await pump();
+    runtime.stop();
+    expect(terminal.output).not.toContain("\x1b[?1049h");
+    expect(terminal.output).not.toContain("\x1b[?1049l");
+  });
+
+  test("scrolls existing content into scrollback when new lines extend past viewport", async () => {
+    const terminal = new FakeTerminal(20, 4);
+    const lines = ["line1", "line2"];
+    const root: { render: () => { lines: string[] } } = {
+      render: () => ({ lines: lines.slice() }),
+    };
+    const runtime = new TuiRuntime({ terminal, root });
+    runtime.start();
+    await pump();
+    const beforeOutput = terminal.output;
+    expect(stripAnsi(beforeOutput)).toContain("line1");
+    expect(stripAnsi(beforeOutput)).toContain("line2");
+
+    // Grow content past the viewport (height=4) — runtime must write \r\n
+    // to scroll older lines into native scrollback.
+    lines.push("line3", "line4", "line5", "line6");
+    runtime.invalidate();
+    await pump();
+    runtime.stop();
+
+    const after = terminal.output.slice(beforeOutput.length);
+    expect(stripAnsi(after)).toContain("line5");
+    expect(stripAnsi(after)).toContain("line6");
+    // Must use \r\n to scroll, not \x1b[2J full clear.
+    expect(after).toContain("\r\n");
+    expect(after).not.toContain("\x1b[2J");
+  });
+
   test("dispatches input through the buffer", async () => {
     const terminal = new FakeTerminal(20, 4);
     const root = new Container([new Text("hi")]);
