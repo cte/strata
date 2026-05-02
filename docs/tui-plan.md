@@ -1,4 +1,4 @@
-# Cortex TUI Implementation Plan
+# Cortex TUI Plan
 
 Status: planned.
 

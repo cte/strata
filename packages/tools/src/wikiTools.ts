@@ -1,13 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@cortex/core";
-import {
-  assertReadAllowed,
-  isMarkdownPath,
-  isRawPath,
-  PolicyViolationError,
-  resolveRepoPath,
-} from "./policy.js";
+import { isMarkdownPath, isRawPath, PolicyViolationError } from "./policy.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolContext, ToolDefinition } from "./types.js";
 
@@ -49,6 +43,13 @@ const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_MAX_PAGE_CHARS = 64_000;
 const DEFAULT_MAX_SEARCH_FILE_BYTES = 512_000;
 const EXCLUDED_DIRS = new Set([".git", ".cortex", "node_modules", "dist"]);
+const WIKI_DIR = "wiki";
+
+interface ResolvedWikiPath {
+  absolutePath: string;
+  relativePath: string;
+  wikiRoot: string;
+}
 
 export function registerWikiTools(registry: ToolRegistry): ToolRegistry {
   for (const tool of createWikiTools()) {
@@ -69,7 +70,7 @@ const wikiListPagesTool: ToolDefinition<WikiListPagesArgs> = {
     type: "object",
     additionalProperties: false,
     properties: {
-      root: { type: "string", description: "Optional repo-relative directory to list." },
+      root: { type: "string", description: "Optional wiki-relative directory to list." },
       includeRaw: { type: "boolean", description: "Include immutable raw source files." },
       limit: { type: "integer", minimum: 1, maximum: 1000 },
     },
@@ -79,19 +80,18 @@ const wikiListPagesTool: ToolDefinition<WikiListPagesArgs> = {
     const includeRaw = optionalBoolean(args.includeRaw, false, "includeRaw");
     const limit = optionalPositiveInteger(args.limit, DEFAULT_LIST_LIMIT, "limit");
     const root = optionalString(args.root, ".", "root");
-    const start = resolveRepoPath(context.repoRoot, root, {
-      access: "read",
+    const start = resolveWikiPath(context.repoRoot, root, {
       allowRoot: true,
       allowRawRead: includeRaw,
     });
-    const pages = await listMarkdownPages(context.repoRoot, start.absolutePath, includeRaw, limit);
+    const pages = await listMarkdownPages(start.wikiRoot, start.absolutePath, includeRaw, limit);
     return { pages, count: pages.length };
   },
 };
 
 const wikiReadPageTool: ToolDefinition<WikiReadPageArgs, WikiPageResult> = {
   name: "wiki.readPage",
-  description: "Read one Markdown page by repo-relative path.",
+  description: "Read one Markdown page by wiki-relative path.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -108,7 +108,7 @@ const wikiReadPageTool: ToolDefinition<WikiReadPageArgs, WikiPageResult> = {
     const requestedPath = requiredString(args.path, "path");
     const includeRaw = optionalBoolean(args.includeRaw, false, "includeRaw");
     const maxChars = optionalPositiveInteger(args.maxChars, DEFAULT_MAX_PAGE_CHARS, "maxChars");
-    const resolved = assertReadAllowed(context.repoRoot, requestedPath, {
+    const resolved = resolveWikiPath(context.repoRoot, requestedPath, {
       allowRawRead: includeRaw,
     });
 
@@ -145,7 +145,7 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
     required: ["query"],
     properties: {
       query: { type: "string" },
-      root: { type: "string", description: "Optional repo-relative directory to search." },
+      root: { type: "string", description: "Optional wiki-relative directory to search." },
       includeRaw: { type: "boolean", description: "Include immutable raw source files." },
       limit: { type: "integer", minimum: 1, maximum: 1000 },
       maxFileBytes: { type: "integer", minimum: 1, maximum: 5000000 },
@@ -166,19 +166,18 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
       "maxFileBytes",
     );
     const root = optionalString(args.root, ".", "root");
-    const start = resolveRepoPath(context.repoRoot, root, {
-      access: "read",
+    const start = resolveWikiPath(context.repoRoot, root, {
       allowRoot: true,
       allowRawRead: includeRaw,
     });
-    const pages = await listMarkdownPages(context.repoRoot, start.absolutePath, includeRaw, 10_000);
-    const matches = await searchPages(context.repoRoot, pages, query, limit, maxFileBytes);
+    const pages = await listMarkdownPages(start.wikiRoot, start.absolutePath, includeRaw, 10_000);
+    const matches = await searchPages(start.wikiRoot, pages, query, limit, maxFileBytes);
     return { query, matches, count: matches.length };
   },
 };
 
 async function listMarkdownPages(
-  repoRoot: string,
+  wikiRoot: string,
   startDir: string,
   includeRaw: boolean,
   limit: number,
@@ -202,7 +201,7 @@ async function listMarkdownPages(
       }
 
       const absolutePath = path.join(dir, entry.name);
-      const relativePath = toPosixPath(path.relative(repoRoot, absolutePath));
+      const relativePath = toPosixPath(path.relative(wikiRoot, absolutePath));
       if (!includeRaw && isRawPath(relativePath)) {
         continue;
       }
@@ -223,7 +222,7 @@ async function listMarkdownPages(
 }
 
 async function searchPages(
-  repoRoot: string,
+  wikiRoot: string,
   pages: string[],
   query: string,
   limit: number,
@@ -237,13 +236,13 @@ async function searchPages(
       break;
     }
 
-    const resolved = assertReadAllowed(repoRoot, relativePath, { allowRawRead: true });
-    const file = await stat(resolved.absolutePath);
+    const absolutePath = path.join(wikiRoot, relativePath);
+    const file = await stat(absolutePath);
     if (file.size > maxFileBytes) {
       continue;
     }
 
-    const content = await readFile(resolved.absolutePath, "utf8");
+    const content = await readFile(absolutePath, "utf8");
     const lines = content.split(/\r?\n/);
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index] ?? "";
@@ -262,6 +261,72 @@ async function searchPages(
   }
 
   return matches;
+}
+
+function resolveWikiPath(
+  repoRoot: string,
+  requestedPath: string,
+  options: { allowRoot?: boolean; allowRawRead?: boolean } = {},
+): ResolvedWikiPath {
+  if (requestedPath.trim() === "") {
+    throw new PolicyViolationError("empty_path", "Path cannot be empty");
+  }
+
+  const wikiRoot = path.join(path.resolve(repoRoot), WIKI_DIR);
+  const normalizedPath = normalizeWikiRequestPath(requestedPath);
+  const absolutePath = path.resolve(wikiRoot, normalizedPath);
+
+  if (!isPathInside(wikiRoot, absolutePath)) {
+    throw new PolicyViolationError(
+      "outside_wiki",
+      `Path escapes the wiki directory: ${requestedPath}`,
+    );
+  }
+
+  const relativePath = toPosixPath(path.relative(wikiRoot, absolutePath));
+  if (relativePath === "") {
+    if (options.allowRoot === true) {
+      return { absolutePath, relativePath, wikiRoot };
+    }
+    throw new PolicyViolationError("root_path", "Path must point to a wiki file or subdirectory");
+  }
+
+  rejectBlockedSegments(relativePath);
+
+  if (isRawPath(relativePath) && options.allowRawRead !== true) {
+    throw new PolicyViolationError(
+      "raw_read_not_enabled",
+      `Reading raw/ requires includeRaw: true: ${relativePath}`,
+    );
+  }
+
+  return { absolutePath, relativePath, wikiRoot };
+}
+
+function normalizeWikiRequestPath(requestedPath: string): string {
+  const normalized = requestedPath.trim().replaceAll("\\", "/");
+  if (normalized === WIKI_DIR) {
+    return ".";
+  }
+  if (normalized.startsWith(`${WIKI_DIR}/`)) {
+    return normalized.slice(WIKI_DIR.length + 1);
+  }
+  return normalized;
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function rejectBlockedSegments(relativePath: string): void {
+  const blocked = relativePath.split("/").find((segment) => EXCLUDED_DIRS.has(segment));
+  if (blocked !== undefined) {
+    throw new PolicyViolationError(
+      "blocked_path_segment",
+      `Path includes blocked segment "${blocked}": ${relativePath}`,
+    );
+  }
 }
 
 function requiredString(value: JsonValue | undefined, name: string): string {

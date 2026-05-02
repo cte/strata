@@ -86,7 +86,12 @@ export function isMarkdownPath(relativePath: string): boolean {
 }
 
 export function isRawPath(relativePath: string): boolean {
-  return relativePath === "raw" || relativePath.startsWith("raw/");
+  return (
+    relativePath === "raw" ||
+    relativePath.startsWith("raw/") ||
+    relativePath === "wiki/raw" ||
+    relativePath.startsWith("wiki/raw/")
+  );
 }
 
 function isPathInside(root: string, target: string): boolean {

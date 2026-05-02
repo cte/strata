@@ -1,8 +1,10 @@
 # Cortex — Personal Work Wiki Build Plan
 
-Current prerequisite: build the agentic harness before continuing deeper wiki automation. See `AGENTIC_HARNESS_PLAN.md` for the detailed Bun/TypeScript implementation plan, especially the learning loops for trace persistence, memory, skills, session search, reflection, and curator passes.
+Current prerequisite: build the agentic harness before continuing deeper wiki automation. See [agent-harness-plan.md](./agent-harness-plan.md) for the detailed Bun/TypeScript implementation plan, especially the learning loops for trace persistence, memory, skills, session search, reflection, and curator passes.
 
 A plan for Claude Code to build and maintain a personal work wiki, following the LLM Wiki pattern (Karpathy, 2026).
+
+Wiki content lives under `wiki/`. Unless a path is explicitly repo-relative, wiki paths in this plan are relative to `wiki/`.
 
 ---
 
@@ -29,7 +31,7 @@ Three layers, per the LLM Wiki pattern:
 |---|---|---|
 | **Raw sources** | The user (via tools / sync) | Immutable. The agent reads but never edits. |
 | **The wiki** | The agent | The agent creates, updates, cross-references. |
-| **The schema** (`CLAUDE.md`) | Co-evolved by user + agent | Updated as conventions stabilize. |
+| **The schema** (`AGENTS.md`, with `CLAUDE.md` as a compatibility symlink) | Co-evolved by user + agent | Updated as conventions stabilize. |
 
 ---
 
@@ -53,28 +55,31 @@ Do not begin Phase 1 until at least decisions 1, 2, and 5 are settled. Decisions
 
 ## 4. Directory Structure
 
-```
+```text
 cortex/
-├── CLAUDE.md                   # Schema — read on every session start
-├── priorities.md               # Current priorities — read first every session
-├── me.md                       # Role, active projects, current focus, prefs
-├── index.md                    # Catalog of all wiki pages
-├── log.md                      # Append-only chronological history
-│
-├── raw/                        # IMMUTABLE source material
-│   ├── granola/                # Meeting transcripts (YYYY-MM-DD-slug.md)
-│   ├── slack/                  # Captured threads (YYYY-MM-DD-channel-slug.md)
-│   └── notion/                 # Notion doc snapshots at ingest time
-│
-├── people/                     # One page per colleague
-├── projects/                   # One page per active project
-├── teams/                      # One page per team / org unit
-├── meetings/                   # One summary page per meeting
-├── decisions/                  # One page per decision (atomic, dated)
-├── threads/                    # Open questions still in flight
-└── actions/
-    ├── mine.md                 # What I owe others
-    └── theirs.md               # What others owe me
+├── AGENTS.md                   # Agent instructions and schema — CLAUDE.md symlinks here
+├── docs/                       # Roadmap, status, and implementation plans
+├── packages/                   # Bun workspace packages
+└── wiki/                       # User-facing Markdown knowledge base
+    ├── priorities.md           # Current priorities — read first every session
+    ├── me.md                   # Role, active projects, current focus, prefs
+    ├── index.md                # Catalog of all wiki pages
+    ├── log.md                  # Append-only chronological history
+    │
+    ├── raw/                    # IMMUTABLE source material
+    │   ├── granola/            # Meeting transcripts (YYYY-MM-DD-slug.md)
+    │   ├── slack/              # Captured threads (YYYY-MM-DD-channel-slug.md)
+    │   └── notion/             # Notion doc snapshots at ingest time
+    │
+    ├── people/                 # One page per colleague
+    ├── projects/               # One page per active project
+    ├── teams/                  # One page per team / org unit
+    ├── meetings/               # One summary page per meeting
+    ├── decisions/              # One page per decision (atomic, dated)
+    ├── threads/                # Open questions still in flight
+    └── actions/
+        ├── mine.md             # What I owe others
+        └── theirs.md           # What others owe me
 ```
 
 Initialize as a git repo. Every ingest is a commit. The log message is the source title.
@@ -91,13 +96,13 @@ Resolve the items in §3. Write `me.md` with the user's role, active projects, t
 
 Create the directory structure in §4. Materialize:
 
-- `CLAUDE.md` (full content in §10 below)
-- `priorities.md` — start as a placeholder; the user will populate or dictate.
-- `me.md` — populated from the Phase 0 conversation.
-- `index.md` — empty catalog with section headers (People, Projects, Teams, Meetings, Decisions, Threads).
-- `log.md` — empty, with header `# Cortex — Activity Log`.
-- `actions/mine.md`, `actions/theirs.md` — empty checklists.
-- `.gitignore` — exclude `raw/.cache/`, `.env`, anything secret.
+- root `AGENTS.md` plus `CLAUDE.md` compatibility symlink (full content in §10 below)
+- `wiki/priorities.md` — start as a placeholder; the user will populate or dictate.
+- `wiki/me.md` — populated from the Phase 0 conversation.
+- `wiki/index.md` — empty catalog with section headers (People, Projects, Teams, Meetings, Decisions, Threads).
+- `wiki/log.md` — empty, with header `# Cortex — Activity Log`.
+- `wiki/actions/mine.md`, `wiki/actions/theirs.md` — empty checklists.
+- `.gitignore` — exclude `wiki/raw/.cache/`, `.env`, anything secret.
 
 Initialize git. First commit: "Initial wiki skeleton."
 
@@ -113,7 +118,7 @@ Build a small Python or Node script `tools/pull_granola.py`:
 - Idempotent — re-running does not duplicate.
 
 #### 2b. Granola (sync path)
-If no API access, document the Mac-side setup in `tools/granola-sync-setup.md`:
+If no API access, document the Mac-side setup in [granola-sync-setup.md](./granola-sync-setup.md):
 - A `launchd` plist that runs every 15 minutes.
 - Fetches new transcripts from Granola's local export folder.
 - `git push`es into the wiki repo, or rsyncs into the synced folder.
@@ -279,14 +284,14 @@ Most matched threads will produce **no wiki update**. The agent reads, decides n
 
 ---
 
-## 10. CLAUDE.md (write this verbatim into the wiki root)
+## 10. AGENTS.md Wiki Operating Excerpt
 
 ````markdown
 # Cortex — Schema and Operating Manual
 
 This wiki exists so the user never loses track of priorities and can quickly recall past work, decisions, and commitments.
 
-The user curates sources and asks questions. You (Claude) do everything else.
+The user curates sources and asks questions. You (the agent) do everything else.
 
 ## Read first, every session
 1. `priorities.md` — what matters right now.
@@ -367,7 +372,7 @@ Ask the user. The schema co-evolves with use; flag things that don't fit, propos
 
 ## 11. First Session Checklist
 
-When the user runs `claude` in the wiki directory for the first time, the agent should:
+When the user runs an agent in the repo for the first time, the agent should:
 
 1. Greet the user. Acknowledge this is session 1.
 2. Walk through the §3 decisions, one at a time.
@@ -385,7 +390,7 @@ This plan is a starting point, not a final spec. Expect to refine:
 
 - **Week 1** — verify the ingest loop works end-to-end on real meetings/threads/docs. Tune filter rules.
 - **Week 2** — refine entity schemas based on what queries the user actually asks. If priority recall is weak, strengthen `priorities.md` updates in the ingest workflow.
-- **Week 4** — first lint pass. Address whatever the wiki has accumulated. Update `CLAUDE.md` with lessons learned.
-- **Ongoing** — `CLAUDE.md` is co-evolved. Whenever the user says "next time, do X instead of Y," propose the corresponding edit to `CLAUDE.md`.
+- **Week 4** — first lint pass. Address whatever the wiki has accumulated. Update `AGENTS.md` with lessons learned.
+- **Ongoing** — `AGENTS.md` is co-evolved. Whenever the user says "next time, do X instead of Y," propose the corresponding edit to `AGENTS.md`.
 
 The wiki gets more valuable the longer it runs. Treat the first month as bootstrapping; the compounding starts in month two.

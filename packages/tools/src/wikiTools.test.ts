@@ -8,16 +8,17 @@ describe("wiki tools", () => {
   test("lists, reads, and searches markdown pages", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
     try {
-      await mkdir(path.join(repoRoot, "projects"), { recursive: true });
-      await mkdir(path.join(repoRoot, "raw", "granola"), { recursive: true });
-      await writeFile(path.join(repoRoot, "index.md"), "# Index\n\nCortex root\n", "utf8");
+      const wikiRoot = path.join(repoRoot, "wiki");
+      await mkdir(path.join(wikiRoot, "projects"), { recursive: true });
+      await mkdir(path.join(wikiRoot, "raw", "granola"), { recursive: true });
+      await writeFile(path.join(wikiRoot, "index.md"), "# Index\n\nCortex root\n", "utf8");
       await writeFile(
-        path.join(repoRoot, "projects", "alpha.md"),
+        path.join(wikiRoot, "projects", "alpha.md"),
         "# Alpha\n\nNeedle appears here.\n",
         "utf8",
       );
       await writeFile(
-        path.join(repoRoot, "raw", "granola", "source.md"),
+        path.join(wikiRoot, "raw", "granola", "source.md"),
         "# Source\n\nNeedle raw source.\n",
         "utf8",
       );
@@ -35,6 +36,13 @@ describe("wiki tools", () => {
       ).resolves.toMatchObject({
         path: "projects/alpha.md",
         content: "# Alpha\n\nNeedle appears here.\n",
+        truncated: false,
+      });
+
+      await expect(
+        registry.execute("wiki.readPage", { path: "wiki/projects/alpha.md" }, context),
+      ).resolves.toMatchObject({
+        path: "projects/alpha.md",
         truncated: false,
       });
 

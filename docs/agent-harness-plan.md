@@ -1,4 +1,4 @@
-# Cortex Agentic Harness Implementation Plan
+# Cortex Agent Harness Plan
 
 Status: Phase 2 implementation complete.
 
@@ -22,7 +22,7 @@ The end state is not "a chatbot over Markdown." The end state is a durable work 
 - Do not build gateways, TUI, cron, plugin marketplaces, multi-provider routing, subagents, or browser/terminal automation in the first version.
 - Do not fine-tune models. "Learning" means improving durable context artifacts and retrieval indexes.
 - Do not give the model a generic shell tool by default. Wiki tools should be narrow and auditable.
-- Do not auto-edit `raw/` under any circumstance.
+- Do not auto-edit `wiki/raw/` under any circumstance.
 
 ## 3. Design Principles
 
@@ -123,25 +123,26 @@ Harness runtime state:
     curator/
 ```
 
-Wiki content remains in the existing top-level Markdown directories:
+Wiki content lives under `wiki/`:
 
 ```text
-priorities.md
-me.md
-index.md
-log.md
-raw/
-people/
-projects/
-teams/
-meetings/
-decisions/
-threads/
-actions/
-meta/
+wiki/
+  priorities.md
+  me.md
+  index.md
+  log.md
+  raw/
+  people/
+  projects/
+  teams/
+  meetings/
+  decisions/
+  threads/
+  actions/
+  meta/
 ```
 
-The `.cortex/` directory stores agent runtime state. The wiki stores user-facing knowledge. This separation prevents operational learning artifacts from polluting the work wiki while still allowing approved learning to update `CLAUDE.md`, `me.md`, and wiki pages.
+The `.cortex/` directory stores agent runtime state. The wiki stores user-facing knowledge. This separation prevents operational learning artifacts from polluting the work wiki while still allowing approved learning to update `AGENTS.md`, `me.md`, and wiki pages.
 
 ## 6. Runtime Architecture
 
@@ -152,7 +153,7 @@ Initial command surface:
 ```text
 cortex chat
 cortex query "<question>"
-cortex ingest raw/granola/<file>.md
+cortex ingest wiki/raw/granola/<file>.md
 cortex lint
 cortex learn reflect <session-id>
 cortex learn curator
@@ -239,9 +240,9 @@ The registry must:
 
 Hard rules:
 
-- No writes under `raw/`.
+- No writes under `wiki/raw/`.
 - No deletion of decision pages.
-- No unreviewed changes to `CLAUDE.md`.
+- No unreviewed changes to `AGENTS.md`.
 - No secrets in wiki pages, traces, memory, skills, or proposals.
 - No writes outside the Cortex repo.
 - No broad recursive rewrites without explicit user approval.
@@ -328,7 +329,7 @@ type PolicyDecision =
 
 `learning.proposeSchemaChange`
 
-- Stages a proposed `CLAUDE.md` change. Never auto-applies initially.
+- Stages a proposed `AGENTS.md` change. Never auto-applies initially.
 
 `learning.sessionSearch`
 
@@ -520,7 +521,7 @@ Auto-apply policy for v1:
 
 - Auto-apply memory updates only when low risk and short.
 - Stage all skill updates as proposals.
-- Stage all `CLAUDE.md` changes as proposals.
+- Stage all `AGENTS.md` changes as proposals.
 - Stage all broad wiki restructuring.
 - Auto-create lint reports and reflection reports.
 
@@ -550,7 +551,7 @@ created: YYYY-MM-DDTHH:MM:SSZ
 
 Acceptance criteria:
 
-- Reflection never mutates `raw/`.
+- Reflection never mutates `wiki/raw/`.
 - Reflection can explain why each proposal exists with trace evidence.
 - Reflection can say "nothing to save" without creating noise.
 - Reflection is idempotent for the same session.
@@ -621,7 +622,7 @@ Skill shape:
 name: ingest-granola-meeting
 description: How to ingest a Granola transcript into the Cortex wiki.
 triggers:
-  - ingest raw/granola files
+  - ingest wiki/raw/granola files
   - summarize meetings
   - extract actions and decisions from transcripts
 status: active
@@ -709,7 +710,7 @@ Actions:
 
 - Update relevant wiki pages.
 - Create new decisions/threads/projects/people pages.
-- Propose schema changes when a repeated pattern does not fit current `CLAUDE.md`.
+- Propose schema changes when a repeated pattern does not fit current `AGENTS.md`.
 - Offer to file reusable query synthesis.
 
 Rules:
@@ -722,7 +723,7 @@ Rules:
 Acceptance criteria:
 
 - A query answer can be filed back into the wiki with citations.
-- Repeated schema friction produces a `CLAUDE.md` proposal.
+- Repeated schema friction produces an `AGENTS.md` proposal.
 - Lint can identify orphan pages, stale threads, stale priorities, and missing decision pages.
 
 ### 9.7 Loop G: Curator Loop
@@ -778,7 +779,7 @@ Add golden tasks:
 - Query a known small wiki fixture and require citations.
 - Ingest a fixture meeting transcript and check expected pages/actions/decisions.
 - Reflect on a fixture trace and check expected memory/skill/schema proposal classification.
-- Ensure `raw/` writes are blocked.
+- Ensure `wiki/raw/` writes are blocked.
 - Ensure secrets are redacted from traces and proposals.
 
 Run via:
@@ -795,7 +796,7 @@ Acceptance criteria:
 
 ## 10. Ingest Flow With Learning
 
-`cortex ingest raw/granola/YYYY-MM-DD-title.md`
+`cortex ingest wiki/raw/granola/YYYY-MM-DD-title.md`
 
 1. Start session.
 2. Load memory.
@@ -825,7 +826,7 @@ Acceptance criteria:
 Validation before commit:
 
 - `bun run lint:wiki -- --dry-run`
-- no writes under `raw/`
+- no writes under `wiki/raw/`
 - all new wiki pages have frontmatter
 - all index entries point to existing files
 - no secret-looking strings introduced
@@ -894,13 +895,13 @@ Deliverables:
 - Tool registry.
 - Policy layer.
 - Wiki read/search/list tools.
-- Tests for path boundaries and `raw/` immutability.
+- Tests for path boundaries and `wiki/raw/` immutability.
 
 Acceptance:
 
 - Unknown tools are rejected.
 - Writes outside the repo are rejected.
-- Any write under `raw/` is rejected.
+- Any write under `wiki/raw/` is rejected.
 
 ### Phase 2: Agent Loop MVP
 
@@ -1075,7 +1076,7 @@ Proposal statuses:
 
 Changes requiring review in v1:
 
-- `CLAUDE.md` edits.
+- `AGENTS.md` edits.
 - Skill creates/patches/deletes.
 - Memory deletes.
 - Any broad wiki reorganization.

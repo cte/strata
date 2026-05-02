@@ -15,10 +15,10 @@ describe("policy", () => {
     }
   });
 
-  test("rejects writes under raw", async () => {
+  test("rejects writes under wiki/raw", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-policy-"));
     try {
-      expect(() => assertWriteAllowed(repoRoot, "raw/granola/meeting.md")).toThrow(
+      expect(() => assertWriteAllowed(repoRoot, "wiki/raw/granola/meeting.md")).toThrow(
         /Writes under raw\/ are forbidden/,
       );
     } finally {
@@ -29,12 +29,13 @@ describe("policy", () => {
   test("allows explicit raw reads but rejects implicit raw reads", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-policy-"));
     try {
-      expect(() => assertReadAllowed(repoRoot, "raw/granola/meeting.md")).toThrow(
+      expect(() => assertReadAllowed(repoRoot, "wiki/raw/granola/meeting.md")).toThrow(
         /requires includeRaw/,
       );
       expect(
-        assertReadAllowed(repoRoot, "raw/granola/meeting.md", { allowRawRead: true }).relativePath,
-      ).toBe("raw/granola/meeting.md");
+        assertReadAllowed(repoRoot, "wiki/raw/granola/meeting.md", { allowRawRead: true })
+          .relativePath,
+      ).toBe("wiki/raw/granola/meeting.md");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
