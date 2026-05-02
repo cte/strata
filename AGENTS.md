@@ -77,7 +77,7 @@ packages/
   agent/   ModelAdapter contract, OpenAI adapters, ChatGPT OAuth, agent loop
   tui/     First-party terminal UI runtime, components, editor, app
   cli/     cortex command-line entrypoint
-src/tools/ One-off source and wiki scripts: lintWiki, pullGranola, pullSlack, pullNotion
+  ingest/  Source and wiki scripts: lintWiki, pullGranola, pullSlack, pullNotion
 scripts/   TUI drive scripts using FakeTerminal
 docs/      Roadmap and implementation status
 .cortex/   Local runtime state: sqlite DB, traces, auth, memory, skills, proposals, reports
