@@ -10,6 +10,7 @@ import type { ToolExecutionResult } from "@cortex/tools";
 import type {
   AgentMessage,
   AgentRunConfig,
+  AgentRunEvent,
   AgentRunResult,
   AgentToolCall,
   ModelResponse,
@@ -19,7 +20,7 @@ import type {
 const DEFAULT_MAX_ITERATIONS = 12;
 const DEFAULT_MAX_TOOL_CALLS = 40;
 
-export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResult> {
+export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerator<AgentRunEvent> {
   const repoRoot = getCortexPaths(config.repoRoot).repoRoot;
   const store = await SessionStore.open(repoRoot);
   const tools = config.tools ?? createDefaultToolRegistry();
@@ -53,12 +54,21 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
       tools: tools.list().map((tool) => tool.name),
     });
 
+    yield {
+      type: "session.started",
+      sessionId: session.id,
+      title: session.title,
+      model: config.model.name,
+    };
+    yield { type: "message.user", content: config.question };
+
     while (iterations < maxIterations) {
       iterations += 1;
       await store.appendEvent(session.id, "model.request", {
         iteration: iterations,
         messageCount: messages.length,
       });
+      yield { type: "model.request", iteration: iterations, messageCount: messages.length };
 
       const response = await config.model.complete({
         messages,
@@ -77,6 +87,12 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
         content: response.content,
         toolCalls: toolCallsToJson(response.toolCalls),
       });
+      yield {
+        type: "model.response",
+        iteration: iterations,
+        content: response.content,
+        toolCalls: response.toolCalls,
+      };
 
       if (response.toolCalls.length === 0) {
         finalAnswer = response.content;
@@ -86,7 +102,7 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
           toolCalls: toolCallCount,
         });
         await store.endSession(session.id, "completed");
-        return {
+        const result: AgentRunResult = {
           sessionId: session.id,
           status: "completed",
           stoppedReason: "final_answer",
@@ -94,6 +110,8 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
           iterations,
           toolCalls: toolCallCount,
         };
+        yield { type: "agent.completed", result };
+        return;
       }
 
       if (toolCallCount + response.toolCalls.length > maxToolCalls) {
@@ -104,7 +122,7 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
           toolCalls: toolCallCount,
         });
         await store.endSession(session.id, "interrupted");
-        return {
+        const result: AgentRunResult = {
           sessionId: session.id,
           status: "interrupted",
           stoppedReason: "max_tool_calls",
@@ -112,10 +130,18 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
           iterations,
           toolCalls: toolCallCount,
         };
+        yield { type: "agent.completed", result };
+        return;
       }
 
       for (const toolCall of response.toolCalls) {
         toolCallCount += 1;
+        yield {
+          type: "tool.call.started",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          argumentsText: toolCall.argumentsText,
+        };
         const toolResult = await executeToolCall(store, session.id, repoRoot, tools, toolCall);
         const toolContent = JSON.stringify(toolResult);
         messages.push({
@@ -129,6 +155,7 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
           content: toolContent,
           toolCallId: toolCall.id,
         });
+        yield { type: "tool.call.completed", toolCallId: toolCall.id, result: toolResult };
       }
     }
 
@@ -138,7 +165,7 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
       toolCalls: toolCallCount,
     });
     await store.endSession(session.id, "interrupted");
-    return {
+    const result: AgentRunResult = {
       sessionId: session.id,
       status: "interrupted",
       stoppedReason: "max_iterations",
@@ -146,13 +173,13 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
       iterations,
       toolCalls: toolCallCount,
     };
+    yield { type: "agent.completed", result };
   } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     if (session !== undefined) {
-      await store.appendEvent(session.id, "agent.loop.error", {
-        message: error instanceof Error ? error.message : String(error),
-      });
+      await store.appendEvent(session.id, "agent.loop.error", { message });
       await store.endSession(session.id, "failed");
-      return {
+      const result: AgentRunResult = {
         sessionId: session.id,
         status: "failed",
         stoppedReason: "model_error",
@@ -160,11 +187,29 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
         iterations,
         toolCalls: toolCallCount,
       };
+      yield { type: "agent.failed", message, result };
+      return;
     }
+    yield { type: "agent.failed", message };
     throw error;
   } finally {
     store.close();
   }
+}
+
+export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResult> {
+  let lastResult: AgentRunResult | undefined;
+  for await (const event of runAgentLoopEvents(config)) {
+    if (event.type === "agent.completed") {
+      lastResult = event.result;
+    } else if (event.type === "agent.failed" && event.result !== undefined) {
+      lastResult = event.result;
+    }
+  }
+  if (lastResult === undefined) {
+    throw new Error("Agent loop ended without producing a result");
+  }
+  return lastResult;
 }
 
 function createInitialMessages(question: string): AgentMessage[] {

@@ -1,5 +1,5 @@
 import type { JsonObject, JsonValue, SessionStatus } from "@cortex/core";
-import type { ToolMetadata, ToolRegistry } from "@cortex/tools";
+import type { ToolExecutionResult, ToolMetadata, ToolRegistry } from "@cortex/tools";
 
 export type AgentMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -66,3 +66,23 @@ export interface InvalidToolArguments {
 export type ToolArgumentParseResult = ParsedToolArguments | InvalidToolArguments;
 
 export type ToolResultContent = JsonValue;
+
+export type AgentRunEvent =
+  | { type: "session.started"; sessionId: string; title: string; model: string }
+  | { type: "message.user"; content: string }
+  | { type: "model.request"; iteration: number; messageCount: number }
+  | {
+      type: "model.response";
+      iteration: number;
+      content: string;
+      toolCalls: AgentToolCall[];
+    }
+  | {
+      type: "tool.call.started";
+      toolCallId: string;
+      toolName: string;
+      argumentsText: string;
+    }
+  | { type: "tool.call.completed"; toolCallId: string; result: ToolExecutionResult }
+  | { type: "agent.completed"; result: AgentRunResult }
+  | { type: "agent.failed"; message: string; result?: AgentRunResult };

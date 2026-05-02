@@ -19,6 +19,7 @@ import {
   type SessionRecord,
 } from "@cortex/core";
 import { createDefaultToolRegistry } from "@cortex/tools";
+import { runTui } from "@cortex/tui";
 
 type CommandResult = number;
 
@@ -31,6 +32,7 @@ commands:
   auth logout openai-codex     remove stored ChatGPT credentials
   init                         initialize .cortex runtime directories
   query [options] <question>   answer a read-only question using wiki tools
+  tui                          launch the interactive Cortex TUI
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions
   sessions search <query>      search sessions using the current simple index
@@ -270,6 +272,10 @@ async function main(argv: string[]): Promise<CommandResult> {
   }
   if (command === "query") {
     return cmdQuery(argv);
+  }
+  if (command === "tui") {
+    await runTui({ repoRoot: getCortexPaths().repoRoot });
+    return 0;
   }
   if (command === "trace") {
     return cmdTrace(argv);
