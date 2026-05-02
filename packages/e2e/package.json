@@ -1,17 +1,13 @@
 {
-  "name": "@cortex/tui",
+  "name": "@cortex/e2e",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts",
-    "./app": "./src/app/run.ts",
-    "./internal/app": "./src/app/app.ts"
-  },
   "dependencies": {
     "@cortex/agent": "workspace:*",
     "@cortex/core": "workspace:*",
-    "@cortex/tools": "workspace:*"
+    "@cortex/tools": "workspace:*",
+    "@cortex/tui": "workspace:*"
   },
   "scripts": {
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",

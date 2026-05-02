@@ -78,7 +78,7 @@ packages/
   tui/     First-party terminal UI runtime, components, editor, app
   cli/     cortex command-line entrypoint
   ingest/  Source and wiki scripts: lintWiki, pullGranola, pullSlack, pullNotion
-scripts/   TUI drive scripts using FakeTerminal
+  e2e/     End-to-end TUI/agent tests driven through FakeTerminal
 docs/      Roadmap and implementation status
 .cortex/   Local runtime state: sqlite DB, traces, auth, memory, skills, proposals, reports
 ```
@@ -99,7 +99,7 @@ TUI rendering is pi-style scrollback, not alt-screen. `TuiRuntime` writes to the
 
 TUI overlays are composited by the runtime. Do not reintroduce app-side overlay replacement logic.
 
-The TUI must be testable without a real PTY. Use `FakeTerminal` and the drive scripts under `scripts/` when changing rendering or input behavior.
+The TUI must be testable without a real PTY. Use `FakeTerminal` and the e2e tests under `packages/e2e/` when changing rendering or input behavior.
 
 ## Code Conventions
 
