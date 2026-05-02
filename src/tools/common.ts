@@ -12,7 +12,8 @@ export type JsonValue =
 export type JsonObject = { [key: string]: JsonValue };
 export type YamlValue = null | boolean | number | string | string[];
 
-export const wikiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+export const wikiRoot = path.join(repoRoot, "wiki");
 
 export function utcNow(): Date {
   return new Date();
@@ -41,7 +42,7 @@ export async function exists(filePath: string): Promise<boolean> {
   }
 }
 
-export async function loadDotenv(envPath = path.join(wikiRoot, ".env")): Promise<void> {
+export async function loadDotenv(envPath = path.join(repoRoot, ".env")): Promise<void> {
   if (!(await exists(envPath))) {
     return;
   }

@@ -11,10 +11,10 @@ import {
   wikiRoot,
 } from "./common.js";
 
-const skipDirs = new Set([".git", "dist", "meta", "node_modules", "raw", "tools"]);
+const skipDirs = new Set([".git", "dist", "docs", "meta", "node_modules", "raw", "tools"]);
 const skipOrphanNames = new Set([
+  "AGENTS.md",
   "CLAUDE.md",
-  "PLAN.md",
   "index.md",
   "log.md",
   "me.md",

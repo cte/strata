@@ -1,9 +1,11 @@
-raw/.cache/
+wiki/raw/.cache/
 .env
 .env.*
 !.env.example
 dist/
 node_modules/
+.agents/
+skills-lock.json
 *.pem
 *.key
 *.p12
@@ -11,7 +13,7 @@ node_modules/
 .DS_Store
 __pycache__/
 *.py[cod]
-meta/lint/*.tmp
+wiki/meta/lint/*.tmp
 .cortex/auth.json
 .cortex/state.sqlite*
 .cortex/traces/

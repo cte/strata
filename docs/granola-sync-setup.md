@@ -1,6 +1,6 @@
 # Granola Sync Setup
 
-Use this path when Granola API access is unavailable. The goal is to move exported transcripts from macOS into `raw/granola/` without requiring the Linux agent to know about local Mac paths.
+Use this path when Granola API access is unavailable. The goal is to move exported transcripts from macOS into `wiki/raw/granola/` without requiring the Linux agent to know about local Mac paths.
 
 ## Assumptions
 
@@ -51,14 +51,14 @@ Create `~/bin/granola-sync-to-wiki.sh`:
 set -euo pipefail
 
 EXPORT_DIR="$HOME/Documents/Granola Exports"
-WIKI_DIR="$HOME/Documents/cortex"
+CORTEX_DIR="$HOME/Documents/cortex"
 
-mkdir -p "$WIKI_DIR/raw/granola"
-rsync -a --ignore-existing "$EXPORT_DIR/" "$WIKI_DIR/raw/granola/"
+mkdir -p "$CORTEX_DIR/wiki/raw/granola"
+rsync -a --ignore-existing "$EXPORT_DIR/" "$CORTEX_DIR/wiki/raw/granola/"
 
-cd "$WIKI_DIR"
-if ! git diff --quiet -- raw/granola; then
-  git add raw/granola
+cd "$CORTEX_DIR"
+if ! git diff --quiet -- wiki/raw/granola; then
+  git add wiki/raw/granola
   git commit -m "ingest: granola | mac sync"
   git push
 fi
@@ -72,6 +72,6 @@ If the wiki lives in iCloud, Dropbox, Syncthing, or another synced folder, keep 
 
 After the first run, confirm:
 
-- New files appear under `raw/granola/`.
+- New files appear under `wiki/raw/granola/`.
 - Re-running the job does not duplicate files.
 - Existing raw files are not modified.
