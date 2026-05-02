@@ -33,8 +33,7 @@ describe("policy", () => {
         /requires includeRaw/,
       );
       expect(
-        assertReadAllowed(repoRoot, "raw/granola/meeting.md", { allowRawRead: true })
-          .relativePath,
+        assertReadAllowed(repoRoot, "raw/granola/meeting.md", { allowRawRead: true }).relativePath,
       ).toBe("raw/granola/meeting.md");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });

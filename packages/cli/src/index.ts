@@ -71,7 +71,9 @@ function printSessions(sessions: SessionRecord[]): void {
 
   for (const session of sessions) {
     const ended = session.endedAt ? session.endedAt : "running";
-    console.log(`${session.startedAt}  ${session.status.padEnd(11)}  ${session.kind.padEnd(7)}  ${session.id}  ${session.title}  (${ended})`);
+    console.log(
+      `${session.startedAt}  ${session.status.padEnd(11)}  ${session.kind.padEnd(7)}  ${session.id}  ${session.title}  (${ended})`,
+    );
   }
 }
 
@@ -124,7 +126,9 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
   } else {
     console.log(`No final answer produced before stop reason: ${result.stoppedReason}`);
   }
-  console.log(`\n[session: ${result.sessionId}; status: ${result.status}; iterations: ${result.iterations}; tool calls: ${result.toolCalls}]`);
+  console.log(
+    `\n[session: ${result.sessionId}; status: ${result.status}; iterations: ${result.iterations}; tool calls: ${result.toolCalls}]`,
+  );
   return result.status === "failed" ? 1 : 0;
 }
 
@@ -140,7 +144,9 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
     if (credentials === undefined) {
       console.log("openai-codex: not logged in");
     } else {
-      console.log(`openai-codex: logged in, token expires ${new Date(credentials.expiresAt).toISOString()}`);
+      console.log(
+        `openai-codex: logged in, token expires ${new Date(credentials.expiresAt).toISOString()}`,
+      );
     }
     const apiKeyConfigured = Boolean(Bun.env.CORTEX_API_KEY ?? Bun.env.OPENAI_API_KEY);
     console.log(`openai-compatible: ${apiKeyConfigured ? "API key configured" : "not configured"}`);
@@ -161,7 +167,9 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
           console.log(info.instructions);
         },
         onManualCodeInput: async () => {
-          const value = await rl.question("Paste redirect URL/code, or press Enter to wait for callback: ");
+          const value = await rl.question(
+            "Paste redirect URL/code, or press Enter to wait for callback: ",
+          );
           if (value.trim() === "") {
             return new Promise<string>(() => {});
           }
@@ -171,7 +179,9 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
         onProgress: (message) => console.log(message),
       });
       await setChatGptCredentials(credentials);
-      console.log(`Logged in to openai-codex. Token expires ${new Date(credentials.expiresAt).toISOString()}`);
+      console.log(
+        `Logged in to openai-codex. Token expires ${new Date(credentials.expiresAt).toISOString()}`,
+      );
       return 0;
     } finally {
       rl.close();
@@ -350,8 +360,13 @@ function parseQueryOptions(args: string[]): QueryOptions {
   return parsed;
 }
 
-async function createModelAdapter(options: QueryOptions): Promise<OpenAICodexModelAdapter | OpenAICompatibleChatModelAdapter> {
-  const provider = options.provider ?? parseProviderName(Bun.env.CORTEX_PROVIDER) ?? await inferDefaultProvider();
+async function createModelAdapter(
+  options: QueryOptions,
+): Promise<OpenAICodexModelAdapter | OpenAICompatibleChatModelAdapter> {
+  const provider =
+    options.provider ??
+    parseProviderName(Bun.env.CORTEX_PROVIDER) ??
+    (await inferDefaultProvider());
   if (provider === "openai-codex") {
     const credentials = await getValidChatGptCredentials();
     const codexOptions = {
@@ -370,7 +385,7 @@ async function createModelAdapter(options: QueryOptions): Promise<OpenAICodexMod
 }
 
 async function inferDefaultProvider(): Promise<ProviderName> {
-  if (await getChatGptCredentials() !== undefined) {
+  if ((await getChatGptCredentials()) !== undefined) {
     return "openai-codex";
   }
   if (Bun.env.CORTEX_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined) {

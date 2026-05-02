@@ -2,7 +2,13 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 export type YamlValue = null | boolean | number | string | string[];
 
@@ -67,12 +73,12 @@ function yamlScalar(value: Exclude<YamlValue, string[]>): string {
     return String(value);
   }
   if (value === "") {
-    return "\"\"";
+    return '""';
   }
   if (/^[A-Za-z0-9_./:@+-]+$/.test(value)) {
     return value;
   }
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 export function frontmatter(mapping: Record<string, YamlValue>): string {

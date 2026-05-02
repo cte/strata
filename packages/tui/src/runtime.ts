@@ -20,6 +20,7 @@ export interface RuntimeOptions {
   terminal: Terminal;
   root: Component;
   onExit?: () => void;
+  onFatalError?: (error: unknown) => void;
 }
 
 const FRAME_INTERVAL_MS = 16;
@@ -37,6 +38,7 @@ export class TuiRuntime {
   private lastRenderAt = 0;
   private inputHandler?: (event: InputEvent) => void;
   private exitHandler?: () => void;
+  private fatalErrorHandler?: (error: unknown) => void;
   private running = false;
 
   constructor(options: RuntimeOptions) {
@@ -44,6 +46,9 @@ export class TuiRuntime {
     this.root = options.root;
     if (options.onExit !== undefined) {
       this.exitHandler = options.onExit;
+    }
+    if (options.onFatalError !== undefined) {
+      this.fatalErrorHandler = options.onFatalError;
     }
   }
 
@@ -53,10 +58,10 @@ export class TuiRuntime {
     }
     this.running = true;
     this.terminal.start(
-      (data) => this.dispatchInput(data),
-      () => this.invalidate(true),
+      (data) => this.guarded(() => this.dispatchInput(data)),
+      () => this.guarded(() => this.invalidate(true)),
     );
-    this.renderNow();
+    this.guarded(() => this.renderNow());
   }
 
   stop(): void {
@@ -140,24 +145,26 @@ export class TuiRuntime {
     }
     this.escapeTimer = setTimeout(() => {
       this.escapeTimer = undefined;
-      const flushed = this.inputBuffer.flush();
-      if (flushed.length === 0) {
-        return;
-      }
-      for (const event of flushed) {
-        const overlay = this.overlay;
-        if (overlay !== undefined && overlay.handleInput?.(event) === "consumed") {
-          this.invalidate();
-          continue;
+      this.guarded(() => {
+        const flushed = this.inputBuffer.flush();
+        if (flushed.length === 0) {
+          return;
         }
-        const handled = this.root.handleInput?.(event);
-        if (handled === "consumed") {
-          this.invalidate();
-          continue;
+        for (const event of flushed) {
+          const overlay = this.overlay;
+          if (overlay !== undefined && overlay.handleInput?.(event) === "consumed") {
+            this.invalidate();
+            continue;
+          }
+          const handled = this.root.handleInput?.(event);
+          if (handled === "consumed") {
+            this.invalidate();
+            continue;
+          }
+          this.inputHandler?.(event);
         }
-        this.inputHandler?.(event);
-      }
-      this.invalidate();
+        this.invalidate();
+      });
     }, 30);
   }
 
@@ -171,7 +178,7 @@ export class TuiRuntime {
     this.renderTimer = setTimeout(() => {
       this.renderTimer = undefined;
       this.renderScheduled = false;
-      this.renderNow();
+      this.guarded(() => this.renderNow());
     }, delay);
   }
 
@@ -182,8 +189,8 @@ export class TuiRuntime {
     const width = this.terminal.columns;
     const height = this.terminal.rows;
     const widthChanged = width !== this.prevWidth;
-    const baseFrame = safeRender(this.root, width);
-    const overlayFrame = this.overlay ? safeRender(this.overlay, width) : emptyFrame();
+    const baseFrame = safeRender(this.root, width, height);
+    const overlayFrame = this.overlay ? safeRender(this.overlay, width, height) : emptyFrame();
     const frame = composeFrame(baseFrame, overlayFrame, width, height);
 
     if (widthChanged || this.prevLines.length === 0) {
@@ -218,6 +225,26 @@ export class TuiRuntime {
     this.lastRenderAt = Date.now();
   }
 
+  private guarded(fn: () => void): void {
+    try {
+      fn();
+    } catch (error: unknown) {
+      this.fatal(error);
+    }
+  }
+
+  private fatal(error: unknown): void {
+    if (!this.running) {
+      return;
+    }
+    this.stop();
+    if (this.fatalErrorHandler !== undefined) {
+      this.fatalErrorHandler(error);
+      return;
+    }
+    throw error;
+  }
+
   private applyCursor(frame: Frame): void {
     if (frame.cursor === undefined) {
       this.terminal.write(HIDE_CURSOR);
@@ -228,42 +255,34 @@ export class TuiRuntime {
   }
 }
 
-function safeRender(component: Component, width: number): Frame {
+function safeRender(component: Component, width: number, height: number): Frame {
   if (width <= 0) {
     return emptyFrame();
   }
-  return component.render({ width });
+  return component.render({ width, height });
 }
 
 function composeFrame(base: Frame, overlay: Frame, width: number, height: number): Frame {
+  const overlayLines = overlay.lines.map((line) => normalizeLine(line, width));
+  if (overlayLines.length > 0) {
+    while (overlayLines.length < height) {
+      overlayLines.push(padToWidth("", width));
+    }
+    if (overlayLines.length > height) {
+      overlayLines.length = height;
+    }
+    const result: Frame = { lines: overlayLines };
+    if (overlay.cursor !== undefined) {
+      result.cursor = clampCursor(overlay.cursor, width, overlayLines.length);
+    }
+    return result;
+  }
   const baseLines = base.lines.map((line) => normalizeLine(line, width));
   if (baseLines.length > height) {
     baseLines.splice(0, baseLines.length - height);
   }
-  const overlayLines = overlay.lines.map((line) => normalizeLine(line, width));
-  if (overlayLines.length === 0) {
-    const result: Frame = { lines: baseLines };
-    if (base.cursor !== undefined) {
-      result.cursor = clampCursor(base.cursor, width, baseLines.length);
-    }
-    return result;
-  }
-  const startRow = Math.max(0, baseLines.length - overlayLines.length);
-  for (let i = 0; i < overlayLines.length; i += 1) {
-    const target = startRow + i;
-    while (baseLines.length <= target) {
-      baseLines.push(padToWidth("", width));
-    }
-    baseLines[target] = overlayLines[i] ?? "";
-  }
   const result: Frame = { lines: baseLines };
-  if (overlay.cursor !== undefined) {
-    result.cursor = clampCursor(
-      { row: startRow + overlay.cursor.row, col: overlay.cursor.col },
-      width,
-      baseLines.length,
-    );
-  } else if (base.cursor !== undefined) {
+  if (base.cursor !== undefined) {
     result.cursor = clampCursor(base.cursor, width, baseLines.length);
   }
   return result;

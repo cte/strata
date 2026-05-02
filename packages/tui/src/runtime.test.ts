@@ -34,6 +34,32 @@ describe("TuiRuntime", () => {
     expect(terminal.frames.length).toBeGreaterThan(before);
   });
 
+  test("restores the terminal when render throws", async () => {
+    const terminal = new FakeTerminal(20, 6);
+    const stopped: { value: boolean } = { value: false };
+    const originalStop = terminal.stop.bind(terminal);
+    terminal.stop = () => {
+      stopped.value = true;
+      originalStop();
+    };
+    const error = new Error("boom");
+    const root = {
+      render(): never {
+        throw error;
+      },
+    };
+    let captured: unknown;
+    const runtime = new TuiRuntime({
+      terminal,
+      root,
+      onFatalError: (err) => (captured = err),
+    });
+    runtime.start();
+    await pump();
+    expect(captured).toBe(error);
+    expect(stopped.value).toBe(true);
+  });
+
   test("dispatches input through the buffer", async () => {
     const terminal = new FakeTerminal(20, 4);
     const root = new Container([new Text("hi")]);

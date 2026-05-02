@@ -1,4 +1,11 @@
-import { padToWidth, sliceByWidth, theme, truncateToWidth, visibleWidth, wrapText } from "./ansi.js";
+import {
+  padToWidth,
+  sliceByWidth,
+  theme,
+  truncateToWidth,
+  visibleWidth,
+  wrapText,
+} from "./ansi.js";
 import type { Component, Frame, RenderContext } from "./component.js";
 import type { InputEvent, KeyId } from "./keys.js";
 
@@ -136,7 +143,8 @@ export class Editor implements Component {
   private handleKey(key: KeyId): "consumed" | "passthrough" {
     if (this.completions.length > 0) {
       if (key === "up") {
-        this.completionIndex = (this.completionIndex - 1 + this.completions.length) % this.completions.length;
+        this.completionIndex =
+          (this.completionIndex - 1 + this.completions.length) % this.completions.length;
         return "consumed";
       }
       if (key === "down") {
@@ -289,9 +297,12 @@ export class Editor implements Component {
     if (this.history.length === 0) {
       return;
     }
-    const next = this.historyIndex === undefined
-      ? (delta < 0 ? this.history.length - 1 : 0)
-      : this.historyIndex + delta;
+    const next =
+      this.historyIndex === undefined
+        ? delta < 0
+          ? this.history.length - 1
+          : 0
+        : this.historyIndex + delta;
     if (next < 0 || next >= this.history.length) {
       this.historyIndex = undefined;
       this.text = "";

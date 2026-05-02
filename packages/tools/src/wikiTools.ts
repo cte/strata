@@ -291,7 +291,11 @@ function optionalBoolean(value: JsonValue | undefined, fallback: boolean, name: 
   return value;
 }
 
-function optionalPositiveInteger(value: JsonValue | undefined, fallback: number, name: string): number {
+function optionalPositiveInteger(
+  value: JsonValue | undefined,
+  fallback: number,
+  name: string,
+): number {
   if (value === undefined) {
     return fallback;
   }

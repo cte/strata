@@ -107,7 +107,11 @@ function meetingTranscript(item: JsonObject): string {
   return "";
 }
 
-async function fetchDetailIfNeeded(item: JsonObject, token: string, template: string | undefined): Promise<JsonObject> {
+async function fetchDetailIfNeeded(
+  item: JsonObject,
+  token: string,
+  template: string | undefined,
+): Promise<JsonObject> {
   if (meetingTranscript(item) || !template) {
     return item;
   }
@@ -115,7 +119,9 @@ async function fetchDetailIfNeeded(item: JsonObject, token: string, template: st
   if (!meetingId) {
     return item;
   }
-  const detail = asObject(await requestJson(template.replace("{id}", encodeURIComponent(meetingId)), token));
+  const detail = asObject(
+    await requestJson(template.replace("{id}", encodeURIComponent(meetingId)), token),
+  );
   return detail ? { ...item, ...detail } : item;
 }
 
@@ -172,7 +178,9 @@ async function main(): Promise<number> {
   let written = 0;
   let skipped = 0;
   for (const originalMeeting of meetingsFromPayload(payload)) {
-    const meeting = token ? await fetchDetailIfNeeded(originalMeeting, token, transcriptTemplate) : originalMeeting;
+    const meeting = token
+      ? await fetchDetailIfNeeded(originalMeeting, token, transcriptTemplate)
+      : originalMeeting;
     const { filePath, content } = renderMeeting(meeting, pulledAt);
     if (args.dryRun) {
       console.log(path.relative(wikiRoot, filePath));

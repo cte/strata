@@ -26,11 +26,23 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   const tools = config.tools ?? createDefaultToolRegistry();
   const maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const maxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+  const signal = config.signal;
   const messages = createInitialMessages(config.question);
   let session: SessionRecord | undefined;
   let iterations = 0;
   let toolCallCount = 0;
   let finalAnswer = "";
+  let cancelled = false;
+  const isAborted = (): boolean => signal !== undefined && signal.aborted;
+
+  const buildCancelledResult = (): AgentRunResult => ({
+    sessionId: session?.id ?? "",
+    status: "interrupted",
+    stoppedReason: "cancelled",
+    finalAnswer,
+    iterations,
+    toolCalls: toolCallCount,
+  });
 
   try {
     session = await store.createSession({
@@ -63,6 +75,10 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
     yield { type: "message.user", content: config.question };
 
     while (iterations < maxIterations) {
+      if (isAborted()) {
+        cancelled = true;
+        break;
+      }
       iterations += 1;
       await store.appendEvent(session.id, "model.request", {
         iteration: iterations,
@@ -70,10 +86,27 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       });
       yield { type: "model.request", iteration: iterations, messageCount: messages.length };
 
-      const response = await config.model.complete({
-        messages,
-        tools: tools.list(),
-      });
+      let response: ModelResponse;
+      try {
+        const modelRequest: {
+          messages: typeof messages;
+          tools: ReturnType<typeof tools.list>;
+          signal?: AbortSignal;
+        } = {
+          messages,
+          tools: tools.list(),
+        };
+        if (signal !== undefined) {
+          modelRequest.signal = signal;
+        }
+        response = await config.model.complete(modelRequest);
+      } catch (error: unknown) {
+        if (isAborted()) {
+          cancelled = true;
+          break;
+        }
+        throw error;
+      }
 
       await persistModelResponse(store, session.id, iterations, response);
       messages.push({
@@ -135,6 +168,10 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       }
 
       for (const toolCall of response.toolCalls) {
+        if (isAborted()) {
+          cancelled = true;
+          break;
+        }
         toolCallCount += 1;
         yield {
           type: "tool.call.started",
@@ -157,6 +194,21 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         });
         yield { type: "tool.call.completed", toolCallId: toolCall.id, result: toolResult };
       }
+
+      if (cancelled) {
+        break;
+      }
+    }
+
+    if (cancelled) {
+      await store.appendEvent(session.id, "agent.loop.stopped", {
+        reason: "cancelled",
+        iterations,
+        toolCalls: toolCallCount,
+      });
+      await store.endSession(session.id, "interrupted");
+      yield { type: "agent.completed", result: buildCancelledResult() };
+      return;
     }
 
     await store.appendEvent(session.id, "agent.loop.stopped", {
@@ -277,7 +329,11 @@ async function executeToolCall(
       },
       truncated: false,
     };
-    await store.appendEvent(sessionId, "tool.result", toolResultEventPayload(toolCall.id, invalidResult));
+    await store.appendEvent(
+      sessionId,
+      "tool.result",
+      toolResultEventPayload(toolCall.id, invalidResult),
+    );
     return invalidResult;
   }
 

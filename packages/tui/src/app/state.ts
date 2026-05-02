@@ -12,7 +12,13 @@ export interface AuthStatusSummary {
 export type TranscriptItem =
   | { kind: "user"; content: string }
   | { kind: "assistant"; content: string; iteration: number }
-  | { kind: "tool"; toolCallId: string; toolName: string; argumentsText: string; result?: ToolExecutionResult }
+  | {
+      kind: "tool";
+      toolCallId: string;
+      toolName: string;
+      argumentsText: string;
+      result?: ToolExecutionResult;
+    }
   | { kind: "status"; content: string }
   | { kind: "error"; content: string };
 
@@ -26,7 +32,11 @@ export interface AppState {
   transcript: TranscriptItem[];
 }
 
-export function initialAppState(provider: ProviderName, model: string, auth: AuthStatusSummary): AppState {
+export function initialAppState(
+  provider: ProviderName,
+  model: string,
+  auth: AuthStatusSummary,
+): AppState {
   return {
     provider,
     model,

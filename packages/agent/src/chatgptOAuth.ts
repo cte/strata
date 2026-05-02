@@ -1,5 +1,9 @@
 import { createServer, type Server } from "node:http";
-import { getChatGptCredentials, setChatGptCredentials, type ChatGptCredentials } from "./authStore.js";
+import {
+  getChatGptCredentials,
+  setChatGptCredentials,
+  type ChatGptCredentials,
+} from "./authStore.js";
 
 const CALLBACK_HOST = Bun.env.CORTEX_OAUTH_CALLBACK_HOST ?? "127.0.0.1";
 const CALLBACK_PORT = 1455;
@@ -11,11 +15,19 @@ const SCOPE = "openid profile email offline_access";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const REFRESH_SKEW_MS = 60_000;
 
+export class ChatGptLoginCancelled extends Error {
+  constructor() {
+    super("ChatGPT login cancelled");
+    this.name = "ChatGptLoginCancelled";
+  }
+}
+
 export interface ChatGptLoginCallbacks {
   onAuth: (info: { url: string; instructions: string }) => void;
   onPrompt: (prompt: string) => Promise<string>;
   onManualCodeInput?: () => Promise<string>;
   onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }
 
 interface TokenResponse {
@@ -31,10 +43,23 @@ interface CallbackServer {
 }
 
 export async function loginChatGpt(callbacks: ChatGptLoginCallbacks): Promise<ChatGptCredentials> {
+  const signal = callbacks.signal;
+  const ensureNotCancelled = (): void => {
+    if (signal !== undefined && signal.aborted) {
+      throw new ChatGptLoginCancelled();
+    }
+  };
+
+  ensureNotCancelled();
   const { verifier, challenge } = await generatePkce();
   const state = createState();
   const authUrl = createAuthUrl(state, challenge);
   const server = await startCallbackServer(state);
+
+  const onAbort = (): void => {
+    server.cancelWait();
+  };
+  signal?.addEventListener("abort", onAbort);
 
   callbacks.onAuth({
     url: authUrl,
@@ -42,32 +67,37 @@ export async function loginChatGpt(callbacks: ChatGptLoginCallbacks): Promise<Ch
   });
 
   try {
+    ensureNotCancelled();
     let code: string | undefined;
     if (callbacks.onManualCodeInput !== undefined) {
-      const manualPromise = callbacks
-        .onManualCodeInput()
-        .then((input) => {
-          server.cancelWait();
-          return parseAuthorizationInput(input, state);
-        });
+      const manualPromise = callbacks.onManualCodeInput().then((input) => {
+        server.cancelWait();
+        return parseAuthorizationInput(input, state);
+      });
       const callbackCode = await server.waitForCode();
-      code = callbackCode ?? await manualPromise;
+      ensureNotCancelled();
+      code = callbackCode ?? (await manualPromise);
     } else {
-      code = await server.waitForCode() ?? undefined;
+      code = (await server.waitForCode()) ?? undefined;
+      ensureNotCancelled();
     }
 
     if (!code) {
+      ensureNotCancelled();
       const input = await callbacks.onPrompt("Paste the authorization code or full redirect URL:");
+      ensureNotCancelled();
       code = parseAuthorizationInput(input, state);
     }
     if (!code) {
-      throw new Error("Missing authorization code");
+      throw new ChatGptLoginCancelled();
     }
 
     callbacks.onProgress?.("Exchanging authorization code...");
-    const token = await exchangeAuthorizationCode(code, verifier);
+    const token = await exchangeAuthorizationCode(code, verifier, signal);
+    ensureNotCancelled();
     return credentialsFromToken(token);
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     await server.close();
   }
 }
@@ -86,7 +116,9 @@ export async function refreshChatGptCredentials(
   });
 
   if (!response.ok) {
-    throw new Error(`ChatGPT token refresh failed with HTTP ${response.status}: ${await response.text()}`);
+    throw new Error(
+      `ChatGPT token refresh failed with HTTP ${response.status}: ${await response.text()}`,
+    );
   }
 
   const token = await parseTokenResponse(response);
@@ -132,8 +164,12 @@ function credentialsFromToken(token: TokenResponse): ChatGptCredentials {
   };
 }
 
-async function exchangeAuthorizationCode(code: string, verifier: string): Promise<TokenResponse> {
-  const response = await fetch(TOKEN_URL, {
+async function exchangeAuthorizationCode(
+  code: string,
+  verifier: string,
+  signal: AbortSignal | undefined,
+): Promise<TokenResponse> {
+  const init: RequestInit = {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -143,16 +179,22 @@ async function exchangeAuthorizationCode(code: string, verifier: string): Promis
       code_verifier: verifier,
       redirect_uri: REDIRECT_URI,
     }),
-  });
+  };
+  if (signal !== undefined) {
+    init.signal = signal;
+  }
+  const response = await fetch(TOKEN_URL, init);
 
   if (!response.ok) {
-    throw new Error(`ChatGPT token exchange failed with HTTP ${response.status}: ${await response.text()}`);
+    throw new Error(
+      `ChatGPT token exchange failed with HTTP ${response.status}: ${await response.text()}`,
+    );
   }
   return parseTokenResponse(response);
 }
 
 async function parseTokenResponse(response: Response): Promise<TokenResponse> {
-  return await response.json() as TokenResponse;
+  return (await response.json()) as TokenResponse;
 }
 
 function createAuthUrl(state: string, challenge: string): string {
@@ -235,9 +277,10 @@ function startCallbackServer(expectedState: string): Promise<CallbackServer> {
 
     server?.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
       resolve({
-        close: () => new Promise<void>((closeResolve) => {
-          server?.close(() => closeResolve());
-        }),
+        close: () =>
+          new Promise<void>((closeResolve) => {
+            server?.close(() => closeResolve());
+          }),
         cancelWait: () => settle?.(null),
         waitForCode: () => waitPromise,
       });
@@ -324,7 +367,10 @@ function base64UrlEncode(bytes: Uint8Array): string {
 }
 
 function base64UrlDecode(value: string): Uint8Array {
-  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const padded = value
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(value.length / 4) * 4, "=");
   const binary = atob(padded);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {

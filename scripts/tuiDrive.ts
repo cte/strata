@@ -17,7 +17,11 @@ function divider(label: string): void {
 async function main(): Promise<void> {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-drive-"));
   await mkdir(path.join(repoRoot, "projects"), { recursive: true });
-  await writeFile(path.join(repoRoot, "projects", "alpha.md"), "# Alpha\n\nNeedle found.\n", "utf8");
+  await writeFile(
+    path.join(repoRoot, "projects", "alpha.md"),
+    "# Alpha\n\nNeedle found.\n",
+    "utf8",
+  );
   try {
     const terminal = new FakeTerminal(80, 20);
     const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
@@ -79,7 +83,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().then(() => process.exit(0)).catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

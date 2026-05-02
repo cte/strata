@@ -9,38 +9,44 @@ describe("OpenAICodexModelAdapter", () => {
     let capturedUrl = "";
     let capturedHeaders: Headers | undefined;
     let capturedBody: JsonObject | undefined;
-    const fetchImpl = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      capturedUrl = String(args[0]);
-      const init = args[1];
-      capturedHeaders = new Headers(init?.headers);
-      capturedBody = JSON.parse(String(init?.body)) as JsonObject;
-      return new Response([
-        sse({ type: "response.created", response: { id: "resp_1" } }),
-        sse({
-          type: "response.output_item.added",
-          item: {
-            type: "function_call",
-            id: "fc_1",
-            call_id: "call_1",
-            name: "wiki_readPage",
-            arguments: "",
-          },
-        }),
-        sse({ type: "response.function_call_arguments.delta", delta: "{\"path\"" }),
-        sse({ type: "response.function_call_arguments.delta", delta: ":\"index.md\"}" }),
-        sse({
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_1",
-            call_id: "call_1",
-            name: "wiki_readPage",
-            arguments: "{\"path\":\"index.md\"}",
-          },
-        }),
-        sse({ type: "response.completed", response: { id: "resp_1", status: "completed" } }),
-      ].join(""), { status: 200 });
-    }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
+    const fetchImpl = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        capturedUrl = String(args[0]);
+        const init = args[1];
+        capturedHeaders = new Headers(init?.headers);
+        capturedBody = JSON.parse(String(init?.body)) as JsonObject;
+        return new Response(
+          [
+            sse({ type: "response.created", response: { id: "resp_1" } }),
+            sse({
+              type: "response.output_item.added",
+              item: {
+                type: "function_call",
+                id: "fc_1",
+                call_id: "call_1",
+                name: "wiki_readPage",
+                arguments: "",
+              },
+            }),
+            sse({ type: "response.function_call_arguments.delta", delta: '{"path"' }),
+            sse({ type: "response.function_call_arguments.delta", delta: ':"index.md"}' }),
+            sse({
+              type: "response.output_item.done",
+              item: {
+                type: "function_call",
+                id: "fc_1",
+                call_id: "call_1",
+                name: "wiki_readPage",
+                arguments: '{"path":"index.md"}',
+              },
+            }),
+            sse({ type: "response.completed", response: { id: "resp_1", status: "completed" } }),
+          ].join(""),
+          { status: 200 },
+        );
+      },
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
 
     const adapter = new OpenAICodexModelAdapter({
       credentials: fakeCredentials(),
@@ -69,7 +75,7 @@ describe("OpenAICodexModelAdapter", () => {
         {
           id: "call_1|fc_1",
           name: "wiki.readPage",
-          argumentsText: "{\"path\":\"index.md\"}",
+          argumentsText: '{"path":"index.md"}',
         },
       ],
     });

@@ -44,7 +44,7 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const toolNameMap = createProviderToolNameMap(request.tools);
     const body = buildCodexRequestBody(this.model, request, toolNameMap.canonicalToProvider);
-    const response = await this.fetchImpl(resolveCodexResponsesUrl(this.baseUrl), {
+    const init: RequestInit = {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.credentials.accessToken}`,
@@ -56,7 +56,11 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
         "user-agent": "cortex",
       },
       body: JSON.stringify(body),
-    });
+    };
+    if (request.signal !== undefined) {
+      init.signal = request.signal;
+    }
+    const response = await this.fetchImpl(resolveCodexResponsesUrl(this.baseUrl), init);
 
     if (!response.ok) {
       throw new ModelAdapterError(
@@ -65,7 +69,10 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
       );
     }
     if (response.body === null) {
-      throw new ModelAdapterError("codex_response_invalid", "Codex response did not include a body");
+      throw new ModelAdapterError(
+        "codex_response_invalid",
+        "Codex response did not include a body",
+      );
     }
 
     return parseCodexSseResponse(parseSse(response), toolNameMap.providerToCanonical);
@@ -176,7 +183,9 @@ async function parseCodexSseResponse(
   let finishReason = "unknown";
   let providerResponseId: string | undefined;
   let usage: JsonObject | undefined;
-  let currentTool: { callId: string; itemId?: string; name: string; argumentsText: string } | undefined;
+  let currentTool:
+    | { callId: string; itemId?: string; name: string; argumentsText: string }
+    | undefined;
   const toolCalls: AgentToolCall[] = [];
 
   for await (const event of events) {
@@ -192,8 +201,14 @@ async function parseCodexSseResponse(
         content += event.delta;
       }
     } else if (type === "response.output_item.added") {
-      const item = event.item as { type?: unknown; call_id?: unknown; id?: unknown; name?: unknown; arguments?: unknown } | undefined;
-      if (item?.type === "function_call" && typeof item.call_id === "string" && typeof item.name === "string") {
+      const item = event.item as
+        | { type?: unknown; call_id?: unknown; id?: unknown; name?: unknown; arguments?: unknown }
+        | undefined;
+      if (
+        item?.type === "function_call" &&
+        typeof item.call_id === "string" &&
+        typeof item.name === "string"
+      ) {
         currentTool = {
           callId: item.call_id,
           name: providerToCanonical.get(item.name) ?? item.name,
@@ -212,20 +227,25 @@ async function parseCodexSseResponse(
         currentTool.argumentsText = event.arguments;
       }
     } else if (type === "response.output_item.done") {
-      const item = event.item as {
-        type?: unknown;
-        call_id?: unknown;
-        id?: unknown;
-        name?: unknown;
-        arguments?: unknown;
-        content?: unknown;
-      } | undefined;
+      const item = event.item as
+        | {
+            type?: unknown;
+            call_id?: unknown;
+            id?: unknown;
+            name?: unknown;
+            arguments?: unknown;
+            content?: unknown;
+          }
+        | undefined;
       if (item?.type === "function_call") {
         const callId = typeof item.call_id === "string" ? item.call_id : currentTool?.callId;
         const itemId = typeof item.id === "string" ? item.id : currentTool?.itemId;
         const providerName = typeof item.name === "string" ? item.name : undefined;
         if (callId !== undefined && providerName !== undefined) {
-          const args = typeof item.arguments === "string" ? item.arguments : currentTool?.argumentsText ?? "{}";
+          const args =
+            typeof item.arguments === "string"
+              ? item.arguments
+              : (currentTool?.argumentsText ?? "{}");
           toolCalls.push({
             id: itemId === undefined ? callId : `${callId}|${itemId}`,
             name: providerToCanonical.get(providerName) ?? providerName,
@@ -236,8 +256,14 @@ async function parseCodexSseResponse(
       } else if (item?.type === "message" && content === "") {
         content = extractMessageText(item.content);
       }
-    } else if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
-      const response = event.response as { id?: unknown; status?: unknown; usage?: unknown } | undefined;
+    } else if (
+      type === "response.completed" ||
+      type === "response.done" ||
+      type === "response.incomplete"
+    ) {
+      const response = event.response as
+        | { id?: unknown; status?: unknown; usage?: unknown }
+        | undefined;
       if (typeof response?.id === "string") {
         providerResponseId = response.id;
       }
@@ -251,7 +277,9 @@ async function parseCodexSseResponse(
       const response = event.response as { error?: { message?: unknown } } | undefined;
       throw new ModelAdapterError(
         "codex_response_failed",
-        typeof response?.error?.message === "string" ? response.error.message : "Codex response failed",
+        typeof response?.error?.message === "string"
+          ? response.error.message
+          : "Codex response failed",
       );
     } else if (type === "error") {
       throw new ModelAdapterError(
@@ -264,7 +292,8 @@ async function parseCodexSseResponse(
   const response: ModelResponse = {
     content,
     toolCalls,
-    finishReason: toolCalls.length > 0 && finishReason === "completed" ? "tool_calls" : finishReason,
+    finishReason:
+      toolCalls.length > 0 && finishReason === "completed" ? "tool_calls" : finishReason,
   };
   if (providerResponseId !== undefined) {
     response.providerResponseId = providerResponseId;

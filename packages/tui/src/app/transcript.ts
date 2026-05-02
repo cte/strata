@@ -35,7 +35,7 @@ function renderItem(item: TranscriptItem, width: number): string[] {
     case "assistant":
       return [
         ...prefixHeader(theme.success("cortex"), width),
-        ...new Markdown(item.content).render({ width }).lines,
+        ...new Markdown(item.content).render({ width, height: 0 }).lines,
       ];
     case "tool":
       return renderToolItem(item, width);
@@ -56,16 +56,15 @@ function prefixHeader(header: string, width: number): string[] {
   return [padToWidth(theme.bold(header), width)];
 }
 
-function renderToolItem(
-  item: Extract<TranscriptItem, { kind: "tool" }>,
-  width: number,
-): string[] {
+function renderToolItem(item: Extract<TranscriptItem, { kind: "tool" }>, width: number): string[] {
   const status = formatToolStatus(item.result);
   const header = `${theme.warning("⚙")} ${theme.bold(item.toolName)} ${status}`;
   const lines = [padToWidth(truncateToWidth(header, width), width)];
   const args = formatArgs(item.argumentsText);
   if (args !== "") {
-    lines.push(padToWidth(theme.muted(`  args: ${truncateToWidth(args, Math.max(0, width - 8))}`), width));
+    lines.push(
+      padToWidth(theme.muted(`  args: ${truncateToWidth(args, Math.max(0, width - 8))}`), width),
+    );
   }
   if (item.result !== undefined) {
     lines.push(...formatResult(item.result, width));
@@ -100,13 +99,20 @@ function formatArgs(argumentsText: string): string {
 
 function formatResult(result: ToolExecutionResult, width: number): string[] {
   if (!result.ok) {
-    return [padToWidth(theme.muted(`  → ${truncateToWidth(result.error.message, Math.max(0, width - 4))}`), width)];
+    return [
+      padToWidth(
+        theme.muted(`  → ${truncateToWidth(result.error.message, Math.max(0, width - 4))}`),
+        width,
+      ),
+    ];
   }
   const summary = stringifySummary(result.result);
   if (summary === "") {
     return [];
   }
-  return [padToWidth(theme.muted(`  → ${truncateToWidth(summary, Math.max(0, width - 4))}`), width)];
+  return [
+    padToWidth(theme.muted(`  → ${truncateToWidth(summary, Math.max(0, width - 4))}`), width),
+  ];
 }
 
 function stringifySummary(value: unknown): string {

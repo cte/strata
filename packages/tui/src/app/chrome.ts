@@ -61,7 +61,9 @@ export class Footer implements Component {
         ? theme.success("api-key✓")
         : theme.warning("auth✗");
     const session =
-      this.state.currentSessionId !== undefined ? theme.muted(this.state.currentSessionId.slice(0, 12)) : theme.muted("no session");
+      this.state.currentSessionId !== undefined
+        ? theme.muted(this.state.currentSessionId.slice(0, 12))
+        : theme.muted("no session");
     const hint = theme.muted("/help · /quit");
     const left = `${auth} ${session}`;
     const total = visibleLength(left) + visibleLength(hint);
@@ -79,57 +81,83 @@ export class Footer implements Component {
 export class HelpOverlay implements Component {
   active = false;
   lines: string[];
+  onDismiss: () => void = () => {};
 
   constructor(commands: { name: string; description: string }[]) {
-    this.lines = [
-      "Cortex TUI",
-      "",
-      "Editor:",
-      "  Enter        submit",
-      "  Shift+Enter  newline",
-      "  Tab          autocomplete /commands",
-      "  Up/Down      history",
-      "  Ctrl+L       redraw",
-      "  Ctrl+C       cancel run / clear / exit",
-      "",
-      "Slash commands:",
-      ...commands.map((cmd) => `  /${cmd.name.padEnd(10)} ${cmd.description}`),
-      "",
-      "Press Esc or Enter to dismiss.",
-    ];
+    this.lines = buildHelpContent(commands);
   }
 
   render(ctx: RenderContext): Frame {
-    if (!this.active) {
-      return { lines: [] };
-    }
-    const width = Math.min(ctx.width, 60);
-    const padding = 2;
-    const innerWidth = width - 2 - padding * 2;
-    const inner = this.lines.flatMap((line) => [truncateToWidth(line, innerWidth)]);
-    const lines: string[] = [];
-    const horizontal = "─".repeat(Math.max(0, width - 2));
-    lines.push(theme.accent(`┌${horizontal}┐`));
-    lines.push(theme.accent(`│${" ".repeat(width - 2)}│`));
-    for (const line of inner) {
-      lines.push(theme.accent("│") + " ".repeat(padding) + padToWidth(line, innerWidth) + " ".repeat(padding) + theme.accent("│"));
-    }
-    lines.push(theme.accent(`│${" ".repeat(width - 2)}│`));
-    lines.push(theme.accent(`└${horizontal}┘`));
-    const padded = lines.map((line) => centerLine(line, ctx.width));
-    return { lines: padded };
+    return centerModal(this.lines, "help", ctx);
   }
 
   handleInput(event: { type: string; key?: string }): "consumed" | "passthrough" {
-    if (!this.active) {
-      return "passthrough";
-    }
     if (event.type === "key" && (event.key === "escape" || event.key === "enter")) {
       this.active = false;
+      this.onDismiss();
       return "consumed";
     }
     return "consumed";
   }
+}
+
+function buildHelpContent(commands: { name: string; description: string }[]): string[] {
+  return [
+    "Cortex TUI",
+    "",
+    "Editor:",
+    "  Enter        submit",
+    "  Shift+Enter  newline",
+    "  Tab          autocomplete /commands",
+    "  Up/Down      history",
+    "  Ctrl+L       redraw",
+    "  Ctrl+C       cancel run / clear / exit",
+    "",
+    "Slash commands:",
+    ...commands.map((cmd) => `  /${cmd.name.padEnd(10)} ${cmd.description}`),
+    "",
+    "Press Esc or Enter to dismiss.",
+  ];
+}
+
+export function centerModal(content: string[], title: string, ctx: RenderContext): Frame {
+  const boxWidth = Math.min(ctx.width, Math.max(40, Math.min(80, ctx.width - 4)));
+  const padding = 2;
+  const innerWidth = Math.max(1, boxWidth - 2 - padding * 2);
+  const wrapped: string[] = [];
+  for (const line of content) {
+    wrapped.push(truncateToWidth(line, innerWidth));
+  }
+  const boxLines: string[] = [];
+  const horizontalRest = "─".repeat(Math.max(0, boxWidth - 2 - title.length - 4));
+  const titleLabel = title === "" ? "─".repeat(boxWidth - 2) : `─ ${title} ${horizontalRest}`;
+  boxLines.push(theme.accent(`┌${titleLabel.padEnd(boxWidth - 2, "─")}┐`));
+  boxLines.push(theme.accent(`│${" ".repeat(boxWidth - 2)}│`));
+  for (const line of wrapped) {
+    boxLines.push(
+      theme.accent("│") +
+        " ".repeat(padding) +
+        padToWidth(line, innerWidth) +
+        " ".repeat(padding) +
+        theme.accent("│"),
+    );
+  }
+  boxLines.push(theme.accent(`│${" ".repeat(boxWidth - 2)}│`));
+  boxLines.push(theme.accent(`└${"─".repeat(boxWidth - 2)}┘`));
+  const horizontalCentered = boxLines.map((line) => centerLine(line, ctx.width));
+  const verticalPadAbove = Math.max(0, Math.floor((ctx.height - horizontalCentered.length) / 2));
+  const out: string[] = [];
+  for (let i = 0; i < verticalPadAbove; i += 1) {
+    out.push(padToWidth("", ctx.width));
+  }
+  out.push(...horizontalCentered);
+  while (out.length < ctx.height) {
+    out.push(padToWidth("", ctx.width));
+  }
+  if (out.length > ctx.height) {
+    out.length = ctx.height;
+  }
+  return { lines: out };
 }
 
 function visibleLength(text: string): number {

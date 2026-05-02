@@ -89,7 +89,10 @@ function validateToolName(name: string): void {
   }
 }
 
-function limitJsonValue(value: JsonValue, maxChars: number | undefined): {
+function limitJsonValue(
+  value: JsonValue,
+  maxChars: number | undefined,
+): {
   value: JsonValue;
   truncated: boolean;
 } {

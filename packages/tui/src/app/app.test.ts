@@ -7,8 +7,8 @@ import { FakeTerminal } from "../terminal.js";
 import { TuiRuntime } from "../runtime.js";
 import { CortexApp } from "./app.js";
 
-function pump(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 30));
+function pump(ms = 30): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 describe("CortexApp", () => {
@@ -55,6 +55,40 @@ describe("CortexApp", () => {
       runtime.stop();
       // App should still report running because /clear doesn't exit
       expect(app.running).toBe(true);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("/help opens a centered modal that dismisses on Esc", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    try {
+      const terminal = new FakeTerminal(80, 24);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new CortexApp(
+        runtime,
+        { repoRoot, provider: "openai-codex", model: "gpt-test" },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      runtime.start();
+      await pump();
+      terminal.output = "";
+      terminal.feed("/help\r");
+      await pump();
+      const helpOutput = stripAnsi(terminal.output);
+      expect(helpOutput).toContain("─ help ─");
+      expect(helpOutput).toContain("Cortex TUI");
+      expect(helpOutput).toContain("Slash commands");
+
+      terminal.output = "";
+      terminal.feed("\r");
+      await pump(80);
+      const dismissed = stripAnsi(terminal.output);
+      // After dismissal the editor prompt is back and modal title is gone.
+      expect(dismissed).not.toContain("─ help ─");
+      expect(dismissed).toContain("›");
+      runtime.stop();
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

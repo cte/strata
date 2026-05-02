@@ -19,6 +19,7 @@ export interface AgentMessage {
 export interface ModelRequest {
   messages: AgentMessage[];
   tools: ToolMetadata[];
+  signal?: AbortSignal;
 }
 
 export interface ModelResponse {
@@ -42,12 +43,13 @@ export interface AgentRunConfig {
   sessionTitle?: string;
   maxIterations?: number;
   maxToolCalls?: number;
+  signal?: AbortSignal;
 }
 
 export interface AgentRunResult {
   sessionId: string;
   status: Exclude<SessionStatus, "running">;
-  stoppedReason: "final_answer" | "max_iterations" | "max_tool_calls" | "model_error";
+  stoppedReason: "final_answer" | "max_iterations" | "max_tool_calls" | "model_error" | "cancelled";
   finalAnswer: string;
   iterations: number;
   toolCalls: number;

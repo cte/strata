@@ -26,7 +26,9 @@ export function getAuthStorePath(repoRoot?: string): string {
   return path.join(getCortexPaths(repoRoot).runtimeDir, "auth.json");
 }
 
-export async function getChatGptCredentials(repoRoot?: string): Promise<ChatGptCredentials | undefined> {
+export async function getChatGptCredentials(
+  repoRoot?: string,
+): Promise<ChatGptCredentials | undefined> {
   const data = await loadAuthStore(repoRoot);
   return data.credentials[OPENAI_CODEX_PROVIDER_ID];
 }
@@ -79,5 +81,9 @@ function isAuthStoreData(value: unknown): value is AuthStoreData {
     return false;
   }
   const candidate = value as Partial<AuthStoreData>;
-  return candidate.version === 1 && typeof candidate.credentials === "object" && candidate.credentials !== null;
+  return (
+    candidate.version === 1 &&
+    typeof candidate.credentials === "object" &&
+    candidate.credentials !== null
+  );
 }

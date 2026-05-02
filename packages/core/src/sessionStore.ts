@@ -86,7 +86,9 @@ export class SessionStore {
 
   async endSession(sessionId: string, status: Exclude<SessionStatus, "running">): Promise<void> {
     const ts = nowIso();
-    this.db.query("update sessions set ended_at = ?, status = ? where id = ?").run(ts, status, sessionId);
+    this.db
+      .query("update sessions set ended_at = ?, status = ? where id = ?")
+      .run(ts, status, sessionId);
     await this.appendEvent(sessionId, "session.ended", { status, endedAt: ts });
   }
 

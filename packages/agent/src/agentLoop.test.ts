@@ -28,7 +28,11 @@ describe("runAgentLoop", () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
     try {
       await mkdir(path.join(repoRoot, "projects"), { recursive: true });
-      await writeFile(path.join(repoRoot, "projects", "alpha.md"), "# Alpha\n\nNeedle found.\n", "utf8");
+      await writeFile(
+        path.join(repoRoot, "projects", "alpha.md"),
+        "# Alpha\n\nNeedle found.\n",
+        "utf8",
+      );
 
       const model = new SequenceModelAdapter([
         {

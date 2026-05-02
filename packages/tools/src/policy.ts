@@ -39,10 +39,7 @@ export function resolveRepoPath(
   const absolutePath = path.resolve(root, requestedPath);
 
   if (!isPathInside(root, absolutePath)) {
-    throw new PolicyViolationError(
-      "outside_repo",
-      `Path escapes the repository: ${requestedPath}`,
-    );
+    throw new PolicyViolationError("outside_repo", `Path escapes the repository: ${requestedPath}`);
   }
 
   const relativePath = toPosixPath(path.relative(root, absolutePath));

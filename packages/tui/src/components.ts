@@ -22,9 +22,7 @@ export class Text implements Component {
 
   render(ctx: RenderContext): Frame {
     const lines = wrapText(this.text, ctx.width);
-    const styled = this.style
-      ? lines.map((line) => this.style!(line))
-      : lines;
+    const styled = this.style ? lines.map((line) => this.style!(line)) : lines;
     return { lines: styled.map((line) => padToWidth(line, ctx.width)) };
   }
 }
@@ -130,7 +128,7 @@ export class Box implements Component {
     const border = this.options.border === true;
     const style = this.options.style ?? ((t: string) => t);
     const innerWidth = Math.max(0, ctx.width - (border ? 2 : 0) - padding * 2);
-    const inner = this.child.render({ width: innerWidth });
+    const inner = this.child.render({ width: innerWidth, height: ctx.height });
     const lines: string[] = [];
     const horizontal = "─".repeat(Math.max(0, ctx.width - 2));
     if (border) {
@@ -197,7 +195,9 @@ export class SelectList implements Component {
       const marker = i === this.selectedIndex ? theme.accent("›") : " ";
       const label = i === this.selectedIndex ? theme.bold(opt.label) : opt.label;
       const description = opt.description !== undefined ? `  ${theme.muted(opt.description)}` : "";
-      lines.push(padToWidth(truncateToWidth(`${marker} ${label}${description}`, ctx.width), ctx.width));
+      lines.push(
+        padToWidth(truncateToWidth(`${marker} ${label}${description}`, ctx.width), ctx.width),
+      );
     }
     if (lines.length === 0) {
       lines.push(padToWidth(theme.muted("(no options)"), ctx.width));
@@ -210,7 +210,8 @@ export class SelectList implements Component {
       return "passthrough";
     }
     if (event.key === "up" || event.key === "ctrl+p") {
-      this.selectedIndex = (this.selectedIndex - 1 + this.options.length) % Math.max(1, this.options.length);
+      this.selectedIndex =
+        (this.selectedIndex - 1 + this.options.length) % Math.max(1, this.options.length);
       return "consumed";
     }
     if (event.key === "down" || event.key === "ctrl+n") {
@@ -247,7 +248,8 @@ export class Loader implements Component {
     if (!this.active) {
       return { lines: [] };
     }
-    const frame = SPINNER_FRAMES[Math.floor((Date.now() - this.startedAt) / 80) % SPINNER_FRAMES.length] ?? "⠋";
+    const frame =
+      SPINNER_FRAMES[Math.floor((Date.now() - this.startedAt) / 80) % SPINNER_FRAMES.length] ?? "⠋";
     const text = `${theme.accent(frame)} ${this.message}`;
     return { lines: [padToWidth(truncateToWidth(text, ctx.width), ctx.width)] };
   }
@@ -272,12 +274,18 @@ export class Markdown implements Component {
         continue;
       }
       if (inFence) {
-        out.push(...wrapText(theme.muted(`  ${raw}`), ctx.width).map((l) => padToWidth(l, ctx.width)));
+        out.push(
+          ...wrapText(theme.muted(`  ${raw}`), ctx.width).map((l) => padToWidth(l, ctx.width)),
+        );
         continue;
       }
       const heading = /^(#{1,3})\s+(.*)$/.exec(raw);
       if (heading) {
-        out.push(...wrapText(theme.bold(theme.accent(heading[2] ?? "")), ctx.width).map((l) => padToWidth(l, ctx.width)));
+        out.push(
+          ...wrapText(theme.bold(theme.accent(heading[2] ?? "")), ctx.width).map((l) =>
+            padToWidth(l, ctx.width),
+          ),
+        );
         continue;
       }
       const list = /^\s*[-*]\s+(.*)$/.exec(raw);

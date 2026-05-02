@@ -13,10 +13,13 @@ export async function runTui(options: RunTuiOptions = {}): Promise<void> {
   await ensureRuntimeDirs(getCortexPaths(repoRoot));
   const { options: appOptions, authStatus } = await buildAppOptions(repoRoot);
   const terminal = new ProcessTerminal();
+  let fatal: unknown;
   const runtime = new TuiRuntime({
     terminal,
     root: { render: () => ({ lines: [] }) },
-    onExit: () => process.exit(0),
+    onFatalError: (error) => {
+      fatal = error;
+    },
   });
   const app = new CortexApp(runtime, appOptions, authStatus);
   runtime.setRoot(app);
@@ -24,10 +27,13 @@ export async function runTui(options: RunTuiOptions = {}): Promise<void> {
   runtime.start();
   await new Promise<void>((resolve) => {
     const interval = setInterval(() => {
-      if (!app.running) {
+      if (!app.running || fatal !== undefined) {
         clearInterval(interval);
         resolve();
       }
     }, 50);
   });
+  if (fatal !== undefined) {
+    throw fatal instanceof Error ? fatal : new Error(String(fatal));
+  }
 }

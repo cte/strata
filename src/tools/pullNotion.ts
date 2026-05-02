@@ -91,7 +91,11 @@ async function fetchBlocks(blockId: string, token: string, version: string): Pro
     if (startCursor) {
       params.set("start_cursor", startCursor);
     }
-    const payload = await notionRequest(`/blocks/${encodeURIComponent(blockId)}/children?${params.toString()}`, token, version);
+    const payload = await notionRequest(
+      `/blocks/${encodeURIComponent(blockId)}/children?${params.toString()}`,
+      token,
+      version,
+    );
     blocks.push(...asObjects(payload["results"]));
     startCursor = asString(payload["next_cursor"]) || undefined;
     if (!payload["has_more"]) {
@@ -137,14 +141,26 @@ function blockToMarkdown(block: JsonObject): string[] {
   }
 }
 
-async function renderBlocks(blocks: JsonObject[], token: string, version: string, depth = 0): Promise<string[]> {
+async function renderBlocks(
+  blocks: JsonObject[],
+  token: string,
+  version: string,
+  depth = 0,
+): Promise<string[]> {
   const lines: string[] = [];
   for (const block of blocks) {
     lines.push(...blockToMarkdown(block));
     if (block["has_children"] && depth < 3) {
       const blockId = asString(block["id"]);
       if (blockId) {
-        lines.push(...(await renderBlocks(await fetchBlocks(blockId, token, version), token, version, depth + 1)));
+        lines.push(
+          ...(await renderBlocks(
+            await fetchBlocks(blockId, token, version),
+            token,
+            version,
+            depth + 1,
+          )),
+        );
       }
     }
   }

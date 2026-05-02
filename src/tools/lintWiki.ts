@@ -1,10 +1,27 @@
 #!/usr/bin/env bun
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { appendLog, dateDiffDays, parseIsoDate, slugify, splitFrontmatter, todayIso, wikiRoot } from "./common.js";
+import {
+  appendLog,
+  dateDiffDays,
+  parseIsoDate,
+  slugify,
+  splitFrontmatter,
+  todayIso,
+  wikiRoot,
+} from "./common.js";
 
 const skipDirs = new Set([".git", "dist", "meta", "node_modules", "raw", "tools"]);
-const skipOrphanNames = new Set(["CLAUDE.md", "PLAN.md", "index.md", "log.md", "me.md", "priorities.md", "mine.md", "theirs.md"]);
+const skipOrphanNames = new Set([
+  "CLAUDE.md",
+  "PLAN.md",
+  "index.md",
+  "log.md",
+  "me.md",
+  "priorities.md",
+  "mine.md",
+  "theirs.md",
+]);
 
 type Args = {
   dryRun: boolean;
@@ -52,7 +69,10 @@ function pageKey(filePath: string): string {
 
 function actionDueDates(text: string): { lineNumber: number; due: Date; line: string }[] {
   const found: { lineNumber: number; due: Date; line: string }[] = [];
-  const patterns = [/- \[ \].*?\bdue:\s*(\d{4}-\d{2}-\d{2})/i, /- \[ \].*?@due\((\d{4}-\d{2}-\d{2})\)/i];
+  const patterns = [
+    /- \[ \].*?\bdue:\s*(\d{4}-\d{2}-\d{2})/i,
+    /- \[ \].*?@due\((\d{4}-\d{2}-\d{2})\)/i,
+  ];
   const lines = text.split(/\r?\n/);
   lines.forEach((line, index) => {
     for (const pattern of patterns) {
@@ -111,7 +131,9 @@ async function main(): Promise<number> {
     if (pageType === "thread" && (fm["status"] ?? "open") === "open") {
       const opened = parseIsoDate(fm["opened"]);
       if (opened && dateDiffDays(today, opened) > 30) {
-        staleThreads.push(`${rel} opened ${opened.toISOString().slice(0, 10)} (${dateDiffDays(today, opened)} days old)`);
+        staleThreads.push(
+          `${rel} opened ${opened.toISOString().slice(0, 10)} (${dateDiffDays(today, opened)} days old)`,
+        );
       }
     }
 
@@ -127,7 +149,10 @@ async function main(): Promise<number> {
     }
 
     const topLevelDir = rel.split(path.sep)[0];
-    if (topLevelDir && ["people", "projects", "teams", "meetings", "decisions", "threads"].includes(topLevelDir)) {
+    if (
+      topLevelDir &&
+      ["people", "projects", "teams", "meetings", "decisions", "threads"].includes(topLevelDir)
+    ) {
       if (!skipOrphanNames.has(path.basename(filePath)) && !inbound.has(pageKey(filePath))) {
         orphanPages.push(rel);
       }
@@ -137,7 +162,9 @@ async function main(): Promise<number> {
       const text = await readFile(filePath, "utf8");
       for (const { lineNumber, due, line } of actionDueDates(text)) {
         if (due < today) {
-          overdueActions.push(`${rel}:${lineNumber} due ${due.toISOString().slice(0, 10)} | ${line}`);
+          overdueActions.push(
+            `${rel}:${lineNumber} due ${due.toISOString().slice(0, 10)} | ${line}`,
+          );
         }
       }
     }
@@ -154,7 +181,9 @@ async function main(): Promise<number> {
     for (const link of wikilinks(body)) {
       const key = slugify(path.basename(link, ".md"));
       if (/^\d{4}-\d{2}-\d{2}-/.test(key) && key.includes("decision") && !decisionKeys.has(key)) {
-        missingDecisions.push(`${path.relative(wikiRoot, filePath)} links to missing decision \`[[${link}]]\``);
+        missingDecisions.push(
+          `${path.relative(wikiRoot, filePath)} links to missing decision \`[[${link}]]\``,
+        );
       }
     }
   }

@@ -26,7 +26,12 @@ describe("InputBuffer", () => {
 
   test("decodes arrow keys", () => {
     const events = collect(new InputBuffer(), ["\x1b[A\x1b[B\x1b[C\x1b[D"]);
-    expect(events.map((e) => (e.type === "key" ? e.key : null))).toEqual(["up", "down", "right", "left"]);
+    expect(events.map((e) => (e.type === "key" ? e.key : null))).toEqual([
+      "up",
+      "down",
+      "right",
+      "left",
+    ]);
   });
 
   test("captures bracketed paste", () => {

@@ -2,6 +2,7 @@ import type { InputEvent } from "./keys.js";
 
 export interface RenderContext {
   width: number;
+  height: number;
 }
 
 export interface Frame {

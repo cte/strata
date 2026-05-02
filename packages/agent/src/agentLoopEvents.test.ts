@@ -26,14 +26,22 @@ describe("runAgentLoopEvents", () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-events-"));
     try {
       await mkdir(path.join(repoRoot, "projects"), { recursive: true });
-      await writeFile(path.join(repoRoot, "projects", "alpha.md"), "# Alpha\n\nNeedle found.\n", "utf8");
+      await writeFile(
+        path.join(repoRoot, "projects", "alpha.md"),
+        "# Alpha\n\nNeedle found.\n",
+        "utf8",
+      );
 
       const model = new SequenceModelAdapter([
         {
           content: "",
           finishReason: "tool_calls",
           toolCalls: [
-            { id: "call_1", name: "wiki.search", argumentsText: JSON.stringify({ query: "Needle" }) },
+            {
+              id: "call_1",
+              name: "wiki.search",
+              argumentsText: JSON.stringify({ query: "Needle" }),
+            },
           ],
         },
         {
@@ -63,6 +71,48 @@ describe("runAgentLoopEvents", () => {
 
       const completion = events.find((e) => e.type === "agent.completed");
       expect(completion?.type === "agent.completed" && completion.result.status).toBe("completed");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("aborts mid-run when the signal fires and ends the session interrupted", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-cancel-"));
+    try {
+      const controller = new AbortController();
+      const model: ModelAdapter = {
+        name: "abort-test",
+        async complete(request: ModelRequest): Promise<ModelResponse> {
+          if (request.signal !== undefined && !request.signal.aborted) {
+            controller.abort();
+          }
+          return {
+            content: "",
+            finishReason: "tool_calls",
+            toolCalls: [
+              { id: "c1", name: "wiki.search", argumentsText: JSON.stringify({ query: "x" }) },
+            ],
+          };
+        },
+      };
+
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "abort me",
+        model,
+        repoRoot,
+        signal: controller.signal,
+      })) {
+        events.push(event);
+      }
+
+      const completion = events.find((e) => e.type === "agent.completed");
+      expect(completion?.type === "agent.completed" && completion.result.status).toBe(
+        "interrupted",
+      );
+      expect(completion?.type === "agent.completed" && completion.result.stoppedReason).toBe(
+        "cancelled",
+      );
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

@@ -51,7 +51,11 @@ export class CortexApp implements Component {
   private exitRequested = false;
   private invalidating = false;
 
-  constructor(runtime: TuiRuntime, options: CortexAppOptions, authStatus: Awaited<ReturnType<typeof loadAuthStatus>>) {
+  constructor(
+    runtime: TuiRuntime,
+    options: CortexAppOptions,
+    authStatus: Awaited<ReturnType<typeof loadAuthStatus>>,
+  ) {
     this.runtime = runtime;
     this.repoRoot = options.repoRoot;
     this.state = initialAppState(options.provider, options.model, authStatus);
@@ -64,6 +68,7 @@ export class CortexApp implements Component {
     this.authDialog = new AuthDialog(() => this.invalidate());
     this.sessionSelector = new SessionSelector();
     this.help = new HelpOverlay([]);
+    this.help.onDismiss = () => this.closeOverlay();
     this.registerCommands();
     this.runtime.onInput((event) => {
       if (event.type === "key") {
@@ -84,7 +89,7 @@ export class CortexApp implements Component {
 
   render(ctx: RenderContext): Frame {
     const lines: string[] = [];
-    const layoutHeight = this.runtime.rows;
+    const layoutHeight = ctx.height;
     const header = new Header(this.state, this.repoRoot).render(ctx);
     const footer = new Footer(this.state).render(ctx);
     const status = new StatusLine(this.state).render(ctx);
@@ -109,48 +114,19 @@ export class CortexApp implements Component {
         col: editor.cursor.col,
       };
     }
-
-    const overlay = this.activeOverlay()?.render(ctx);
-    if (overlay !== undefined && overlay.lines.length > 0) {
-      const overlayHeight = Math.min(overlay.lines.length, layoutHeight - reservedTop);
-      const startRow = Math.max(reservedTop, layoutHeight - footer.lines.length - overlayHeight);
-      for (let i = 0; i < overlayHeight; i += 1) {
-        const target = startRow + i;
-        if (target >= lines.length) {
-          break;
-        }
-        lines[target] = overlay.lines[i] ?? "";
-      }
-      cursor = undefined;
-    }
-
     return cursor === undefined ? { lines } : { lines, cursor };
   }
 
-  private activeOverlay(): Component | undefined {
-    if (this.help.active) {
-      return this.help;
-    }
-    if (this.authDialog.active) {
-      return this.authDialog;
-    }
-    if (this.sessionSelector.active) {
-      return this.sessionSelector;
-    }
-    return undefined;
+  handleInput(event: import("../keys.js").InputEvent): "consumed" | "passthrough" {
+    return this.editor.handleInput?.(event) ?? "passthrough";
   }
 
-  handleInput(event: import("../keys.js").InputEvent): "consumed" | "passthrough" {
-    if (this.help.active) {
-      return this.help.handleInput(event);
-    }
-    if (this.authDialog.active) {
-      return this.authDialog.handleInput(event);
-    }
-    if (this.sessionSelector.active) {
-      return this.sessionSelector.handleInput(event);
-    }
-    return this.editor.handleInput?.(event) ?? "passthrough";
+  private openOverlay(component: Component): void {
+    this.runtime.setOverlay(component);
+  }
+
+  private closeOverlay(): void {
+    this.runtime.setOverlay(undefined);
   }
 
   invalidate(): void {
@@ -168,7 +144,7 @@ export class CortexApp implements Component {
       description: "show keymap and command list",
       run: () => {
         this.help.active = true;
-        this.invalidate();
+        this.openOverlay(this.help);
       },
     });
     this.registry.register({
@@ -196,7 +172,9 @@ export class CortexApp implements Component {
         lines.push(
           `openai-codex: ${this.state.auth.codexLoggedIn ? `logged in (expires ${this.state.auth.codexExpiresAt !== undefined ? new Date(this.state.auth.codexExpiresAt).toISOString() : "unknown"})` : "not logged in"}`,
         );
-        lines.push(`openai-compatible: ${this.state.auth.apiKeyConfigured ? "API key configured" : "not configured"}`);
+        lines.push(
+          `openai-compatible: ${this.state.auth.apiKeyConfigured ? "API key configured" : "not configured"}`,
+        );
         appendTranscript(this.state, { kind: "status", content: lines.join("  ·  ") });
         this.invalidate();
       },
@@ -206,6 +184,7 @@ export class CortexApp implements Component {
       description: "sign in to openai-codex",
       run: () => {
         this.authDialog.start((result) => {
+          this.closeOverlay();
           appendTranscript(this.state, {
             kind: result.ok ? "status" : "error",
             content: result.message,
@@ -218,7 +197,7 @@ export class CortexApp implements Component {
             this.invalidate();
           });
         });
-        this.invalidate();
+        this.openOverlay(this.authDialog);
       },
     });
     this.registry.register({
@@ -239,7 +218,10 @@ export class CortexApp implements Component {
           appendTranscript(this.state, { kind: "status", content: `model: ${this.state.model}` });
         } else {
           this.state.model = args.trim();
-          appendTranscript(this.state, { kind: "status", content: `model set to ${this.state.model}` });
+          appendTranscript(this.state, {
+            kind: "status",
+            content: `model set to ${this.state.model}`,
+          });
         }
         this.invalidate();
       },
@@ -250,7 +232,10 @@ export class CortexApp implements Component {
       run: (args) => {
         const value = args.trim();
         if (value !== "openai-codex" && value !== "openai-compatible") {
-          appendTranscript(this.state, { kind: "error", content: `unknown provider: ${value || "(none)"}` });
+          appendTranscript(this.state, {
+            kind: "error",
+            content: `unknown provider: ${value || "(none)"}`,
+          });
         } else {
           this.state.provider = value;
           this.state.model = defaultModel(value);
@@ -274,17 +259,17 @@ export class CortexApp implements Component {
             (session) => {
               appendTranscript(this.state, { kind: "status", content: `session: ${session.id}` });
               this.sessionSelector.close();
-              this.invalidate();
+              this.closeOverlay();
             },
             () => {
               this.sessionSelector.close();
-              this.invalidate();
+              this.closeOverlay();
             },
           );
+          this.openOverlay(this.sessionSelector);
         } finally {
           store.close();
         }
-        this.invalidate();
       },
     });
     this.registry.register({
@@ -364,10 +349,8 @@ export class CortexApp implements Component {
         question,
         model,
         repoRoot: this.repoRoot,
+        signal,
       })) {
-        if (signal.aborted) {
-          break;
-        }
         this.applyAgentEvent(event);
         this.invalidate();
       }
@@ -509,4 +492,3 @@ export function shutdownOnExit(runtime: TuiRuntime): void {
   process.once("SIGINT", cleanup);
   process.once("SIGTERM", cleanup);
 }
-

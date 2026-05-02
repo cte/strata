@@ -1,7 +1,13 @@
-import { clearChatGptCredentials, loginChatGpt, setChatGptCredentials } from "@cortex/agent";
-import { padToWidth, theme, truncateToWidth, wrapText } from "../ansi.js";
+import {
+  ChatGptLoginCancelled,
+  clearChatGptCredentials,
+  loginChatGpt,
+  setChatGptCredentials,
+} from "@cortex/agent";
+import { theme, truncateToWidth } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import type { InputEvent } from "../keys.js";
+import { centerModal } from "./chrome.js";
 
 export interface AuthDialogResult {
   ok: boolean;
@@ -16,7 +22,8 @@ export class AuthDialog implements Component {
   private input = "";
   private cursor = 0;
   private resolveManual: ((value: string) => void) | undefined;
-  private cancel: (() => void) | undefined;
+  private rejectManual: ((error: Error) => void) | undefined;
+  private controller: AbortController | undefined;
   private onChange: () => void;
 
   constructor(onChange: () => void) {
@@ -29,11 +36,7 @@ export class AuthDialog implements Component {
     this.url = "";
     this.input = "";
     this.cursor = 0;
-    let cancelled = false;
-    this.cancel = () => {
-      cancelled = true;
-      this.resolveManual?.("");
-    };
+    this.controller = new AbortController();
     void loginChatGpt({
       onAuth: (info) => {
         this.url = info.url;
@@ -52,20 +55,16 @@ export class AuthDialog implements Component {
         this.status = message;
         this.onChange();
       },
+      signal: this.controller.signal,
     })
       .then(async (credentials) => {
-        if (cancelled) {
-          this.close();
-          onResult({ ok: false, message: "Login cancelled." });
-          return;
-        }
         await setChatGptCredentials(credentials);
         this.close();
         onResult({ ok: true, message: "Logged in to openai-codex." });
       })
       .catch((error: unknown) => {
         this.close();
-        if (cancelled) {
+        if (error instanceof ChatGptLoginCancelled) {
           onResult({ ok: false, message: "Login cancelled." });
           return;
         }
@@ -75,35 +74,27 @@ export class AuthDialog implements Component {
 
   close(): void {
     this.active = false;
-    this.resolveManual?.("");
-    this.cancel = undefined;
+    this.controller?.abort();
+    this.controller = undefined;
+    this.rejectManual?.(new ChatGptLoginCancelled());
+    this.resolveManual = undefined;
+    this.rejectManual = undefined;
     this.onChange();
   }
 
   render(ctx: RenderContext): Frame {
-    if (!this.active) {
-      return { lines: [] };
-    }
-    const width = Math.min(ctx.width, 70);
-    const inner = width - 4;
     const lines: string[] = [];
-    lines.push(theme.accent(`┌─ login ─${"─".repeat(Math.max(0, width - 11))}┐`));
-    lines.push(box(`${theme.bold("Sign in to ChatGPT")}`, width));
-    lines.push(box("", width));
+    lines.push(theme.bold("Sign in to ChatGPT"));
+    lines.push("");
     if (this.url !== "") {
-      for (const segment of wrapText(theme.accent(this.url), inner)) {
-        lines.push(box(segment, width));
-      }
-      lines.push(box("", width));
+      lines.push(theme.accent(this.url));
+      lines.push("");
     }
-    for (const segment of wrapText(theme.muted(this.status), inner)) {
-      lines.push(box(segment, width));
-    }
-    lines.push(box("", width));
-    lines.push(box(`${theme.muted("paste:")} ${this.renderInput(inner - 7)}`, width));
-    lines.push(box(theme.muted("Enter to submit · Esc to cancel"), width));
-    lines.push(theme.accent(`└${"─".repeat(width - 2)}┘`));
-    return { lines: lines.map((line) => padToWidth(line, ctx.width)) };
+    lines.push(theme.muted(this.status));
+    lines.push("");
+    lines.push(`${theme.muted("paste:")} ${this.renderInput(60)}`);
+    lines.push(theme.muted("Enter to submit · Esc to cancel"));
+    return centerModal(lines, "login", ctx);
   }
 
   handleInput(event: InputEvent): "consumed" | "passthrough" {
@@ -133,7 +124,7 @@ export class AuthDialog implements Component {
         this.onChange();
         return "consumed";
       case "escape":
-        this.cancel?.();
+        this.close();
         return "consumed";
       case "backspace":
         if (this.cursor > 0) {
@@ -166,10 +157,16 @@ export class AuthDialog implements Component {
   }
 
   private waitForManual(): Promise<string> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.resolveManual = (value) => {
         this.resolveManual = undefined;
+        this.rejectManual = undefined;
         resolve(value);
+      };
+      this.rejectManual = (error) => {
+        this.resolveManual = undefined;
+        this.rejectManual = undefined;
+        reject(error);
       };
     });
   }
@@ -177,9 +174,4 @@ export class AuthDialog implements Component {
 
 export async function logoutChatGpt(): Promise<void> {
   await clearChatGptCredentials();
-}
-
-function box(content: string, width: number): string {
-  const inner = width - 4;
-  return `${theme.accent("│ ")}${padToWidth(content, inner)}${theme.accent(" │")}`;
 }

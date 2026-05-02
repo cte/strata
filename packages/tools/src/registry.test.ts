@@ -24,8 +24,8 @@ describe("ToolRegistry", () => {
       },
     });
 
-    await expect(registry.execute("wiki.echo", { value: "ok" }, { repoRoot: process.cwd() }))
-      .resolves
-      .toEqual({ echoed: { value: "ok" } });
+    await expect(
+      registry.execute("wiki.echo", { value: "ok" }, { repoRoot: process.cwd() }),
+    ).resolves.toEqual({ echoed: { value: "ok" } });
   });
 });

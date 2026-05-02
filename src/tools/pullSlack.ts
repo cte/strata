@@ -31,7 +31,9 @@ function parseArgs(argv: string[]): Args {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
-      console.log("usage: pullSlack [--channel CHANNEL] [--thread-ts TS] [--from-json FILE] [--title TITLE] [--dry-run]");
+      console.log(
+        "usage: pullSlack [--channel CHANNEL] [--thread-ts TS] [--from-json FILE] [--title TITLE] [--dry-run]",
+      );
       process.exit(0);
     }
     if (arg === "--channel") {
@@ -51,7 +53,11 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-async function slackApi(method: string, params: Record<string, string>, token: string): Promise<JsonObject> {
+async function slackApi(
+  method: string,
+  params: Record<string, string>,
+  token: string,
+): Promise<JsonObject> {
   const url = new URL(`https://slack.com/api/${method}`);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
@@ -67,7 +73,9 @@ async function slackApi(method: string, params: Record<string, string>, token: s
   return payload;
 }
 
-async function loadMessages(args: Args): Promise<{ messages: JsonObject[]; meta: Record<string, string> }> {
+async function loadMessages(
+  args: Args,
+): Promise<{ messages: JsonObject[]; meta: Record<string, string> }> {
   if (args.fromJson) {
     const payload = JSON.parse(await readFile(args.fromJson, "utf8")) as unknown;
     if (Array.isArray(payload)) {
@@ -94,7 +102,11 @@ async function loadMessages(args: Args): Promise<{ messages: JsonObject[]; meta:
   if (!args.channel || !args.threadTs) {
     throw new Error("Direct Slack fetch requires --channel and --thread-ts");
   }
-  const payload = await slackApi("conversations.replies", { channel: args.channel, ts: args.threadTs }, token);
+  const payload = await slackApi(
+    "conversations.replies",
+    { channel: args.channel, ts: args.threadTs },
+    token,
+  );
   const messages = asObjects(payload["messages"]);
   return { messages, meta: { channel: args.channel, thread_ts: args.threadTs } };
 }
@@ -145,10 +157,14 @@ async function main(): Promise<number> {
   }
   const date = messageDate(String(first["ts"] ?? ""));
   const channel = args.channel ?? meta["channel"] ?? meta["channel_id"] ?? "slack";
-  const threadTs = args.threadTs ?? meta["thread_ts"] ?? String(first["thread_ts"] ?? first["ts"] ?? "");
+  const threadTs =
+    args.threadTs ?? meta["thread_ts"] ?? String(first["thread_ts"] ?? first["ts"] ?? "");
   const title = args.title ?? String(first["text"] ?? "Slack thread").slice(0, 80);
   const workspaceUrl = (process.env["SLACK_WORKSPACE_URL"] ?? "").replace(/\/$/, "");
-  const sourceUrl = workspaceUrl && channel && threadTs ? `${workspaceUrl}/archives/${channel}/p${threadTs.replace(".", "")}` : "";
+  const sourceUrl =
+    workspaceUrl && channel && threadTs
+      ? `${workspaceUrl}/archives/${channel}/p${threadTs.replace(".", "")}`
+      : "";
   const filePath = path.join(rawDir, `${date}-${slugify(channel)}-${slugify(title, "thread")}.md`);
   const content =
     frontmatter({

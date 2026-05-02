@@ -60,7 +60,7 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const toolNameMap = createProviderToolNameMap(request.tools);
-    const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+    const init: RequestInit = {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.apiKey}`,
@@ -68,12 +68,18 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
       },
       body: JSON.stringify({
         model: this.model,
-        messages: request.messages.map((message) => toProviderMessage(message, toolNameMap.canonicalToProvider)),
+        messages: request.messages.map((message) =>
+          toProviderMessage(message, toolNameMap.canonicalToProvider),
+        ),
         tools: request.tools.map((tool) => toProviderTool(tool, toolNameMap.canonicalToProvider)),
         tool_choice: request.tools.length > 0 ? "auto" : "none",
         parallel_tool_calls: false,
       }),
-    });
+    };
+    if (request.signal !== undefined) {
+      init.signal = request.signal;
+    }
+    const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, init);
 
     if (!response.ok) {
       throw new ModelAdapterError(
@@ -86,7 +92,10 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
     const choice = payload.choices?.[0];
     const message = choice?.message;
     if (choice === undefined || message === undefined) {
-      throw new ModelAdapterError("model_response_invalid", "Model response did not include a choice");
+      throw new ModelAdapterError(
+        "model_response_invalid",
+        "Model response did not include a choice",
+      );
     }
 
     const normalized: ModelResponse = {
@@ -104,10 +113,7 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
   }
 }
 
-function toProviderMessage(
-  message: AgentMessage,
-  toolNameMap: Map<string, string>,
-): JsonObject {
+function toProviderMessage(message: AgentMessage, toolNameMap: Map<string, string>): JsonObject {
   if (message.role === "tool") {
     return {
       role: "tool",
@@ -169,7 +175,7 @@ function normalizeToolCalls(
       id: typeof id === "string" && id !== "" ? id : `tool_call_${index + 1}`,
       name:
         typeof providerName === "string"
-          ? providerToCanonical.get(providerName) ?? providerName
+          ? (providerToCanonical.get(providerName) ?? providerName)
           : "unknown.tool",
       argumentsText: typeof args === "string" ? args : "{}",
     };

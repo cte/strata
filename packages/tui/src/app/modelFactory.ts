@@ -13,7 +13,7 @@ export interface ModelChoice {
 }
 
 export async function inferDefaultProvider(): Promise<ProviderName> {
-  if (await getChatGptCredentials() !== undefined) {
+  if ((await getChatGptCredentials()) !== undefined) {
     return "openai-codex";
   }
   if (Bun.env.CORTEX_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined) {

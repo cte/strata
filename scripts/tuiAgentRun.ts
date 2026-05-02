@@ -46,7 +46,9 @@ async function main(): Promise<void> {
       {
         content: "",
         finishReason: "tool_calls",
-        toolCalls: [{ id: "c1", name: "wiki.search", argumentsText: JSON.stringify({ query: "Needle" }) }],
+        toolCalls: [
+          { id: "c1", name: "wiki.search", argumentsText: JSON.stringify({ query: "Needle" }) },
+        ],
       },
       { content: "Found Needle in `projects/alpha.md`.", finishReason: "stop", toolCalls: [] },
     ]);
@@ -98,7 +100,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().then(() => process.exit(0)).catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
