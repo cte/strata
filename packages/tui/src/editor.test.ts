@@ -64,6 +64,18 @@ describe("Editor", () => {
     expect(submitted).toBe("/help");
   });
 
+  test("enter applies the highlighted completion and submits", () => {
+    const registry = new SlashCommandRegistry();
+    registry.register({ name: "help", description: "show help", run: () => {} });
+    registry.register({ name: "history", description: "show history", run: () => {} });
+    let submitted: string | undefined;
+    const editor = new Editor({ autocomplete: registry, onSubmit: (t) => (submitted = t) });
+    feed(editor, "/h");
+    editor.handleInput({ type: "key", key: "down", raw: "" });
+    editor.handleInput({ type: "key", key: "enter", raw: "\r" });
+    expect(submitted).toBe("/history");
+  });
+
   test("submit triggers slash-command parse", () => {
     const registry = new SlashCommandRegistry();
     let invoked: string | undefined;

@@ -8,6 +8,7 @@ import {
 import { SessionStore, getCortexPaths } from "@cortex/core";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { SlashCommandRegistry } from "../commands.js";
+import { DynamicBorder } from "../components.js";
 import { Editor } from "../editor.js";
 import { TuiRuntime } from "../runtime.js";
 import { Header, HelpOverlay, Footer, StatusLine } from "./chrome.js";
@@ -90,6 +91,7 @@ export class CortexApp implements Component {
     const header = new Header(this.state, this.repoRoot).render(ctx);
     const transcript = new Transcript(this.state.transcript).render(ctx);
     const status = new StatusLine(this.state).render(ctx);
+    const editorBorder = new DynamicBorder().render(ctx);
     const editor = this.editor.render(ctx);
     const footer = new Footer(this.state).render(ctx);
 
@@ -97,6 +99,7 @@ export class CortexApp implements Component {
       ...header.lines,
       ...transcript.lines,
       ...status.lines,
+      ...editorBorder.lines,
       ...editor.lines,
       ...footer.lines,
     ];
@@ -105,7 +108,11 @@ export class CortexApp implements Component {
     if (editor.cursor !== undefined) {
       cursor = {
         row:
-          header.lines.length + transcript.lines.length + status.lines.length + editor.cursor.row,
+          header.lines.length +
+          transcript.lines.length +
+          status.lines.length +
+          editorBorder.lines.length +
+          editor.cursor.row,
         col: editor.cursor.col,
       };
     }

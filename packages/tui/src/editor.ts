@@ -155,7 +155,11 @@ export class Editor implements Component {
         this.applyCompletion();
         return "consumed";
       }
-      if (key === "escape") {
+      if (key === "enter") {
+        this.applyCompletion();
+        // Fall through to the submit handler below so the completed
+        // slash command is dispatched in the same keystroke.
+      } else if (key === "escape") {
         this.completions = [];
         this.completionIndex = 0;
         return "consumed";
