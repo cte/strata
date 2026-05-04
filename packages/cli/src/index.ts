@@ -25,7 +25,7 @@ commands:
   auth login openai-codex      sign in with ChatGPT for Codex model access
   auth logout openai-codex     remove stored ChatGPT credentials
   init                         initialize .cortex runtime directories
-  query [options] <question>   answer a read-only question using wiki tools
+  query [options] <question>   run an agent query using the default dangerous tool profile
   tui                          launch the interactive Cortex TUI
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions

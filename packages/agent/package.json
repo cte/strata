@@ -12,6 +12,7 @@
     "./openai-codex": "./src/openaiCodex.ts",
     "./openai-compatible": "./src/openaiCompatible.ts",
     "./provider-tool-names": "./src/providerToolNames.ts",
+    "./run-context": "./src/runContext.ts",
     "./types": "./src/types.ts"
   },
   "dependencies": {

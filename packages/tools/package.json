@@ -6,9 +6,13 @@
   "exports": {
     ".": "./src/index.ts",
     "./fs-tools": "./src/fsTools.ts",
+    "./memory-tools": "./src/memoryTools.ts",
     "./policy": "./src/policy.ts",
     "./registry": "./src/registry.ts",
     "./shell-tools": "./src/shellTools.ts",
+    "./session-tools": "./src/sessionTools.ts",
+    "./skill-tools": "./src/skillTools.ts",
+    "./todo-tools": "./src/todoTools.ts",
     "./wiki-tools": "./src/wikiTools.ts",
     "./types": "./src/types.ts"
   },

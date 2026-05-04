@@ -6,8 +6,12 @@
   "exports": {
     ".": "./src/index.ts",
     "./events": "./src/events.ts",
+    "./memory-store": "./src/memoryStore.ts",
     "./paths": "./src/paths.ts",
     "./session-store": "./src/sessionStore.ts",
+    "./skill-store": "./src/skillStore.ts",
+    "./state-errors": "./src/stateErrors.ts",
+    "./todo-store": "./src/todoStore.ts",
     "./types": "./src/types.ts"
   },
   "scripts": {

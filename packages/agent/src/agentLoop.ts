@@ -15,6 +15,7 @@ import type {
   AgentToolCall,
   ModelResponse,
 } from "./types.js";
+import { buildRunContext } from "./runContext.js";
 
 const DEFAULT_MAX_ITERATIONS = 12;
 const DEFAULT_MAX_TOOL_CALLS = 40;
@@ -26,7 +27,8 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   const maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const maxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const signal = config.signal;
-  const messages = createInitialMessages(config.question);
+  let messages: AgentMessage[] = [];
+  let systemContext: JsonObject = {};
   let session: SessionRecord | undefined;
   let iterations = 0;
   let toolCallCount = 0;
@@ -44,21 +46,18 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   });
 
   try {
+    const runContext = await buildRunContext({ question: config.question, repoRoot });
+    messages = runContext.messages;
+    systemContext = runContext.systemContext;
     session = await store.createSession({
       kind: "query",
       title: config.sessionTitle ?? truncateTitle(config.question),
       model: config.model.name,
     });
-    await store.appendMessage({
-      sessionId: session.id,
-      role: "system",
-      content: messages[0]?.content ?? "",
-    });
-    await store.appendMessage({
-      sessionId: session.id,
-      role: "user",
-      content: config.question,
-    });
+    for (const message of messages) {
+      await appendInitialMessage(store, session.id, message);
+    }
+    await store.appendEvent(session.id, "message.system_context", systemContext);
     await store.appendEvent(session.id, "agent.loop.started", {
       maxIterations,
       maxToolCalls,
@@ -263,26 +262,6 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
   return lastResult;
 }
 
-function createInitialMessages(question: string): AgentMessage[] {
-  return [
-    {
-      role: "system",
-      content: [
-        "You are Cortex, a local wiki query agent.",
-        "Answer using the Cortex wiki and cite wiki-relative Markdown paths when possible.",
-        "Use wiki.search to find candidate pages and wiki.readPage to inspect specific pages.",
-        "Use fs.list, fs.find, fs.grep, and fs.read only when broader repo inspection is needed.",
-        "Do not invent wiki facts. If the wiki lacks enough evidence, say so.",
-        "Do not request writes; this phase is read-only.",
-      ].join("\n"),
-    },
-    {
-      role: "user",
-      content: question,
-    },
-  ];
-}
-
 async function persistModelResponse(
   store: SessionStore,
   sessionId: string,
@@ -302,6 +281,18 @@ async function persistModelResponse(
     payload.usage = response.usage;
   }
   await store.appendEvent(sessionId, "model.response", payload);
+}
+
+async function appendInitialMessage(
+  store: SessionStore,
+  sessionId: string,
+  message: AgentMessage,
+): Promise<void> {
+  await store.appendMessage({
+    sessionId,
+    role: message.role,
+    content: message.content,
+  });
 }
 
 async function executeToolCall(

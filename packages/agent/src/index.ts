@@ -5,4 +5,5 @@ export * from "./model.js";
 export * from "./openaiCodex.js";
 export * from "./openaiCompatible.js";
 export * from "./providerToolNames.js";
+export * from "./runContext.js";
 export * from "./types.js";

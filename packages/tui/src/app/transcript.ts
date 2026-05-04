@@ -40,9 +40,13 @@ function renderItem(item: TranscriptItem, width: number): string[] {
     case "tool":
       return renderToolItem(item, width);
     case "status":
-      return [padToWidth(theme.muted(`· ${truncateToWidth(item.content, width - 2)}`), width)];
+      return wrapPrefixedText(`· ${item.content}`, width).map((line) =>
+        padToWidth(theme.muted(line), width),
+      );
     case "error":
-      return [padToWidth(theme.error(`! ${truncateToWidth(item.content, width - 2)}`), width)];
+      return wrapPrefixedText(`! ${item.content}`, width).map((line) =>
+        padToWidth(theme.error(line), width),
+      );
   }
 }
 
@@ -54,6 +58,10 @@ function decorate(content: string, header: string, width: number): string[] {
 
 function prefixHeader(header: string, width: number): string[] {
   return [padToWidth(theme.bold(header), width)];
+}
+
+function wrapPrefixedText(content: string, width: number): string[] {
+  return wrapText(content, width).map((line) => truncateToWidth(line, width));
 }
 
 function renderToolItem(item: Extract<TranscriptItem, { kind: "tool" }>, width: number): string[] {

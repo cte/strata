@@ -70,6 +70,7 @@ describe("runAgentLoop", () => {
         path.join(repoRoot, ".cortex", "traces", `${result.sessionId}.jsonl`),
         "utf8",
       );
+      expect(trace).toContain("message.system_context");
       expect(trace).toContain("model.response");
       expect(trace).toContain("tool.call");
       expect(trace).toContain("tool.result");
