@@ -10,6 +10,19 @@ export interface ToolRegistryOptions {
 export interface ToolContext {
   repoRoot: string;
   sessionId?: string;
+  toolCallId?: string;
+  recordFileChange?: (change: ToolFileChange) => Promise<void> | void;
+}
+
+export interface ToolFileChange extends JsonObject {
+  path: string;
+  changeType: "create" | "update" | "append";
+  beforeHash: string | null;
+  afterHash: string;
+  beforeBytes: number;
+  afterBytes: number;
+  beforePreview: string | null;
+  afterPreview: string;
 }
 
 export interface ToolDefinition<

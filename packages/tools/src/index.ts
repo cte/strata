@@ -1,12 +1,14 @@
 export * from "./fsTools.js";
 export * from "./policy.js";
 export * from "./registry.js";
+export * from "./shellTools.js";
 export * from "./types.js";
 export * from "./wikiTools.js";
 
 import { ToolRegistry } from "./registry.js";
 import type { ToolProfile } from "./types.js";
 import { registerFileSystemTools } from "./fsTools.js";
+import { registerShellTools } from "./shellTools.js";
 import { registerWikiTools } from "./wikiTools.js";
 
 export interface DefaultToolRegistryOptions {
@@ -16,6 +18,7 @@ export interface DefaultToolRegistryOptions {
 export function createDefaultToolRegistry(options: DefaultToolRegistryOptions = {}): ToolRegistry {
   const registry = new ToolRegistry({ profile: options.profile ?? "read-only" });
   registerFileSystemTools(registry);
+  registerShellTools(registry);
   registerWikiTools(registry);
   return registry;
 }

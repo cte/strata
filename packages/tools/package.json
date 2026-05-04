@@ -8,6 +8,7 @@
     "./fs-tools": "./src/fsTools.ts",
     "./policy": "./src/policy.ts",
     "./registry": "./src/registry.ts",
+    "./shell-tools": "./src/shellTools.ts",
     "./wiki-tools": "./src/wikiTools.ts",
     "./types": "./src/types.ts"
   },

@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createDefaultToolRegistry } from "./index.js";
+import type { ToolFileChange } from "./types.js";
 
 describe("wiki tools", () => {
   test("lists, reads, and searches markdown pages", async () => {
@@ -80,6 +81,149 @@ describe("wiki tools", () => {
       expect(blocked.ok).toBe(false);
       if (!blocked.ok) {
         expect(blocked.error.code).toBe("blocked_path_segment");
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("writes, patches, logs, and updates the wiki index", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    try {
+      const changes: ToolFileChange[] = [];
+      const wikiRoot = path.join(repoRoot, "wiki");
+      await mkdir(wikiRoot, { recursive: true });
+      await writeFile(
+        path.join(wikiRoot, "index.md"),
+        [
+          "---",
+          "type: index",
+          "last_updated: null",
+          "---",
+          "",
+          "# Cortex Index",
+          "",
+          "## Projects",
+          "",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(path.join(wikiRoot, "log.md"), "# Cortex - Activity Log\n", "utf8");
+
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = {
+        repoRoot,
+        recordFileChange(change: ToolFileChange) {
+          changes.push(change);
+        },
+      };
+
+      await expect(
+        registry.execute(
+          "wiki.writePage",
+          {
+            path: "projects/alpha.md",
+            content: "# Alpha\n\nStatus: draft\n",
+            createDirs: true,
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "projects/alpha.md",
+        repoPath: "wiki/projects/alpha.md",
+        changeType: "create",
+      });
+
+      await expect(
+        registry.execute(
+          "wiki.patchPage",
+          {
+            path: "projects/alpha.md",
+            oldText: "Status: draft",
+            newText: "Status: active",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "projects/alpha.md",
+        repoPath: "wiki/projects/alpha.md",
+        replacements: 1,
+      });
+      expect(await readFile(path.join(wikiRoot, "projects", "alpha.md"), "utf8")).toContain(
+        "Status: active",
+      );
+
+      await expect(
+        registry.execute(
+          "wiki.appendLog",
+          { entry: "Created alpha project page.", timestamp: "2026-05-02T00:00:00.000Z" },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "log.md",
+        repoPath: "wiki/log.md",
+        changeType: "append",
+      });
+      expect(await readFile(path.join(wikiRoot, "log.md"), "utf8")).toContain(
+        "Created alpha project page.",
+      );
+
+      await expect(
+        registry.execute(
+          "wiki.updateIndex",
+          {
+            section: "Projects",
+            target: "projects/alpha.md",
+            label: "Alpha",
+            description: "Active project",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "index.md",
+        repoPath: "wiki/index.md",
+        target: "projects/alpha",
+      });
+      expect(await readFile(path.join(wikiRoot, "index.md"), "utf8")).toContain(
+        "- [[projects/alpha|Alpha]] - Active project",
+      );
+      expect(changes.map((change) => change.path)).toEqual([
+        "wiki/projects/alpha.md",
+        "wiki/projects/alpha.md",
+        "wiki/log.md",
+        "wiki/index.md",
+      ]);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("blocks wiki writes outside markdown pages and raw sources", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    try {
+      await mkdir(path.join(repoRoot, "wiki", "raw"), { recursive: true });
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = { repoRoot };
+
+      for (const [toolName, args, code] of [
+        [
+          "wiki.writePage",
+          { path: "../outside.md", content: "no\n", createDirs: true },
+          "outside_wiki",
+        ],
+        [
+          "wiki.writePage",
+          { path: "raw/source.md", content: "no\n", createDirs: true },
+          "raw_write_forbidden",
+        ],
+        ["wiki.writePage", { path: "projects/alpha.txt", content: "no\n" }, "not_markdown"],
+      ] as const) {
+        const result = await registry.safeExecute(toolName, args, context);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe(code);
+        }
       }
     } finally {
       await rm(repoRoot, { force: true, recursive: true });

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDefaultToolRegistry } from "@cortex/tools";
 import { runAgentLoop } from "./agentLoop.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
@@ -146,6 +147,54 @@ describe("runAgentLoop", () => {
       const toolMessage = model.requests[1]?.messages.at(-1);
       expect(toolMessage?.role).toBe("tool");
       expect(toolMessage?.content).toContain("invalid_tool_args");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("records file-change events for write tools", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    try {
+      const model = new SequenceModelAdapter([
+        {
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_1",
+              name: "fs.write",
+              argumentsText: JSON.stringify({
+                path: "notes/alpha.md",
+                content: "# Alpha\n",
+                createDirs: true,
+              }),
+            },
+          ],
+        },
+        {
+          content: "Wrote notes/alpha.md.",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+
+      const result = await runAgentLoop({
+        question: "Create an alpha note.",
+        model,
+        repoRoot,
+        tools: createDefaultToolRegistry({ profile: "maintenance" }),
+      });
+
+      expect(result.status).toBe("completed");
+      expect(await readFile(path.join(repoRoot, "notes", "alpha.md"), "utf8")).toBe("# Alpha\n");
+
+      const trace = await readFile(
+        path.join(repoRoot, ".cortex", "traces", `${result.sessionId}.jsonl`),
+        "utf8",
+      );
+      expect(trace).toContain("file.changed");
+      expect(trace).toContain("notes/alpha.md");
+      expect(trace).toContain("sha256:");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

@@ -1,15 +1,17 @@
 import type { Stats } from "node:fs";
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@cortex/core";
 import {
   assertReadAllowed,
+  assertWriteAllowed,
   isBlockedPathSegment,
   isRawPath,
   PolicyViolationError,
 } from "./policy.js";
 import { ToolRegistry } from "./registry.js";
-import type { ToolDefinition } from "./types.js";
+import type { ToolContext, ToolDefinition, ToolFileChange } from "./types.js";
 
 interface FsListArgs extends JsonObject {
   path?: JsonValue;
@@ -45,6 +47,22 @@ interface FsGrepArgs extends JsonObject {
   maxFileBytes?: JsonValue;
 }
 
+interface FsWriteArgs extends JsonObject {
+  path?: JsonValue;
+  content?: JsonValue;
+  overwrite?: JsonValue;
+  createDirs?: JsonValue;
+  maxChars?: JsonValue;
+}
+
+interface FsEditArgs extends JsonObject {
+  path?: JsonValue;
+  oldText?: JsonValue;
+  newText?: JsonValue;
+  replaceAll?: JsonValue;
+  maxFileBytes?: JsonValue;
+}
+
 interface FsEntry extends JsonObject {
   path: string;
   type: FsEntryType;
@@ -58,6 +76,39 @@ interface FsGrepMatch extends JsonObject {
   preview: string;
 }
 
+export interface WriteTextFileInput {
+  path: string;
+  content: string;
+  overwrite: boolean;
+  createDirs: boolean;
+  maxChars: number;
+  changeType?: "update" | "append";
+}
+
+export interface WriteTextFileResult extends JsonObject {
+  path: string;
+  changeType: ToolFileChange["changeType"];
+  bytes: number;
+  hash: string;
+  overwritten: boolean;
+}
+
+export interface EditTextFileInput {
+  path: string;
+  oldText: string;
+  newText: string;
+  replaceAll: boolean;
+  maxFileBytes: number;
+}
+
+export interface EditTextFileResult extends JsonObject {
+  path: string;
+  changeType: "update";
+  replacements: number;
+  bytes: number;
+  hash: string;
+}
+
 type FsEntryType = "file" | "directory" | "symlink" | "other";
 
 const DEFAULT_LIST_LIMIT = 200;
@@ -66,10 +117,15 @@ const DEFAULT_GREP_LIMIT = 100;
 const DEFAULT_MAX_READ_BYTES = 1_000_000;
 const DEFAULT_MAX_READ_CHARS = 64_000;
 const DEFAULT_MAX_GREP_FILE_BYTES = 512_000;
+const DEFAULT_MAX_WRITE_CHARS = 500_000;
+const DEFAULT_MAX_EDIT_FILE_BYTES = 1_000_000;
 const MAX_LIMIT = 5_000;
 const MAX_READ_BYTES = 10_000_000;
 const MAX_READ_CHARS = 1_000_000;
 const MAX_GREP_FILE_BYTES = 5_000_000;
+const MAX_WRITE_CHARS = 2_000_000;
+const MAX_EDIT_FILE_BYTES = 5_000_000;
+const FILE_CHANGE_PREVIEW_CHARS = 500;
 
 export function registerFileSystemTools(registry: ToolRegistry): ToolRegistry {
   for (const tool of createFileSystemTools()) {
@@ -79,7 +135,7 @@ export function registerFileSystemTools(registry: ToolRegistry): ToolRegistry {
 }
 
 export function createFileSystemTools(): ToolDefinition[] {
-  return [fsListTool, fsReadTool, fsFindTool, fsGrepTool];
+  return [fsListTool, fsReadTool, fsFindTool, fsGrepTool, fsWriteTool, fsEditTool];
 }
 
 const fsListTool: ToolDefinition<FsListArgs> = {
@@ -309,6 +365,200 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
   },
 };
 
+const fsWriteTool: ToolDefinition<FsWriteArgs> = {
+  name: "fs.write",
+  description:
+    "Create or explicitly overwrite a UTF-8 text file inside the Cortex repo. Writes under raw sources are forbidden.",
+  mode: "write",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["path", "content"],
+    properties: {
+      path: { type: "string", description: "Repo-relative file path to write." },
+      content: { type: "string", description: "UTF-8 text content to write." },
+      overwrite: {
+        type: "boolean",
+        description: "Allow replacing an existing file. Defaults to false.",
+      },
+      createDirs: {
+        type: "boolean",
+        description: "Create missing parent directories. Defaults to false.",
+      },
+      maxChars: { type: "integer", minimum: 1, maximum: MAX_WRITE_CHARS },
+    },
+  },
+  maxResultChars: 32_000,
+  async handler(args, context) {
+    const requestedPath = requiredString(args.path, "path");
+    const content = requiredString(args.content, "content");
+    const overwrite = optionalBoolean(args.overwrite, false, "overwrite");
+    const createDirs = optionalBoolean(args.createDirs, false, "createDirs");
+    const maxChars = optionalInteger(
+      args.maxChars,
+      DEFAULT_MAX_WRITE_CHARS,
+      "maxChars",
+      1,
+      MAX_WRITE_CHARS,
+    );
+    if (content.length > maxChars) {
+      throw new PolicyViolationError(
+        "content_too_large",
+        `Content exceeds maxChars (${content.length} > ${maxChars})`,
+      );
+    }
+
+    return writeTextFile(context, {
+      path: requestedPath,
+      content,
+      overwrite,
+      createDirs,
+      maxChars,
+    });
+  },
+};
+
+const fsEditTool: ToolDefinition<FsEditArgs> = {
+  name: "fs.edit",
+  description:
+    "Apply a targeted UTF-8 text replacement to an existing repo file. Ambiguous matches fail unless replaceAll is true.",
+  mode: "write",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["path", "oldText", "newText"],
+    properties: {
+      path: { type: "string", description: "Repo-relative file path to edit." },
+      oldText: { type: "string", description: "Exact text to replace. Must be non-empty." },
+      newText: { type: "string", description: "Replacement text." },
+      replaceAll: {
+        type: "boolean",
+        description: "Replace all matches. Defaults to false and requires exactly one match.",
+      },
+      maxFileBytes: { type: "integer", minimum: 1, maximum: MAX_EDIT_FILE_BYTES },
+    },
+  },
+  maxResultChars: 32_000,
+  async handler(args, context) {
+    const requestedPath = requiredString(args.path, "path");
+    const oldText = requiredNonEmptyString(args.oldText, "oldText");
+    const newText = requiredString(args.newText, "newText");
+    const replaceAll = optionalBoolean(args.replaceAll, false, "replaceAll");
+    const maxFileBytes = optionalInteger(
+      args.maxFileBytes,
+      DEFAULT_MAX_EDIT_FILE_BYTES,
+      "maxFileBytes",
+      1,
+      MAX_EDIT_FILE_BYTES,
+    );
+    if (oldText === newText) {
+      throw new PolicyViolationError("invalid_args", "oldText and newText must differ");
+    }
+
+    return editTextFile(context, {
+      path: requestedPath,
+      oldText,
+      newText,
+      replaceAll,
+      maxFileBytes,
+    });
+  },
+};
+
+export async function writeTextFile(
+  context: ToolContext,
+  input: WriteTextFileInput,
+): Promise<WriteTextFileResult> {
+  if (input.content.length > input.maxChars) {
+    throw new PolicyViolationError(
+      "content_too_large",
+      `Content exceeds maxChars (${input.content.length} > ${input.maxChars})`,
+    );
+  }
+
+  const resolved = assertWriteAllowed(context.repoRoot, input.path);
+  await rejectSymlinkPathSegments(resolved.repoRoot, resolved.relativePath, {
+    allowMissing: true,
+  });
+  const existing = await optionalLstat(resolved.absolutePath);
+  let before: string | null = null;
+
+  if (existing !== undefined) {
+    rejectUnreadableEntry(resolved.relativePath, existing);
+    if (!input.overwrite) {
+      throw new PolicyViolationError(
+        "file_exists",
+        `File already exists; set overwrite: true to replace it: ${resolved.relativePath}`,
+      );
+    }
+    before = decodeText(await readFile(resolved.absolutePath), resolved.relativePath);
+  }
+
+  await ensureWritableParent(resolved.repoRoot, resolved.relativePath, resolved.absolutePath, {
+    createDirs: input.createDirs,
+  });
+  await writeFile(resolved.absolutePath, input.content, "utf8");
+  const changeType = before === null ? "create" : (input.changeType ?? "update");
+  const change = await recordTextFileChange(context, {
+    path: resolved.relativePath,
+    changeType,
+    before,
+    after: input.content,
+  });
+
+  return {
+    path: resolved.relativePath,
+    changeType,
+    bytes: change.afterBytes,
+    hash: change.afterHash,
+    overwritten: before !== null,
+  };
+}
+
+export async function editTextFile(
+  context: ToolContext,
+  input: EditTextFileInput,
+): Promise<EditTextFileResult> {
+  if (input.oldText === input.newText) {
+    throw new PolicyViolationError("invalid_args", "oldText and newText must differ");
+  }
+
+  const resolved = assertWriteAllowed(context.repoRoot, input.path);
+  await rejectSymlinkPathSegments(resolved.repoRoot, resolved.relativePath);
+  const before = await readEditableTextFile(resolved.absolutePath, resolved.relativePath, {
+    maxFileBytes: input.maxFileBytes,
+  });
+  const matches = countOccurrences(before, input.oldText);
+  if (matches === 0) {
+    throw new PolicyViolationError("no_match", `oldText was not found in ${resolved.relativePath}`);
+  }
+  if (matches > 1 && !input.replaceAll) {
+    throw new PolicyViolationError(
+      "ambiguous_match",
+      `oldText matched ${matches} times; set replaceAll: true or provide a more specific oldText`,
+    );
+  }
+
+  const after = input.replaceAll
+    ? before.split(input.oldText).join(input.newText)
+    : before.replace(input.oldText, input.newText);
+  await writeFile(resolved.absolutePath, after, "utf8");
+  const change = await recordTextFileChange(context, {
+    path: resolved.relativePath,
+    changeType: "update",
+    before,
+    after,
+  });
+
+  return {
+    path: resolved.relativePath,
+    changeType: "update",
+    replacements: input.replaceAll ? matches : 1,
+    bytes: change.afterBytes,
+    hash: change.afterHash,
+  };
+}
+
 interface GrepOptions {
   query: string;
   pathMatcher?: (path: string) => boolean;
@@ -509,6 +759,22 @@ function rejectUnreadableEntry(relativePath: string, metadata: Stats): void {
   }
 }
 
+async function readEditableTextFile(
+  absolutePath: string,
+  relativePath: string,
+  options: { maxFileBytes: number },
+): Promise<string> {
+  const metadata = await lstat(absolutePath);
+  rejectUnreadableEntry(relativePath, metadata);
+  if (metadata.size > options.maxFileBytes) {
+    throw new PolicyViolationError(
+      "file_too_large",
+      `File exceeds maxFileBytes (${metadata.size} > ${options.maxFileBytes}): ${relativePath}`,
+    );
+  }
+  return decodeText(await readFile(absolutePath), relativePath);
+}
+
 function rejectSymlinkRoot(relativePath: string, metadata: Stats): void {
   if (metadata.isSymbolicLink()) {
     throw new PolicyViolationError(
@@ -518,7 +784,11 @@ function rejectSymlinkRoot(relativePath: string, metadata: Stats): void {
   }
 }
 
-async function rejectSymlinkPathSegments(repoRoot: string, relativePath: string): Promise<void> {
+async function rejectSymlinkPathSegments(
+  repoRoot: string,
+  relativePath: string,
+  options: { allowMissing?: boolean } = {},
+): Promise<void> {
   if (relativePath === "") {
     return;
   }
@@ -531,7 +801,13 @@ async function rejectSymlinkPathSegments(repoRoot: string, relativePath: string)
       continue;
     }
     currentPath = path.join(currentPath, segment);
-    const metadata = await lstat(currentPath);
+    const metadata = await optionalLstat(currentPath);
+    if (metadata === undefined) {
+      if (options.allowMissing === true) {
+        return;
+      }
+      throw new PolicyViolationError("not_found", `Path does not exist: ${relativePath}`);
+    }
     if (metadata.isSymbolicLink()) {
       const symlinkPath = segments.slice(0, index + 1).join("/");
       throw new PolicyViolationError(
@@ -540,6 +816,95 @@ async function rejectSymlinkPathSegments(repoRoot: string, relativePath: string)
       );
     }
   }
+}
+
+async function ensureWritableParent(
+  repoRoot: string,
+  relativePath: string,
+  absolutePath: string,
+  options: { createDirs: boolean },
+): Promise<void> {
+  const parentPath = path.dirname(absolutePath);
+  const parentRelativePath = toPosixPath(path.relative(path.resolve(repoRoot), parentPath));
+  const metadata = await optionalLstat(parentPath);
+  if (metadata === undefined) {
+    if (!options.createDirs) {
+      throw new PolicyViolationError(
+        "parent_missing",
+        `Parent directory does not exist: ${parentRelativePath}`,
+      );
+    }
+    await mkdir(parentPath, { recursive: true });
+    return;
+  }
+  rejectSymlinkRoot(parentRelativePath, metadata);
+  if (!metadata.isDirectory()) {
+    throw new PolicyViolationError(
+      "parent_not_directory",
+      `Parent path is not a directory: ${parentRelativePath}`,
+    );
+  }
+}
+
+async function optionalLstat(absolutePath: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(absolutePath);
+  } catch (error: unknown) {
+    if (isNotFoundError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === "ENOENT"
+  );
+}
+
+async function recordTextFileChange(
+  context: ToolContext,
+  input: {
+    path: string;
+    changeType: ToolFileChange["changeType"];
+    before: string | null;
+    after: string;
+  },
+): Promise<ToolFileChange> {
+  const change: ToolFileChange = {
+    path: input.path,
+    changeType: input.changeType,
+    beforeHash: input.before === null ? null : hashText(input.before),
+    afterHash: hashText(input.after),
+    beforeBytes: input.before === null ? 0 : Buffer.byteLength(input.before, "utf8"),
+    afterBytes: Buffer.byteLength(input.after, "utf8"),
+    beforePreview: input.before === null ? null : previewText(input.before),
+    afterPreview: previewText(input.after),
+  };
+  await context.recordFileChange?.(change);
+  return change;
+}
+
+function hashText(value: string): string {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+function previewText(value: string): string {
+  return value.slice(0, FILE_CHANGE_PREVIEW_CHARS);
+}
+
+function countOccurrences(value: string, needle: string): number {
+  let count = 0;
+  let index = value.indexOf(needle);
+  while (index !== -1) {
+    count += 1;
+    index = value.indexOf(needle, index + needle.length);
+  }
+  return count;
 }
 
 function entryFor(relativePath: string, metadata: Stats): FsEntry {

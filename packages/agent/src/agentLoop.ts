@@ -320,6 +320,14 @@ async function executeToolCall(
   const result = await tools.safeExecuteText(toolCall.name, toolCall.argumentsText, {
     repoRoot,
     sessionId,
+    toolCallId: toolCall.id,
+    recordFileChange: async (change) => {
+      await store.appendEvent(sessionId, "file.changed", {
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        ...change,
+      });
+    },
   });
   await store.appendEvent(sessionId, "tool.result", toolResultEventPayload(toolCall.id, result));
   return result;

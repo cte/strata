@@ -111,8 +111,8 @@ The immediate build focus is the agentic harness, because the wiki cannot become
 The next implementation sequence is:
 
 1. Expand the tool foundation with registry profiles and safe filesystem read/search tools. Status: complete.
-2. Add guarded edit/write tools for wiki maintenance.
-3. Add a gated shell tool for tests, formatting, and local automation.
+2. Add guarded edit/write tools for wiki maintenance. Status: complete.
+3. Add a dangerous-mode shell tool for tests, formatting, and local automation. Status: complete.
 4. Add todo, memory, session-search, and skill tools.
 5. Wire reflection so learning artifacts improve after useful sessions.
 6. Add scheduled maintenance jobs for wiki hygiene, memory review, skill curation, stale actions, and index refreshes.
