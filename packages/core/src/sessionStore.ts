@@ -135,6 +135,13 @@ export class SessionStore {
     return rows.map(rowToSession);
   }
 
+  getSession(sessionId: string): SessionRecord | undefined {
+    const row = this.db.query("select * from sessions where id = ?").get(sessionId) as
+      | SessionRow
+      | undefined;
+    return row === undefined ? undefined : rowToSession(row);
+  }
+
   searchSessions(query: string, limit = 20): SessionRecord[] {
     const like = `%${escapeLike(query)}%`;
     const rows = this.db

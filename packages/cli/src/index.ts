@@ -9,6 +9,7 @@ import {
   OpenAICodexModelAdapter,
   OpenAICompatibleChatModelAdapter,
   runAgentLoop,
+  runReflection,
   setChatGptCredentials,
 } from "@cortex/agent";
 import { ensureRuntimeDirs, getCortexPaths, SessionStore, type SessionRecord } from "@cortex/core";
@@ -26,6 +27,7 @@ commands:
   auth logout openai-codex     remove stored ChatGPT credentials
   init                         initialize .cortex runtime directories
   query [options] <question>   run an agent query using the default dangerous tool profile
+  learn reflect [options] <id>  reflect on a completed session trace
   tui                          launch the interactive Cortex TUI
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions
@@ -37,10 +39,17 @@ commands:
 
 type ProviderName = "openai-codex" | "openai-compatible";
 
-interface QueryOptions {
+interface ModelOptions {
   provider?: ProviderName;
   model?: string;
+}
+
+interface QueryOptions extends ModelOptions {
   question: string;
+}
+
+interface ReflectOptions extends ModelOptions {
+  sessionId: string;
 }
 
 function parseLimit(args: string[], fallback = 20): number {
@@ -224,6 +233,36 @@ async function cmdSessions(args: string[]): Promise<CommandResult> {
   throw new Error(`Unknown sessions subcommand: ${subcommand}`);
 }
 
+async function cmdLearn(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(`usage: cortex learn reflect [--provider P] [--model M] <session-id>`);
+    return 0;
+  }
+
+  if (subcommand === "reflect") {
+    const options = parseReflectOptions(args);
+    const result = await runReflection({
+      sessionId: options.sessionId,
+      repoRoot: getCortexPaths().repoRoot,
+      model: await createModelAdapter(options),
+    });
+    console.log(`reflection report: ${result.reportPath}`);
+    console.log(`applied: ${result.applied.length}`);
+    console.log(`proposals: ${result.proposals.length}`);
+    console.log(`skipped: ${result.skipped.length}`);
+    if (result.noops.length > 0) {
+      console.log(`noops: ${result.noops.length}`);
+    }
+    for (const proposal of result.proposals) {
+      console.log(`proposal: ${proposal.path}`);
+    }
+    return 0;
+  }
+
+  throw new Error(`Unknown learn subcommand: ${subcommand}`);
+}
+
 async function cmdTools(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
 
@@ -281,6 +320,9 @@ async function main(argv: string[]): Promise<CommandResult> {
   if (command === "query") {
     return cmdQuery(argv);
   }
+  if (command === "learn") {
+    return cmdLearn(argv);
+  }
   if (command === "tui") {
     await runTui({ repoRoot: getCortexPaths().repoRoot });
     return 0;
@@ -327,6 +369,41 @@ function parseToolProfile(args: string[]): ToolProfile {
 }
 
 function parseQueryOptions(args: string[]): QueryOptions {
+  const { provider, model, rest } = parseModelOptions(args);
+  const parsed: QueryOptions = {
+    question: rest.join(" ").trim(),
+  };
+  if (provider !== undefined) {
+    parsed.provider = provider;
+  }
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  return parsed;
+}
+
+function parseReflectOptions(args: string[]): ReflectOptions {
+  const { provider, model, rest } = parseModelOptions(args);
+  if (rest.length !== 1 || rest[0]?.trim() === "") {
+    throw new Error("learn reflect requires exactly one session id");
+  }
+  const sessionId = rest[0];
+  if (sessionId === undefined) {
+    throw new Error("learn reflect requires exactly one session id");
+  }
+  const parsed: ReflectOptions = {
+    sessionId,
+  };
+  if (provider !== undefined) {
+    parsed.provider = provider;
+  }
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  return parsed;
+}
+
+function parseModelOptions(args: string[]): ModelOptions & { rest: string[] } {
   const rest: string[] = [];
   let provider: ProviderName | undefined;
   let model: string | undefined;
@@ -352,9 +429,7 @@ function parseQueryOptions(args: string[]): QueryOptions {
     }
   }
 
-  const parsed: QueryOptions = {
-    question: rest.join(" ").trim(),
-  };
+  const parsed: ModelOptions & { rest: string[] } = { rest };
   if (provider !== undefined) {
     parsed.provider = provider;
   }
@@ -365,7 +440,7 @@ function parseQueryOptions(args: string[]): QueryOptions {
 }
 
 async function createModelAdapter(
-  options: QueryOptions,
+  options: ModelOptions,
 ): Promise<OpenAICodexModelAdapter | OpenAICompatibleChatModelAdapter> {
   const provider =
     options.provider ??
@@ -408,7 +483,7 @@ function parseProviderName(value: string | undefined): ProviderName | undefined 
   throw new Error("CORTEX_PROVIDER must be openai-codex or openai-compatible");
 }
 
-function createOpenAICompatibleAdapter(options: QueryOptions): OpenAICompatibleChatModelAdapter {
+function createOpenAICompatibleAdapter(options: ModelOptions): OpenAICompatibleChatModelAdapter {
   const apiKey = Bun.env.CORTEX_API_KEY ?? Bun.env.OPENAI_API_KEY;
   const model = options.model ?? Bun.env.CORTEX_MODEL ?? Bun.env.OPENAI_MODEL;
   const baseUrl = Bun.env.CORTEX_BASE_URL ?? Bun.env.OPENAI_BASE_URL;

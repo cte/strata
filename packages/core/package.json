@@ -8,10 +8,12 @@
     "./events": "./src/events.ts",
     "./memory-store": "./src/memoryStore.ts",
     "./paths": "./src/paths.ts",
+    "./proposal-store": "./src/proposalStore.ts",
     "./session-store": "./src/sessionStore.ts",
     "./skill-store": "./src/skillStore.ts",
     "./state-errors": "./src/stateErrors.ts",
     "./todo-store": "./src/todoStore.ts",
+    "./trace-store": "./src/traceStore.ts",
     "./types": "./src/types.ts"
   },
   "scripts": {

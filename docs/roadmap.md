@@ -115,7 +115,7 @@ The next implementation sequence is:
 3. Add a dangerous-mode shell tool for tests, formatting, and local automation. Status: complete.
 4. Add todo, memory, session-search, and skill tools. Status: basic slice complete.
 5. Inject active todos, memory, and a compact skill index into agent runs. Status: complete.
-6. Wire reflection so learning artifacts improve after useful sessions.
+6. Wire reflection so learning artifacts improve after useful sessions. Status: basic slice complete.
 7. Add scheduled maintenance jobs for wiki hygiene, memory review, skill curation, stale actions, and index refreshes.
 8. Continue improving the TUI around the richer agent runtime.
 9. Return to source ingestion and wiki automation once the harness can maintain the wiki with observable tools and learning loops.
