@@ -53,9 +53,7 @@ export function buildStartupHeader(): string[] {
  * so the user can scroll the terminal to read it (pi has no separate help
  * modal — the same content lives in its expanded startup header).
  */
-export function buildHelpNotice(
-  commands: { name: string; description: string }[],
-): string[] {
+export function buildHelpNotice(commands: { name: string; description: string }[]): string[] {
   const section = (title: string) => theme.bold(theme.accent(title));
   const key = (label: string) => theme.muted(label);
   const lines: string[] = [];

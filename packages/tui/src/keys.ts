@@ -349,7 +349,9 @@ function formatParsedKey(
   const isDigit = identityCodepoint >= 48 && identityCodepoint <= 57;
   const isKnownSymbol = SYMBOL_KEYS.has(String.fromCharCode(identityCodepoint));
   const effectiveCodepoint =
-    isLatinLetter || isDigit || isKnownSymbol ? identityCodepoint : (baseLayoutKey ?? identityCodepoint);
+    isLatinLetter || isDigit || isKnownSymbol
+      ? identityCodepoint
+      : (baseLayoutKey ?? identityCodepoint);
 
   let keyName: string | undefined;
   if (effectiveCodepoint === CODEPOINTS.escape) keyName = "escape";
@@ -406,7 +408,8 @@ export function parseKey(data: string): string | undefined {
   if (data === "\x1b\x1d") return "ctrl+alt+]";
   if (data === "\x1b\x1f") return "ctrl+alt+-";
   if (data === "\t") return "tab";
-  if (data === "\r" || (!_kittyProtocolActive && data === "\n") || data === "\x1bOM") return "enter";
+  if (data === "\r" || (!_kittyProtocolActive && data === "\n") || data === "\x1bOM")
+    return "enter";
   if (data === "\x00") return "ctrl+space";
   if (data === " ") return "space";
   if (data === "\x7f") return "backspace";
@@ -461,8 +464,7 @@ function decodeKittyPrintable(data: string): string | undefined {
   if (!match) return undefined;
   const codepoint = Number.parseInt(match[1] ?? "", 10);
   if (!Number.isFinite(codepoint)) return undefined;
-  const shiftedKey =
-    match[2] && match[2].length > 0 ? Number.parseInt(match[2], 10) : undefined;
+  const shiftedKey = match[2] && match[2].length > 0 ? Number.parseInt(match[2], 10) : undefined;
   const modValue = match[4] ? Number.parseInt(match[4], 10) : 1;
   const modifier = Number.isFinite(modValue) ? modValue - 1 : 0;
   if ((modifier & ~KITTY_PRINTABLE_ALLOWED_MODIFIERS) !== 0) return undefined;

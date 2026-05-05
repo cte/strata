@@ -1,21 +1,28 @@
 import process from "node:process";
+import type { ThinkingLevel } from "@cortex/agent";
 import {
-  compactSession,
-  getValidChatGptCredentials,
-  runAgentLoopEvents,
-  shouldAutoCompact,
   type AgentAttachment,
   type AgentRunEvent,
+  compactSession,
+  getValidChatGptCredentials,
   type ModelAdapter,
+  runAgentLoopEvents,
+  shouldAutoCompact,
+  THINKING_LEVELS,
 } from "@cortex/agent";
-import { SessionStore, getCortexPaths, listSkills, readSkill } from "@cortex/core";
-import type { Component, Frame, RenderContext } from "../component.js";
+import { getCortexPaths, listSkills, readSkill, SessionStore } from "@cortex/core";
 import { SlashCommandRegistry } from "../commands.js";
+import type { Component, Frame, RenderContext } from "../component.js";
 import { DynamicBorder } from "../components.js";
 import { Editor } from "../editor.js";
 import { TuiRuntime } from "../runtime.js";
-import { Footer, StatusLine } from "./chrome.js";
 import { AuthDialog, logoutChatGpt } from "./authDialog.js";
+import { Footer, StatusLine } from "./chrome.js";
+import { copyToClipboard } from "./clipboard.js";
+import { CombinedAutocompleteProvider } from "./combinedAutocomplete.js";
+import { FileMentionProvider } from "./fileMentions.js";
+import { buildHelpNotice, buildStartupHeader } from "./header.js";
+import { appendHistory, loadHistory } from "./history.js";
 import {
   createModelAdapter,
   defaultModel,
@@ -23,34 +30,27 @@ import {
   listModels,
   loadAuthStatus,
 } from "./modelFactory.js";
-import { copyToClipboard } from "./clipboard.js";
-import { resetTokenUsage } from "./usage.js";
-import { CombinedAutocompleteProvider } from "./combinedAutocomplete.js";
-import { FileMentionProvider } from "./fileMentions.js";
-import { appendHistory, loadHistory } from "./history.js";
 import { ModelSelector } from "./modelSelector.js";
 import { loadPreferences, savePreferences } from "./preferences.js";
 import { SessionSelector } from "./sessionSelector.js";
-import type { ThinkingLevel } from "@cortex/agent";
-import { THINKING_LEVELS } from "@cortex/agent";
-import { buildHelpNotice, buildStartupHeader } from "./header.js";
 import {
+  type AppState,
   appendAssistantDelta,
   appendTranscript,
   clearTranscript,
   finalizeAssistantStream,
   initialAppState,
   nextThinkingLevel,
+  type ProviderName,
   recordCompletion,
   recordModelUsage,
   recordToolResult,
   recordToolStart,
   setModelSelection,
   startSession,
-  type AppState,
-  type ProviderName,
 } from "./state.js";
 import { Transcript } from "./transcript.js";
+import { resetTokenUsage } from "./usage.js";
 
 export interface CortexAppOptions {
   repoRoot: string;
@@ -537,9 +537,10 @@ export class CortexApp implements Component {
       return;
     }
     const trimmedArgs = args.trim();
-    const prompt = trimmedArgs === ""
-      ? `Apply the skill "${name}":\n\n${document.content}`
-      : `Apply the skill "${name}" to: ${trimmedArgs}\n\n${document.content}`;
+    const prompt =
+      trimmedArgs === ""
+        ? `Apply the skill "${name}":\n\n${document.content}`
+        : `Apply the skill "${name}" to: ${trimmedArgs}\n\n${document.content}`;
     await this.onSubmit(prompt);
   }
 
@@ -977,7 +978,10 @@ export class CortexApp implements Component {
       try {
         const session = store.getSession(sessionId);
         if (session === undefined) {
-          appendTranscript(this.state, { kind: "error", content: `session not found: ${sessionId}` });
+          appendTranscript(this.state, {
+            kind: "error",
+            content: `session not found: ${sessionId}`,
+          });
           return;
         }
         const messages = store.listMessages(sessionId);

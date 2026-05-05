@@ -46,9 +46,5 @@ export async function loadPreferences(runtimeDir: string): Promise<Preferences> 
 
 export async function savePreferences(runtimeDir: string, prefs: Preferences): Promise<void> {
   await mkdir(runtimeDir, { recursive: true });
-  await writeFile(
-    path.join(runtimeDir, FILE_NAME),
-    `${JSON.stringify(prefs, null, 2)}\n`,
-    "utf8",
-  );
+  await writeFile(path.join(runtimeDir, FILE_NAME), `${JSON.stringify(prefs, null, 2)}\n`, "utf8");
 }

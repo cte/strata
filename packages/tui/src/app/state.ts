@@ -1,11 +1,6 @@
-import type {
-  AgentAttachment,
-  AgentRunResult,
-  AgentToolCall,
-  ThinkingLevel,
-} from "@cortex/agent";
-import type { JsonObject } from "@cortex/core";
+import type { AgentAttachment, AgentRunResult, AgentToolCall, ThinkingLevel } from "@cortex/agent";
 import { THINKING_LEVELS } from "@cortex/agent";
+import type { JsonObject } from "@cortex/core";
 import type { ToolExecutionResult } from "@cortex/tools";
 import {
   addModelUsage,
@@ -122,11 +117,7 @@ export function appendTranscript(state: AppState, item: TranscriptItem): void {
  * deltas extend it in place. Returns the streaming item so callers can
  * react if they need to.
  */
-export function appendAssistantDelta(
-  state: AppState,
-  iteration: number,
-  delta: string,
-): void {
+export function appendAssistantDelta(state: AppState, iteration: number, delta: string): void {
   const last = state.transcript[state.transcript.length - 1];
   if (
     last !== undefined &&
@@ -152,11 +143,7 @@ export function appendAssistantDelta(
  * none exists (no deltas were streamed — e.g. tool-only response), we
  * append a fresh item, but only when there's text to show.
  */
-export function finalizeAssistantStream(
-  state: AppState,
-  iteration: number,
-  content: string,
-): void {
+export function finalizeAssistantStream(state: AppState, iteration: number, content: string): void {
   const last = state.transcript[state.transcript.length - 1];
   if (
     last !== undefined &&

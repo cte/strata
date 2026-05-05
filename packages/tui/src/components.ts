@@ -268,8 +268,7 @@ export class Loader implements Component {
     const elapsedMs = Date.now() - this.startedAt;
     const elapsed = formatElapsed(elapsedMs);
     const left = `${theme.accent(frame)} ${this.message}${theme.muted(` (${elapsed})`)}`;
-    const text =
-      this.hint === undefined ? left : `${left}  ${theme.muted(this.hint)}`;
+    const text = this.hint === undefined ? left : `${left}  ${theme.muted(this.hint)}`;
     return { lines: [padToWidth(truncateToWidth(text, ctx.width), ctx.width)] };
   }
 }

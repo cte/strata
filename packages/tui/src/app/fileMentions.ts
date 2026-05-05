@@ -51,10 +51,7 @@ export class FileMentionProvider implements AutocompleteProvider {
     }
 
     // Refresh the cache opportunistically; serve from whatever's there now.
-    if (
-      this.cache === undefined ||
-      Date.now() - this.cache.loadedAt > CACHE_TTL_MS
-    ) {
+    if (this.cache === undefined || Date.now() - this.cache.loadedAt > CACHE_TTL_MS) {
       void this.refreshCache();
     }
     const entries = this.cache?.entries ?? [];
@@ -112,11 +109,10 @@ export class FileMentionProvider implements AutocompleteProvider {
 
   private scanRepo(): Promise<MentionEntry[]> {
     return new Promise((resolve, reject) => {
-      const child = spawn(
-        "rg",
-        ["--files", "--hidden", "--glob", "!.git/**"],
-        { cwd: this.repoRoot, stdio: ["ignore", "pipe", "ignore"] },
-      );
+      const child = spawn("rg", ["--files", "--hidden", "--glob", "!.git/**"], {
+        cwd: this.repoRoot,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       let stdout = "";
       child.stdout.on("data", (chunk) => {
         stdout += String(chunk);

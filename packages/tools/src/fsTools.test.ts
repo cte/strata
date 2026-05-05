@@ -61,11 +61,7 @@ describe("filesystem tools", () => {
       // fs.grep is case-sensitive by default (pi-aligned). "Needle" in the
       // file doesn't match the lowercase pattern unless ignoreCase is set.
       await expect(
-        registry.execute(
-          "fs.grep",
-          { pattern: "needle", root: "wiki", ignoreCase: true },
-          context,
-        ),
+        registry.execute("fs.grep", { pattern: "needle", root: "wiki", ignoreCase: true }, context),
       ).resolves.toMatchObject({
         count: 1,
         matches: [{ path: "wiki/projects/alpha.md", line: 3 }],

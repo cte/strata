@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
-import path from "node:path";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import {
   asArray,
   asObject,
   asObjects,
   firstString,
   frontmatter,
+  type JsonObject,
   loadDotenv,
   requireString,
   slugify,
   utcNow,
   wikiRoot,
   writeOnce,
-  type JsonObject,
 } from "./common.js";
 
 const rawDir = path.join(wikiRoot, "raw", "granola");

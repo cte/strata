@@ -1,8 +1,8 @@
 import process from "node:process";
 import { ensureRuntimeDirs, getCortexPaths } from "@cortex/core";
-import { ProcessTerminal } from "../terminal.js";
 import { TuiRuntime } from "../runtime.js";
-import { CortexApp, buildAppOptions, shutdownOnExit } from "./app.js";
+import { ProcessTerminal } from "../terminal.js";
+import { buildAppOptions, CortexApp, shutdownOnExit } from "./app.js";
 
 export interface RunTuiOptions {
   repoRoot?: string;

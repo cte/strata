@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listTodos, readMemoryDocument, SessionStore } from "@cortex/core";
-import { runReflection, ReflectionError } from "./reflection.js";
+import { ReflectionError, runReflection } from "./reflection.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
 class JsonReflectionModel implements ModelAdapter {

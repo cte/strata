@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { padToWidth, theme, truncateToWidth, visibleWidth } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { Loader } from "../components.js";
@@ -186,26 +186,18 @@ export interface InlinePickerOptions<T> {
   maxVisible?: number;
 }
 
-export function renderInlinePicker<T>(
-  ctx: RenderContext,
-  opts: InlinePickerOptions<T>,
-): Frame {
+export function renderInlinePicker<T>(ctx: RenderContext, opts: InlinePickerOptions<T>): Frame {
   if (!opts.active) {
     return { lines: [] };
   }
   const lines: string[] = [];
-  lines.push(
-    padToWidth(truncateToWidth(theme.muted(opts.header), ctx.width), ctx.width),
-  );
+  lines.push(padToWidth(truncateToWidth(theme.muted(opts.header), ctx.width), ctx.width));
   if (opts.items.length === 0) {
-    lines.push(
-      padToWidth(truncateToWidth(theme.muted(opts.emptyHint), ctx.width), ctx.width),
-    );
+    lines.push(padToWidth(truncateToWidth(theme.muted(opts.emptyHint), ctx.width), ctx.width));
     return { lines };
   }
   const total = opts.items.length;
-  const maxVisible =
-    opts.maxVisible ?? Math.max(3, Math.min(10, Math.floor(ctx.height / 3)));
+  const maxVisible = opts.maxVisible ?? Math.max(3, Math.min(10, Math.floor(ctx.height / 3)));
   const { startIndex, endIndex } = computeScrollWindow(total, opts.selectedIndex, maxVisible);
   for (let i = startIndex; i < endIndex; i += 1) {
     const item = opts.items[i];
@@ -218,9 +210,7 @@ export function renderInlinePicker<T>(
   if (startIndex > 0 || endIndex < total) {
     lines.push(
       padToWidth(
-        theme.muted(
-          truncateToWidth(`  (${opts.selectedIndex + 1}/${total})`, ctx.width),
-        ),
+        theme.muted(truncateToWidth(`  (${opts.selectedIndex + 1}/${total})`, ctx.width)),
         ctx.width,
       ),
     );

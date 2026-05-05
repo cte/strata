@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Editor } from "./editor.js";
 import { SlashCommandRegistry } from "./commands.js";
+import { Editor } from "./editor.js";
 
 function feed(editor: Editor, text: string): void {
   for (const ch of text) {

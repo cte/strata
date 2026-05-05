@@ -1,5 +1,5 @@
-import type { Stats } from "node:fs";
 import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
 import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@cortex/core";
@@ -353,7 +353,10 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
     type: "object",
     additionalProperties: false,
     properties: {
-      pattern: { type: "string", description: "Regex pattern (or literal string when literal=true)." },
+      pattern: {
+        type: "string",
+        description: "Regex pattern (or literal string when literal=true).",
+      },
       query: {
         type: "string",
         description: "Alias for pattern. Kept for backward compatibility.",
@@ -524,7 +527,8 @@ const fsEditTool: ToolDefinition<FsEditArgs> = {
       newText: { type: "string", description: "Single-edit shortcut. Pi accepts this too." },
       replaceAll: {
         type: "boolean",
-        description: "Replace all matches per edit. Defaults to false (each edit must match exactly once).",
+        description:
+          "Replace all matches per edit. Defaults to false (each edit must match exactly once).",
       },
       maxFileBytes: { type: "integer", minimum: 1, maximum: MAX_EDIT_FILE_BYTES },
     },
@@ -926,7 +930,10 @@ async function ripgrepSearch(
 
   rl.on("line", (raw: string) => {
     if (raw.trim() === "" || matches.length >= options.limit) return;
-    let event: { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
+    let event: {
+      type?: string;
+      data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
+    };
     try {
       event = JSON.parse(raw);
     } catch {
@@ -999,11 +1006,7 @@ async function ripgrepSearch(
       for (let i = Math.max(0, idx - options.contextLines); i < idx; i += 1) {
         before.push((lines[i] ?? "").trim().slice(0, 240));
       }
-      for (
-        let i = idx + 1;
-        i < Math.min(lines.length, idx + 1 + options.contextLines);
-        i += 1
-      ) {
+      for (let i = idx + 1; i < Math.min(lines.length, idx + 1 + options.contextLines); i += 1) {
         after.push((lines[i] ?? "").trim().slice(0, 240));
       }
       match.before = before;

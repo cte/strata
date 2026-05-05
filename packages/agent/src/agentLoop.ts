@@ -1,12 +1,13 @@
 import {
   getCortexPaths,
-  SessionStore,
   type JsonObject,
   type JsonValue,
   type SessionRecord,
+  SessionStore,
 } from "@cortex/core";
-import { createDefaultToolRegistry, type ToolRegistry } from "@cortex/tools";
 import type { ToolExecutionResult } from "@cortex/tools";
+import { createDefaultToolRegistry, type ToolRegistry } from "@cortex/tools";
+import { buildRunContext } from "./runContext.js";
 import type {
   AgentMessage,
   AgentRunConfig,
@@ -15,7 +16,6 @@ import type {
   AgentToolCall,
   ModelResponse,
 } from "./types.js";
-import { buildRunContext } from "./runContext.js";
 
 // Pi parity: no iteration / tool-call ceiling. The loop runs until the model
 // returns no tool calls (final answer), the model errors out, or the user
@@ -430,9 +430,7 @@ function truncateTitle(value: string): string {
   return trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 77)}...`;
 }
 
-function messageRecordToAgentMessage(
-  record: import("@cortex/core").MessageRecord,
-): AgentMessage {
+function messageRecordToAgentMessage(record: import("@cortex/core").MessageRecord): AgentMessage {
   const message: AgentMessage = {
     role: record.role,
     content: record.content,

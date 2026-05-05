@@ -120,10 +120,7 @@ export class Editor implements Component {
       const total = this.completions.length;
       const startIndex = Math.max(
         0,
-        Math.min(
-          this.completionIndex - Math.floor(maxVisible / 2),
-          total - maxVisible,
-        ),
+        Math.min(this.completionIndex - Math.floor(maxVisible / 2), total - maxVisible),
       );
       const endIndex = Math.min(startIndex + maxVisible, total);
       for (let i = startIndex; i < endIndex; i += 1) {
@@ -137,9 +134,7 @@ export class Editor implements Component {
       }
       if (startIndex > 0 || endIndex < total) {
         const scrollText = `  (${this.completionIndex + 1}/${total})`;
-        lines.push(
-          padToWidth(theme.muted(truncateToWidth(scrollText, ctx.width)), ctx.width),
-        );
+        lines.push(padToWidth(theme.muted(truncateToWidth(scrollText, ctx.width)), ctx.width));
       }
     }
 
@@ -191,8 +186,7 @@ export class Editor implements Component {
         // other completion (file mentions, etc.) applies and stays on the
         // line so the user can keep typing.
         const accepted = this.completions[this.completionIndex];
-        const isSlashCommand =
-          accepted !== undefined && accepted.value.startsWith("/");
+        const isSlashCommand = accepted !== undefined && accepted.value.startsWith("/");
         this.applyCompletion();
         if (!isSlashCommand) {
           return "consumed";

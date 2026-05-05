@@ -65,9 +65,13 @@ describe("renderImage", () => {
   test("emits a kitty sequence and reserves at least one row when capable", () => {
     setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
     try {
-      const out = renderImage(TINY_PNG_BASE64, { widthPx: 100, heightPx: 50 }, {
-        maxWidthCells: 40,
-      });
+      const out = renderImage(
+        TINY_PNG_BASE64,
+        { widthPx: 100, heightPx: 50 },
+        {
+          maxWidthCells: 40,
+        },
+      );
       expect(out).not.toBeNull();
       expect(out!.sequence.startsWith("\x1b_G")).toBe(true);
       expect(out!.rows).toBeGreaterThanOrEqual(1);

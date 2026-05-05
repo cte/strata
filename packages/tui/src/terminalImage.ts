@@ -46,11 +46,7 @@ export function detectCapabilities(): TerminalCapabilities {
   if (process.env.KITTY_WINDOW_ID || termProgram === "kitty") {
     return { images: "kitty", trueColor: true, hyperlinks: true };
   }
-  if (
-    termProgram === "ghostty" ||
-    term.includes("ghostty") ||
-    process.env.GHOSTTY_RESOURCES_DIR
-  ) {
+  if (termProgram === "ghostty" || term.includes("ghostty") || process.env.GHOSTTY_RESOURCES_DIR) {
     return { images: "kitty", trueColor: true, hyperlinks: true };
   }
   if (process.env.WEZTERM_PANE || termProgram === "wezterm") {
@@ -126,10 +122,7 @@ export function getJpegDimensions(base64Data: string): ImageDimensions | null {
   }
 }
 
-export function getImageDimensions(
-  base64Data: string,
-  mimeType: string,
-): ImageDimensions | null {
+export function getImageDimensions(base64Data: string, mimeType: string): ImageDimensions | null {
   if (mimeType === "image/png") return getPngDimensions(base64Data);
   if (mimeType === "image/jpeg") return getJpegDimensions(base64Data);
   return null;

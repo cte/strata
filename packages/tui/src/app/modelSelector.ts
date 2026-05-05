@@ -84,9 +84,7 @@ export class ModelSelector implements Component {
         const name = isSelected ? theme.bold(theme.accent(model.id)) : theme.bold(model.id);
         const current = model.id === this.currentModel ? theme.success(" (current)") : "";
         const desc =
-          model.description === ""
-            ? ""
-            : ` ${theme.muted(truncateToWidth(model.description, 50))}`;
+          model.description === "" ? "" : ` ${theme.muted(truncateToWidth(model.description, 50))}`;
         return `${name}${current}${desc}`;
       },
     });

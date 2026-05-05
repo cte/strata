@@ -8,10 +8,8 @@ import { OpenAICompatibleChatModelAdapter } from "./openaiCompatible.js";
  * Each chunk becomes a `data: <json>\n\n` frame, terminated by `data: [DONE]`.
  */
 function makeSseResponse(chunks: object[]): Response {
-  const body = chunks
-    .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
-    .join("")
-    + "data: [DONE]\n\n";
+  const body =
+    chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
   return new Response(body, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
@@ -87,9 +85,7 @@ describe("OpenAICompatibleChatModelAdapter", () => {
             choices: [
               {
                 delta: {
-                  tool_calls: [
-                    { index: 0, function: { arguments: 'th":"index.md"}' } },
-                  ],
+                  tool_calls: [{ index: 0, function: { arguments: 'th":"index.md"}' } }],
                 },
               },
             ],
@@ -164,7 +160,11 @@ describe("OpenAICompatibleChatModelAdapter", () => {
     const messages = (capturedBody as { messages: { role: string; content: unknown }[] }).messages;
     const userMessage = messages.find((m) => m.role === "user");
     expect(Array.isArray(userMessage?.content)).toBe(true);
-    const parts = userMessage?.content as { type: string; image_url?: { url: string }; text?: string }[];
+    const parts = userMessage?.content as {
+      type: string;
+      image_url?: { url: string };
+      text?: string;
+    }[];
     expect(parts[0]).toEqual({ type: "text", text: "What is in this image?" });
     expect(parts[1]?.type).toBe("image_url");
     expect(parts[1]?.image_url?.url).toBe("data:image/png;base64,AAAA");

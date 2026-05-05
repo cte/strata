@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
-import { createInterface } from "node:readline/promises";
 import process from "node:process";
+import { createInterface } from "node:readline/promises";
 import {
   clearChatGptCredentials,
   getChatGptCredentials,
   getValidChatGptCredentials,
-  loginChatGpt,
   listMaintenanceJobs,
+  loginChatGpt,
   OpenAICodexModelAdapter,
   OpenAICompatibleChatModelAdapter,
   runAgentLoop,
@@ -14,7 +14,7 @@ import {
   runReflection,
   setChatGptCredentials,
 } from "@cortex/agent";
-import { ensureRuntimeDirs, getCortexPaths, SessionStore, type SessionRecord } from "@cortex/core";
+import { ensureRuntimeDirs, getCortexPaths, type SessionRecord, SessionStore } from "@cortex/core";
 import { loadDotenv } from "@cortex/ingest/common";
 import { pullNotionPage } from "@cortex/ingest/notion";
 import { createDefaultToolRegistry, type ToolProfile } from "@cortex/tools";
