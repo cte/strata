@@ -117,7 +117,7 @@ export class TuiRuntime {
     this.inputHandler = handler;
   }
 
-  invalidate(forceFullRedraw = false): void {
+  invalidate(forceFullRedraw: boolean | "clear" = false): void {
     if (!this.running) {
       return;
     }
@@ -127,9 +127,17 @@ export class TuiRuntime {
       this.prevHeight = 0;
       this.prevViewportTop = 0;
       this.hardwareCursorRow = 0;
+      // "clear" mode also wipes the visible buffer + homes the cursor on
+      // the next render, so transitions like opening / closing a picker
+      // can't leave residual content from the previous frame size.
+      if (forceFullRedraw === "clear") {
+        this.pendingClear = true;
+      }
     }
     this.scheduleRender();
   }
+
+  private pendingClear = false;
 
   forceRedraw(): void {
     this.invalidate(true);
@@ -238,7 +246,9 @@ export class TuiRuntime {
     const firstRender = this.prevLines.length === 0;
 
     if (firstRender || widthChanged || heightChanged) {
-      this.fullRedraw(lines, width, height, cursor, !firstRender);
+      const shouldClear = !firstRender || this.pendingClear;
+      this.pendingClear = false;
+      this.fullRedraw(lines, width, height, cursor, shouldClear);
       return;
     }
 
@@ -252,9 +262,18 @@ export class TuiRuntime {
     cursor: Frame["cursor"],
     clear: boolean,
   ): void {
-    let buffer = SYNC_BEGIN + HIDE_CURSOR;
+    // Pi-aligned (see `pi-mono/packages/tui/src/tui.ts:920-942`): cursor
+    // hide is emitted as a separate write OUTSIDE the synchronized output
+    // block, and `applyCursor` (which may emit SHOW_CURSOR) likewise.
+    // Pi's `tui.ts` only puts content writes inside `\x1b[?2026h`/`l`.
+    this.terminal.write(HIDE_CURSOR);
+    let buffer = SYNC_BEGIN;
     if (clear) {
-      buffer += CLEAR_SCREEN;
+      // Pi's exact clear sequence (`tui.ts:921`): erase display, home
+      // cursor, erase scrollback. The `\x1b[3J` (erase saved lines) part
+      // is the only one that's specific to pi — `\x1b[2J\x1b[H` alone
+      // leaves previously-scrolled content in the scrollback buffer.
+      buffer += "\x1b[2J\x1b[H\x1b[3J";
     }
     for (let i = 0; i < lines.length; i += 1) {
       if (i > 0) {
@@ -263,15 +282,16 @@ export class TuiRuntime {
       buffer += "\x1b[2K";
       buffer += lines[i] ?? "";
     }
+    buffer += SYNC_END;
+    this.terminal.write(buffer);
     const lastRow = Math.max(0, lines.length - 1);
     this.hardwareCursorRow = lastRow;
     this.prevLines = lines.slice();
     this.prevWidth = width;
     this.prevHeight = height;
     this.prevViewportTop = Math.max(0, lines.length - height);
-    buffer += this.applyCursor(cursor, lines.length);
-    buffer += SYNC_END;
-    this.terminal.write(buffer);
+    // Cursor positioning happens OUTSIDE the sync block (pi pattern).
+    this.terminal.write(this.applyCursor(cursor, lines.length));
     this.lastRenderAt = Date.now();
   }
 
@@ -281,8 +301,6 @@ export class TuiRuntime {
     height: number,
     cursor: Frame["cursor"],
   ): void {
-    let buffer = SYNC_BEGIN + HIDE_CURSOR;
-
     const prevTop = this.prevViewportTop;
     const prevBottom = prevTop + height - 1;
 
@@ -301,11 +319,15 @@ export class TuiRuntime {
     }
 
     if (firstChanged === -1) {
-      buffer += this.applyCursor(cursor, lines.length);
-      buffer += SYNC_END;
-      this.terminal.write(buffer);
+      // No content changes — just reposition the cursor if needed.
+      this.terminal.write(this.applyCursor(cursor, lines.length));
       return;
     }
+
+    // Match pi's render structure: cursor hide outside sync, no
+    // hide/show transitions inside the sync block.
+    this.terminal.write(HIDE_CURSOR);
+    let buffer = SYNC_BEGIN;
 
     // Differential rendering can only touch what was actually visible.
     // If the first changed line is above the previous viewport, fall back
@@ -323,6 +345,15 @@ export class TuiRuntime {
     // terminal by writing \r\n at the bottom of the viewport. Each \r\n pushes
     // one line off the top into native scrollback and advances viewportTop.
     if (lastChanged > prevBottom) {
+      const scroll = lastChanged - prevBottom;
+      // After scrolling by N, the new viewport top is prevTop + N. If
+      // firstChanged would now be in scrollback, we can't safely patch — the
+      // diff cursor would clamp to the visible top and write at the wrong
+      // row, stranding old content as "phantom" rows in scrollback.
+      if (firstChanged < prevTop + scroll) {
+        this.fullRedraw(lines, width, height, cursor, true);
+        return;
+      }
       const toBottom = prevBottom - cursorRow;
       if (toBottom > 0) {
         buffer += `\x1b[${toBottom}B`;
@@ -330,7 +361,6 @@ export class TuiRuntime {
         buffer += `\x1b[${-toBottom}A`;
       }
       cursorRow = prevBottom;
-      const scroll = lastChanged - prevBottom;
       buffer += "\r\n".repeat(scroll);
       viewportTop += scroll;
       cursorRow += scroll;
@@ -370,14 +400,15 @@ export class TuiRuntime {
       cursorRow -= back;
     }
 
+    buffer += SYNC_END;
+    this.terminal.write(buffer);
     this.hardwareCursorRow = cursorRow;
     this.prevLines = lines.slice();
     this.prevWidth = width;
     this.prevHeight = height;
     this.prevViewportTop = Math.max(viewportTop, lines.length - height);
-    buffer += this.applyCursor(cursor, lines.length);
-    buffer += SYNC_END;
-    this.terminal.write(buffer);
+    // Cursor positioning happens OUTSIDE the sync block (pi pattern).
+    this.terminal.write(this.applyCursor(cursor, lines.length));
     this.lastRenderAt = Date.now();
   }
 

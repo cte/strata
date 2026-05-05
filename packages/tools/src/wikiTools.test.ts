@@ -32,6 +32,15 @@ describe("wiki tools", () => {
         count: 2,
       });
 
+      // Regression: model often passes `root: ""` for "list everything".
+      // Should resolve to the wiki root rather than throwing empty_path.
+      await expect(
+        registry.execute("wiki.listPages", { root: "", limit: 100 }, context),
+      ).resolves.toEqual({
+        pages: ["index.md", "projects/alpha.md"],
+        count: 2,
+      });
+
       await expect(
         registry.execute("wiki.readPage", { path: "projects/alpha.md" }, context),
       ).resolves.toMatchObject({

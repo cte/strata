@@ -113,17 +113,33 @@ export class Editor implements Component {
     }
 
     if (this.completions.length > 0 && this.focused) {
-      lines.push(padToWidth(theme.muted("─".repeat(Math.min(ctx.width, 20))), ctx.width));
-      const visible = this.completions.slice(0, 6);
-      for (let i = 0; i < visible.length; i += 1) {
-        const item = visible[i];
-        if (item === undefined) {
-          continue;
-        }
-        const marker = i === this.completionIndex ? theme.accent("›") : " ";
-        const label = i === this.completionIndex ? theme.bold(item.label) : item.label;
+      // Pi-aligned picker: no leading separator. Window slides so the
+      // selected item stays centered. Trailing `(i/total)` scroll indicator
+      // appears only when the list exceeds the visible window.
+      const maxVisible = 5;
+      const total = this.completions.length;
+      const startIndex = Math.max(
+        0,
+        Math.min(
+          this.completionIndex - Math.floor(maxVisible / 2),
+          total - maxVisible,
+        ),
+      );
+      const endIndex = Math.min(startIndex + maxVisible, total);
+      for (let i = startIndex; i < endIndex; i += 1) {
+        const item = this.completions[i];
+        if (item === undefined) continue;
+        const isSelected = i === this.completionIndex;
+        const prefix = isSelected ? "→ " : "  ";
+        const label = isSelected ? theme.accent(item.label) : item.label;
         const desc = item.description !== undefined ? `  ${theme.muted(item.description)}` : "";
-        lines.push(padToWidth(truncateToWidth(`${marker} ${label}${desc}`, ctx.width), ctx.width));
+        lines.push(padToWidth(truncateToWidth(`${prefix}${label}${desc}`, ctx.width), ctx.width));
+      }
+      if (startIndex > 0 || endIndex < total) {
+        const scrollText = `  (${this.completionIndex + 1}/${total})`;
+        lines.push(
+          padToWidth(theme.muted(truncateToWidth(scrollText, ctx.width)), ctx.width),
+        );
       }
     }
 
@@ -171,9 +187,17 @@ export class Editor implements Component {
         return "consumed";
       }
       if (key === "enter") {
+        // Pi's behavior: only slash-command completions submit on Enter; any
+        // other completion (file mentions, etc.) applies and stays on the
+        // line so the user can keep typing.
+        const accepted = this.completions[this.completionIndex];
+        const isSlashCommand =
+          accepted !== undefined && accepted.value.startsWith("/");
         this.applyCompletion();
-        // Fall through to the submit handler below so the completed
-        // slash command is dispatched in the same keystroke.
+        if (!isSlashCommand) {
+          return "consumed";
+        }
+        // Fall through to the submit handler below for slash commands.
       } else if (key === "escape") {
         this.completions = [];
         this.completionIndex = 0;
@@ -323,9 +347,15 @@ export class Editor implements Component {
       this.historyIndex === undefined
         ? delta < 0
           ? this.history.length - 1
-          : 0
+          : -1
         : this.historyIndex + delta;
-    if (next < 0 || next >= this.history.length) {
+    // Past the oldest entry — stay put. Pi's behavior is to stop at the edge,
+    // not wrap around to the most-recent.
+    if (next < 0) {
+      return;
+    }
+    // Past the newest — return to the empty current state.
+    if (next >= this.history.length) {
       this.historyIndex = undefined;
       this.text = "";
       this.cursor = 0;

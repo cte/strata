@@ -34,21 +34,23 @@ async function setupApp(width = 80, height = 20) {
 }
 
 describe("tui slash commands", () => {
-  test("/sessions opens an overlay and Esc dismisses it", async () => {
+  test("/sessions opens an inline picker and Esc dismisses it", async () => {
     const ctx = await setupApp();
     try {
       ctx.terminal.output = "";
       ctx.terminal.feed("/sessions\r");
       await pump();
       const opened = stripAnsi(ctx.terminal.output);
-      expect(opened).toContain("─ sessions ─");
-      expect(opened).toContain("No sessions yet.");
+      // Inline picker shape: header hint + (no sessions) note. No modal box.
+      expect(opened).toContain("Resume session");
+      expect(opened).toContain("(no sessions yet)");
+      expect(opened).not.toContain("─ sessions ─");
 
       ctx.terminal.output = "";
       ctx.terminal.feed("\x1b");
       await pump(80);
       const dismissed = stripAnsi(ctx.terminal.output);
-      expect(dismissed).not.toContain("─ sessions ─");
+      expect(dismissed).not.toContain("Resume session");
       expect(dismissed).toContain("›");
     } finally {
       await ctx.cleanup();

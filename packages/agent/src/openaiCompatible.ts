@@ -2,6 +2,7 @@ import type { JsonObject, JsonValue } from "@cortex/core";
 import type { ToolMetadata } from "@cortex/tools";
 import { ModelAdapterError } from "./model.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
+import { parseSseEvents } from "./sse.js";
 import type {
   AgentAttachment,
   AgentMessage,
@@ -19,7 +20,8 @@ export interface OpenAICompatibleChatModelOptions {
   fetchImpl?: typeof fetch;
 }
 
-interface OpenAIChatToolCall {
+interface OpenAIChatToolCallDelta {
+  index?: unknown;
   id?: unknown;
   type?: unknown;
   function?: {
@@ -28,19 +30,17 @@ interface OpenAIChatToolCall {
   };
 }
 
-interface OpenAIChatMessage {
-  content?: unknown;
-  tool_calls?: OpenAIChatToolCall[];
-}
-
-interface OpenAIChatChoice {
-  message?: OpenAIChatMessage;
+interface OpenAIChatStreamChoice {
+  delta?: {
+    content?: unknown;
+    tool_calls?: OpenAIChatToolCallDelta[];
+  };
   finish_reason?: unknown;
 }
 
-interface OpenAIChatResponse {
+interface OpenAIChatStreamChunk {
   id?: unknown;
-  choices?: OpenAIChatChoice[];
+  choices?: OpenAIChatStreamChoice[];
   usage?: JsonObject;
 }
 
@@ -69,6 +69,10 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
       tools: request.tools.map((tool) => toProviderTool(tool, toolNameMap.canonicalToProvider)),
       tool_choice: request.tools.length > 0 ? "auto" : "none",
       parallel_tool_calls: false,
+      // Pi-aligned: stream every request and ask for usage in the trailing
+      // chunk so the TUI can render assistant text incrementally.
+      stream: true,
+      stream_options: { include_usage: true },
     };
     if (request.reasoningEffort !== undefined && request.reasoningEffort !== "off") {
       // chat/completions accepts minimal|low|medium|high; map xhigh -> high.
@@ -79,6 +83,7 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
       headers: {
         authorization: `Bearer ${this.apiKey}`,
         "content-type": "application/json",
+        accept: "text/event-stream",
       },
       body: JSON.stringify(body),
     };
@@ -93,30 +98,116 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
         `Model request failed with HTTP ${response.status}: ${await response.text()}`,
       );
     }
-
-    const payload = (await response.json()) as OpenAIChatResponse;
-    const choice = payload.choices?.[0];
-    const message = choice?.message;
-    if (choice === undefined || message === undefined) {
+    if (response.body === null) {
       throw new ModelAdapterError(
         "model_response_invalid",
-        "Model response did not include a choice",
+        "Model response did not include a body",
       );
     }
 
-    const normalized: ModelResponse = {
-      content: normalizeContent(message.content),
-      toolCalls: normalizeToolCalls(message.tool_calls ?? [], toolNameMap.providerToCanonical),
-      finishReason: typeof choice.finish_reason === "string" ? choice.finish_reason : "unknown",
-    };
-    if (typeof payload.id === "string") {
-      normalized.providerResponseId = payload.id;
-    }
-    if (payload.usage !== undefined) {
-      normalized.usage = payload.usage;
-    }
-    return normalized;
+    return parseChatCompletionsStream(
+      parseSseEvents<OpenAIChatStreamChunk>(response),
+      toolNameMap.providerToCanonical,
+      request.onAssistantDelta,
+    );
   }
+}
+
+/**
+ * Pi-aligned chat-completions stream parser. Accumulates text content (with
+ * `onAssistantDelta` fan-out for each chunk), tool calls (keyed by the
+ * stream `index` so multi-tool turns don't collide), the final
+ * `finish_reason`, and the usage payload from the trailing chunk.
+ */
+async function parseChatCompletionsStream(
+  events: AsyncIterable<OpenAIChatStreamChunk>,
+  providerToCanonical: Map<string, string>,
+  onAssistantDelta: ((delta: string) => void) | undefined,
+): Promise<ModelResponse> {
+  let content = "";
+  let finishReason = "unknown";
+  let providerResponseId: string | undefined;
+  let usage: JsonObject | undefined;
+
+  // Accumulate tool calls in stream order. Pi keys these by the chunk's
+  // `index` field; we mirror that. Within an index, `id` and `name` arrive
+  // on the first chunk and `arguments` is appended across subsequent chunks.
+  const toolCallsByIndex = new Map<
+    number,
+    { id: string; name: string; argumentsText: string; order: number }
+  >();
+  let nextOrder = 0;
+
+  for await (const chunk of events) {
+    if (typeof chunk.id === "string" && providerResponseId === undefined) {
+      providerResponseId = chunk.id;
+    }
+    if (chunk.usage !== undefined) {
+      usage = chunk.usage;
+    }
+    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    if (choice === undefined) continue;
+
+    if (typeof choice.finish_reason === "string") {
+      finishReason = choice.finish_reason;
+    }
+    const delta = choice.delta;
+    if (delta === undefined) continue;
+
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      content += delta.content;
+      onAssistantDelta?.(delta.content);
+    }
+
+    if (Array.isArray(delta.tool_calls)) {
+      for (const toolCall of delta.tool_calls) {
+        const index = typeof toolCall.index === "number" ? toolCall.index : 0;
+        let entry = toolCallsByIndex.get(index);
+        if (entry === undefined) {
+          entry = {
+            id: typeof toolCall.id === "string" ? toolCall.id : "",
+            name: "",
+            argumentsText: "",
+            order: nextOrder,
+          };
+          nextOrder += 1;
+          toolCallsByIndex.set(index, entry);
+        }
+        if (typeof toolCall.id === "string" && toolCall.id !== "" && entry.id === "") {
+          entry.id = toolCall.id;
+        }
+        const fnName = toolCall.function?.name;
+        if (typeof fnName === "string" && fnName !== "" && entry.name === "") {
+          entry.name = fnName;
+        }
+        const fnArgs = toolCall.function?.arguments;
+        if (typeof fnArgs === "string" && fnArgs.length > 0) {
+          entry.argumentsText += fnArgs;
+        }
+      }
+    }
+  }
+
+  const toolCalls: AgentToolCall[] = Array.from(toolCallsByIndex.values())
+    .sort((a, b) => a.order - b.order)
+    .map((entry, idx) => ({
+      id: entry.id !== "" ? entry.id : `tool_call_${idx + 1}`,
+      name: providerToCanonical.get(entry.name) ?? (entry.name !== "" ? entry.name : "unknown.tool"),
+      argumentsText: entry.argumentsText !== "" ? entry.argumentsText : "{}",
+    }));
+
+  const normalized: ModelResponse = {
+    content,
+    toolCalls,
+    finishReason,
+  };
+  if (providerResponseId !== undefined) {
+    normalized.providerResponseId = providerResponseId;
+  }
+  if (usage !== undefined) {
+    normalized.usage = usage;
+  }
+  return normalized;
 }
 
 function toProviderMessage(message: AgentMessage, toolNameMap: Map<string, string>): JsonObject {
@@ -182,32 +273,3 @@ function toProviderTool(tool: ToolMetadata, toolNameMap: Map<string, string>): J
   };
 }
 
-function normalizeContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (content === null || content === undefined) {
-    return "";
-  }
-  return JSON.stringify(content);
-}
-
-function normalizeToolCalls(
-  toolCalls: OpenAIChatToolCall[],
-  providerToCanonical: Map<string, string>,
-): AgentToolCall[] {
-  return toolCalls.map((toolCall, index) => {
-    const providerName = toolCall.function?.name;
-    const id = toolCall.id;
-    const args = toolCall.function?.arguments;
-
-    return {
-      id: typeof id === "string" && id !== "" ? id : `tool_call_${index + 1}`,
-      name:
-        typeof providerName === "string"
-          ? (providerToCanonical.get(providerName) ?? providerName)
-          : "unknown.tool",
-      argumentsText: typeof args === "string" ? args : "{}",
-    };
-  });
-}

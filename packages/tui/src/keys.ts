@@ -11,6 +11,7 @@
 export type KeyId =
   | "enter"
   | "shift+enter"
+  | "alt+enter"
   | "escape"
   | "tab"
   | "shift+tab"
@@ -46,6 +47,7 @@ export type InputEvent =
 const RECOGNIZED_KEY_IDS = new Set<string>([
   "enter",
   "shift+enter",
+  "alt+enter",
   "escape",
   "tab",
   "shift+tab",

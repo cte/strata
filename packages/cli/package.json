@@ -9,6 +9,7 @@
   "dependencies": {
     "@cortex/agent": "workspace:*",
     "@cortex/core": "workspace:*",
+    "@cortex/ingest": "workspace:*",
     "@cortex/tools": "workspace:*",
     "@cortex/tui": "workspace:*"
   },

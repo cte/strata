@@ -9,7 +9,8 @@ import { formatTokens } from "./usage.js";
 
 export class StatusLine implements Component {
   state: AppState;
-  private loader = new Loader("Thinking");
+  private loader = new Loader("Thinking", "ctrl+c to interrupt");
+  private wasRunning = false;
 
   constructor(state: AppState) {
     this.state = state;
@@ -18,8 +19,14 @@ export class StatusLine implements Component {
   render(ctx: RenderContext): Frame {
     const blank = padToWidth("", ctx.width);
     if (this.state.running) {
+      // Reset the elapsed-time counter on the rising edge of `running`.
+      if (!this.wasRunning) {
+        this.loader.start();
+        this.wasRunning = true;
+      }
       return { lines: [blank, ...this.loader.render(ctx).lines] };
     }
+    this.wasRunning = false;
     if (this.state.status !== undefined) {
       return {
         lines: [
@@ -149,47 +156,114 @@ export class Footer implements Component {
   }
 }
 
-export class HelpOverlay implements Component {
-  active = false;
-  lines: string[];
-  onDismiss: () => void = () => {};
-
-  constructor(commands: { name: string; description: string }[]) {
-    this.lines = buildHelpContent(commands);
-  }
-
-  render(ctx: RenderContext): Frame {
-    return centerModal(this.lines, "help", ctx);
-  }
-
-  handleInput(event: { type: string; key?: string }): "consumed" | "passthrough" {
-    if (event.type === "key" && (event.key === "escape" || event.key === "enter")) {
-      this.active = false;
-      this.onDismiss();
-      return "consumed";
-    }
-    return "consumed";
-  }
+/**
+ * Shared inline picker shape used by every list-style selector (sessions,
+ * models, etc.). The picker renders as a few rows above the editor — same
+ * `→ ` selection arrow, accent-on-selected, `(i/total)` overflow indicator
+ * as the editor's slash-command autocomplete. No modal box, no full-viewport
+ * blanking.
+ */
+export interface InlinePickerOptions<T> {
+  active: boolean;
+  selectedIndex: number;
+  items: readonly T[];
+  /** Top hint line — usually keys + actions, rendered in muted color. */
+  header: string;
+  /** Shown when `items` is empty; rendered in muted color. */
+  emptyHint: string;
+  /**
+   * Returns the row content for a single item (without the selection
+   * arrow / padding prefix — the picker adds that). Free to apply ANSI
+   * styling per item; `isSelected` lets the caller emphasize the focused
+   * row.
+   */
+  renderRow: (item: T, isSelected: boolean) => string;
+  /**
+   * Optional override for the in-component max visible rows. Defaults to
+   * a small viewport-aware cap (3..10) so the picker stays a few lines
+   * tall regardless of how many items are in the list.
+   */
+  maxVisible?: number;
 }
 
-function buildHelpContent(commands: { name: string; description: string }[]): string[] {
-  return [
-    "Cortex TUI",
-    "",
-    "Editor:",
-    "  Enter        submit",
-    "  Shift+Enter  newline",
-    "  Tab          autocomplete /commands",
-    "  Shift+Tab    cycle thinking level",
-    "  Up/Down      history",
-    "  Ctrl+L       redraw",
-    "  Ctrl+C       cancel run / clear / exit",
-    "",
-    "Slash commands:",
-    ...commands.map((cmd) => `  /${cmd.name.padEnd(10)} ${cmd.description}`),
-    "",
-    "Press Esc or Enter to dismiss.",
-  ];
+export function renderInlinePicker<T>(
+  ctx: RenderContext,
+  opts: InlinePickerOptions<T>,
+): Frame {
+  if (!opts.active) {
+    return { lines: [] };
+  }
+  const lines: string[] = [];
+  lines.push(
+    padToWidth(truncateToWidth(theme.muted(opts.header), ctx.width), ctx.width),
+  );
+  if (opts.items.length === 0) {
+    lines.push(
+      padToWidth(truncateToWidth(theme.muted(opts.emptyHint), ctx.width), ctx.width),
+    );
+    return { lines };
+  }
+  const total = opts.items.length;
+  const maxVisible =
+    opts.maxVisible ?? Math.max(3, Math.min(10, Math.floor(ctx.height / 3)));
+  const { startIndex, endIndex } = computeScrollWindow(total, opts.selectedIndex, maxVisible);
+  for (let i = startIndex; i < endIndex; i += 1) {
+    const item = opts.items[i];
+    if (item === undefined) continue;
+    const isSelected = i === opts.selectedIndex;
+    const prefix = isSelected ? "→ " : "  ";
+    const body = opts.renderRow(item, isSelected);
+    lines.push(padToWidth(truncateToWidth(`${prefix}${body}`, ctx.width), ctx.width));
+  }
+  if (startIndex > 0 || endIndex < total) {
+    lines.push(
+      padToWidth(
+        theme.muted(
+          truncateToWidth(`  (${opts.selectedIndex + 1}/${total})`, ctx.width),
+        ),
+        ctx.width,
+      ),
+    );
+  }
+  return { lines };
+}
+
+/**
+ * Pi-style centered scroll window for list overlays. Keeps the selected item
+ * roughly centered in the visible slice; the slice clamps to the bounds so
+ * the first/last entries don't get pinned off-screen at the list edges.
+ *
+ * The caller decides `maxVisible` based on the available row budget (see
+ * `availableListRows` for `centerModal`-hosted lists).
+ */
+export function computeScrollWindow(
+  total: number,
+  selectedIndex: number,
+  maxVisible: number,
+): { startIndex: number; endIndex: number } {
+  if (total === 0 || maxVisible <= 0) {
+    return { startIndex: 0, endIndex: 0 };
+  }
+  const visible = Math.min(maxVisible, total);
+  const startIndex = Math.max(
+    0,
+    Math.min(selectedIndex - Math.floor(visible / 2), total - visible),
+  );
+  const endIndex = Math.min(startIndex + visible, total);
+  return { startIndex, endIndex };
+}
+
+/**
+ * Row budget for a scrolling list rendered inside a `centerModal`. The modal
+ * has 4 lines of chrome (top border + top padding + bottom padding + bottom
+ * border), and `centerModal` clamps the whole frame to `ctx.height`, so the
+ * list can use `ctx.height - 4 - reservedRows` rows without being truncated.
+ *
+ * `reservedRows` should account for any non-list lines the caller will append
+ * (hint footer, blank separator, scroll indicator).
+ */
+export function availableListRows(ctx: RenderContext, reservedRows: number): number {
+  return Math.max(1, ctx.height - 4 - reservedRows);
 }
 
 export function centerModal(content: string[], title: string, ctx: RenderContext): Frame {

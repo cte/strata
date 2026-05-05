@@ -1,8 +1,8 @@
 import type { SessionRecord } from "@cortex/core";
-import { theme, truncateToWidth } from "../ansi.js";
+import { theme } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import type { InputEvent } from "../keys.js";
-import { centerModal } from "./chrome.js";
+import { renderInlinePicker } from "./chrome.js";
 
 export class SessionSelector implements Component {
   active = false;
@@ -30,38 +30,49 @@ export class SessionSelector implements Component {
   }
 
   render(ctx: RenderContext): Frame {
-    const lines: string[] = [];
-    if (this.sessions.length === 0) {
-      lines.push(theme.muted("No sessions yet."));
-    } else {
-      for (let i = 0; i < Math.min(this.sessions.length, 12); i += 1) {
-        const session = this.sessions[i];
-        if (session === undefined) {
-          continue;
-        }
-        const marker = i === this.selectedIndex ? theme.accent("›") : " ";
+    return renderInlinePicker(ctx, {
+      active: this.active,
+      selectedIndex: this.selectedIndex,
+      items: this.sessions,
+      header: "Resume session — ↑/↓ select, Enter resume, Esc cancel",
+      emptyHint: "  (no sessions yet)",
+      renderRow: (session, isSelected) => {
         const status = formatStatus(session);
-        const title = session.title === "" ? session.kind : session.title;
-        lines.push(
-          `${marker} ${status} ${theme.muted(session.startedAt.slice(0, 19))} ${truncateToWidth(title, 50)}`,
-        );
-      }
-    }
-    lines.push("");
-    lines.push(theme.muted("Up/Down to move · Enter to select · Esc to cancel"));
-    return centerModal(lines, "sessions", ctx);
+        const date = theme.muted(session.startedAt.slice(0, 10));
+        const rawTitle = session.title === "" ? session.kind : session.title;
+        const title = isSelected ? theme.accent(rawTitle) : rawTitle;
+        return `${status} ${date}  ${title}`;
+      },
+    });
   }
 
   handleInput(event: InputEvent): "consumed" | "passthrough" {
-    if (event.type !== "key") {
-      return "consumed";
+    if (!this.active || event.type !== "key") {
+      return "passthrough";
     }
+    const last = Math.max(0, this.sessions.length - 1);
     if (event.key === "up") {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       return "consumed";
     }
     if (event.key === "down") {
-      this.selectedIndex = Math.min(Math.max(0, this.sessions.length - 1), this.selectedIndex + 1);
+      this.selectedIndex = Math.min(last, this.selectedIndex + 1);
+      return "consumed";
+    }
+    if (event.key === "pageup") {
+      this.selectedIndex = Math.max(0, this.selectedIndex - 10);
+      return "consumed";
+    }
+    if (event.key === "pagedown") {
+      this.selectedIndex = Math.min(last, this.selectedIndex + 10);
+      return "consumed";
+    }
+    if (event.key === "home") {
+      this.selectedIndex = 0;
+      return "consumed";
+    }
+    if (event.key === "end") {
+      this.selectedIndex = last;
       return "consumed";
     }
     if (event.key === "enter") {

@@ -4,10 +4,9 @@ import {
   loginChatGpt,
   setChatGptCredentials,
 } from "@cortex/agent";
-import { theme, truncateToWidth } from "../ansi.js";
+import { padToWidth, theme, truncateToWidth } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import type { InputEvent } from "../keys.js";
-import { centerModal } from "./chrome.js";
 
 export interface AuthDialogResult {
   ok: boolean;
@@ -83,18 +82,22 @@ export class AuthDialog implements Component {
   }
 
   render(ctx: RenderContext): Frame {
-    const lines: string[] = [];
-    lines.push(theme.bold("Sign in to ChatGPT"));
-    lines.push("");
-    if (this.url !== "") {
-      lines.push(theme.accent(this.url));
-      lines.push("");
+    if (!this.active) {
+      return { lines: [] };
     }
-    lines.push(theme.muted(this.status));
-    lines.push("");
-    lines.push(`${theme.muted("paste:")} ${this.renderInput(60)}`);
-    lines.push(theme.muted("Enter to submit · Esc to cancel"));
-    return centerModal(lines, "login", ctx);
+    // Inline format — same placement as the session/model picker (just a
+    // few lines above the editor, no centered modal box).
+    const out: string[] = [];
+    const push = (line: string) =>
+      out.push(padToWidth(truncateToWidth(line, ctx.width), ctx.width));
+    push(theme.bold("Sign in to ChatGPT"));
+    if (this.url !== "") {
+      push(theme.accent(this.url));
+    }
+    push(theme.muted(this.status));
+    push(`${theme.muted("paste:")} ${this.renderInput(Math.max(20, ctx.width - 12))}`);
+    push(theme.muted("Enter to submit · Esc to cancel"));
+    return { lines: out };
   }
 
   handleInput(event: InputEvent): "consumed" | "passthrough" {

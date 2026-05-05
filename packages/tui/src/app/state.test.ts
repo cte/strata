@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { initialAppState, nextThinkingLevel, recordModelUsage } from "./state.js";
+import {
+  appendAssistantDelta,
+  finalizeAssistantStream,
+  initialAppState,
+  nextThinkingLevel,
+  recordModelUsage,
+} from "./state.js";
 
 describe("nextThinkingLevel", () => {
   test("cycles through pi's level set in order", () => {
@@ -53,5 +59,71 @@ describe("recordModelUsage", () => {
     expect(state.usage.cacheWrite).toBe(10);
     expect(state.usage.latestContextTokens).toBe(180);
     expect(state.contextWindow).toBe(128_000);
+  });
+});
+
+describe("assistant streaming", () => {
+  function makeState() {
+    return initialAppState("openai-codex", "gpt-5.5", {
+      codexLoggedIn: false,
+      apiKeyConfigured: false,
+    });
+  }
+
+  test("first delta creates a streaming item; subsequent deltas extend it in place", () => {
+    const state = makeState();
+    appendAssistantDelta(state, 1, "Hel");
+    appendAssistantDelta(state, 1, "lo, ");
+    appendAssistantDelta(state, 1, "world");
+
+    expect(state.transcript).toHaveLength(1);
+    const item = state.transcript[0];
+    expect(item).toMatchObject({
+      kind: "assistant",
+      iteration: 1,
+      content: "Hello, world",
+      streaming: true,
+    });
+  });
+
+  test("a new iteration's deltas open a new transcript item rather than appending to the prior one", () => {
+    const state = makeState();
+    appendAssistantDelta(state, 1, "first");
+    finalizeAssistantStream(state, 1, "first");
+    appendAssistantDelta(state, 2, "second");
+
+    expect(state.transcript).toHaveLength(2);
+    const [first, second] = state.transcript;
+    expect(first).toMatchObject({ iteration: 1, content: "first", streaming: false });
+    expect(second).toMatchObject({ iteration: 2, content: "second", streaming: true });
+  });
+
+  test("finalize replaces streamed content with the canonical model text and clears the streaming flag", () => {
+    const state = makeState();
+    appendAssistantDelta(state, 1, "partial");
+    finalizeAssistantStream(state, 1, "partial-final-version");
+
+    expect(state.transcript).toHaveLength(1);
+    expect(state.transcript[0]).toMatchObject({
+      kind: "assistant",
+      content: "partial-final-version",
+      streaming: false,
+    });
+  });
+
+  test("finalize with no deltas (tool-only iteration) does not push an empty assistant item", () => {
+    const state = makeState();
+    finalizeAssistantStream(state, 1, "");
+    expect(state.transcript).toHaveLength(0);
+  });
+
+  test("finalize with no prior deltas but real content appends a fresh item", () => {
+    const state = makeState();
+    finalizeAssistantStream(state, 1, "non-streamed answer");
+    expect(state.transcript).toHaveLength(1);
+    const item = state.transcript[0];
+    expect(item?.kind).toBe("assistant");
+    expect(item?.kind === "assistant" && item.content).toBe("non-streamed answer");
+    expect(item?.kind === "assistant" && item.streaming).toBeUndefined();
   });
 });

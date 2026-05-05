@@ -1,8 +1,8 @@
-import { theme, truncateToWidth } from "../ansi.js";
+import { padToWidth, theme, truncateToWidth } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { Loader } from "../components.js";
 import type { InputEvent } from "../keys.js";
-import { centerModal } from "./chrome.js";
+import { renderInlinePicker } from "./chrome.js";
 
 export interface ModelOption {
   id: string;
@@ -59,36 +59,42 @@ export class ModelSelector implements Component {
   }
 
   render(ctx: RenderContext): Frame {
-    const lines: string[] = [];
+    if (!this.active) {
+      return { lines: [] };
+    }
+
     if (this.loading) {
-      lines.push(this.loader.render(ctx).lines[0] ?? theme.muted("Loading models from OpenAI…"));
-    } else if (this.errorMessage !== undefined) {
-      lines.push(theme.error(`Failed to load models: ${this.errorMessage}`));
-    } else if (this.models.length === 0) {
-      lines.push(theme.muted("No chat-capable models returned."));
-    } else {
-      for (let i = 0; i < this.models.length; i += 1) {
-        const model = this.models[i];
-        if (model === undefined) {
-          continue;
-        }
-        const marker = i === this.selectedIndex ? theme.accent("›") : " ";
-        const label =
-          i === this.selectedIndex ? theme.bold(theme.accent(model.id)) : theme.bold(model.id);
+      const loaderLine =
+        this.loader.render(ctx).lines[0] ?? theme.muted("Loading models from OpenAI…");
+      return { lines: [padToWidth(truncateToWidth(loaderLine, ctx.width), ctx.width)] };
+    }
+
+    if (this.errorMessage !== undefined) {
+      const errorLine = theme.error(`Failed to load models: ${this.errorMessage}`);
+      return { lines: [padToWidth(truncateToWidth(errorLine, ctx.width), ctx.width)] };
+    }
+
+    return renderInlinePicker(ctx, {
+      active: true,
+      selectedIndex: this.selectedIndex,
+      items: this.models,
+      header: "Select model — ↑/↓ select, Enter use, Esc cancel",
+      emptyHint: "  (no chat-capable models returned)",
+      renderRow: (model, isSelected) => {
+        const name = isSelected ? theme.bold(theme.accent(model.id)) : theme.bold(model.id);
         const current = model.id === this.currentModel ? theme.success(" (current)") : "";
         const desc =
-          model.description === "" ? "" : ` ${theme.muted(truncateToWidth(model.description, 40))}`;
-        lines.push(`${marker} ${label}${current}${desc}`);
-      }
-    }
-    lines.push("");
-    lines.push(theme.muted("Up/Down to move · Enter to select · Esc to cancel"));
-    return centerModal(lines, "model", ctx);
+          model.description === ""
+            ? ""
+            : ` ${theme.muted(truncateToWidth(model.description, 50))}`;
+        return `${name}${current}${desc}`;
+      },
+    });
   }
 
   handleInput(event: InputEvent): "consumed" | "passthrough" {
-    if (event.type !== "key") {
-      return "consumed";
+    if (!this.active || event.type !== "key") {
+      return "passthrough";
     }
     if (event.key === "escape") {
       this.onCancel();
@@ -97,12 +103,29 @@ export class ModelSelector implements Component {
     if (this.loading || this.errorMessage !== undefined || this.models.length === 0) {
       return "consumed";
     }
+    const last = Math.max(0, this.models.length - 1);
     if (event.key === "up") {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       return "consumed";
     }
     if (event.key === "down") {
-      this.selectedIndex = Math.min(Math.max(0, this.models.length - 1), this.selectedIndex + 1);
+      this.selectedIndex = Math.min(last, this.selectedIndex + 1);
+      return "consumed";
+    }
+    if (event.key === "pageup") {
+      this.selectedIndex = Math.max(0, this.selectedIndex - 10);
+      return "consumed";
+    }
+    if (event.key === "pagedown") {
+      this.selectedIndex = Math.min(last, this.selectedIndex + 10);
+      return "consumed";
+    }
+    if (event.key === "home") {
+      this.selectedIndex = 0;
+      return "consumed";
+    }
+    if (event.key === "end") {
+      this.selectedIndex = last;
       return "consumed";
     }
     if (event.key === "enter") {

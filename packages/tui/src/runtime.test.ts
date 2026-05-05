@@ -99,6 +99,39 @@ describe("TuiRuntime", () => {
     expect(after).not.toContain("\x1b[2J");
   });
 
+  test("falls back to a full redraw when an early-line change forces a scroll past it", async () => {
+    // Regression for the scrollback-phantom bug: when the diff path inserts
+    // new lines at a low absolute index AND the new content extends past the
+    // previous viewport bottom, the planned scroll would push firstChanged
+    // into scrollback. We must bail to a full redraw instead of writing into
+    // scrollback (which the terminal silently clamps and leaves stale rows).
+    const terminal = new FakeTerminal(20, 4);
+    const lines = ["a", "b", "c"];
+    const root: { render: () => { lines: string[] } } = {
+      render: () => ({ lines: lines.slice() }),
+    };
+    const runtime = new TuiRuntime({ terminal, root });
+    runtime.start();
+    await pump();
+    // Now insert two lines NEAR THE TOP and append more content at the
+    // bottom — this is the pattern that triggered phantom scrollback rows
+    // (the StatusLine's leading blank when an agent run started).
+    lines.length = 0;
+    lines.push("a", "X", "Y", "b", "c", "d", "e");
+    const beforeFrames = terminal.frames.length;
+    runtime.invalidate();
+    await pump();
+    runtime.stop();
+    const newFrames = terminal.frames.slice(beforeFrames).join("");
+    // Either a full-clear (now an explicit per-row \x1b[2K walk; previously
+    // \x1b[2J) or a clean diff. The bug caused neither — content got
+    // written into the wrong rows. Assert that a clear+rewrite fired by
+    // looking for the per-row clear-line sequence.
+    expect(newFrames.includes("\x1b[2K")).toBe(true);
+    expect(stripAnsi(terminal.output)).toContain("X");
+    expect(stripAnsi(terminal.output)).toContain("e");
+  });
+
   test("dispatches input through the buffer", async () => {
     const terminal = new FakeTerminal(20, 4);
     const root = new Container([new Text("hi")]);

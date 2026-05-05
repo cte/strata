@@ -3,6 +3,7 @@ import type { ToolMetadata } from "@cortex/tools";
 import type { ChatGptCredentials } from "./authStore.js";
 import { ModelAdapterError } from "./model.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
+import { parseSseEvents } from "./sse.js";
 import type {
   AgentMessage,
   AgentToolCall,
@@ -76,7 +77,11 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
       );
     }
 
-    return parseCodexSseResponse(parseSse(response), toolNameMap.providerToCanonical);
+    return parseCodexSseResponse(
+      parseSseEvents<ResponseEvent>(response),
+      toolNameMap.providerToCanonical,
+      request.onAssistantDelta,
+    );
   }
 }
 
@@ -199,6 +204,7 @@ function toResponsesTool(tool: ToolMetadata, canonicalToProvider: Map<string, st
 async function parseCodexSseResponse(
   events: AsyncIterable<ResponseEvent>,
   providerToCanonical: Map<string, string>,
+  onAssistantDelta?: (delta: string) => void,
 ): Promise<ModelResponse> {
   let content = "";
   let finishReason = "unknown";
@@ -220,6 +226,7 @@ async function parseCodexSseResponse(
     } else if (type === "response.output_text.delta") {
       if (typeof event.delta === "string") {
         content += event.delta;
+        onAssistantDelta?.(event.delta);
       }
     } else if (type === "response.output_item.added") {
       const item = event.item as
@@ -323,42 +330,6 @@ async function parseCodexSseResponse(
     response.usage = usage;
   }
   return response;
-}
-
-async function* parseSse(response: Response): AsyncGenerator<ResponseEvent> {
-  const reader = response.body?.getReader();
-  if (reader === undefined) {
-    return;
-  }
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let separator = buffer.indexOf("\n\n");
-      while (separator !== -1) {
-        const chunk = buffer.slice(0, separator);
-        buffer = buffer.slice(separator + 2);
-        const data = chunk
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n")
-          .trim();
-        if (data !== "" && data !== "[DONE]") {
-          yield JSON.parse(data) as ResponseEvent;
-        }
-        separator = buffer.indexOf("\n\n");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 function resolveCodexResponsesUrl(baseUrl: string): string {

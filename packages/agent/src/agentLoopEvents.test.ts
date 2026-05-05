@@ -89,6 +89,54 @@ describe("runAgentLoopEvents", () => {
     }
   });
 
+  test("emits assistant.delta events while the adapter streams text", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-stream-"));
+    try {
+      const streamingModel: ModelAdapter = {
+        name: "streaming-test",
+        async complete(request: ModelRequest): Promise<ModelResponse> {
+          // Simulate three SSE deltas arriving in sequence before the final
+          // response resolves — the loop should yield each as an
+          // `assistant.delta` event prior to the `model.response`.
+          for (const chunk of ["Hello", ", ", "world"]) {
+            request.onAssistantDelta?.(chunk);
+            await new Promise((resolve) => setTimeout(resolve, 1));
+          }
+          return {
+            content: "Hello, world",
+            finishReason: "stop",
+            toolCalls: [],
+          };
+        },
+      };
+
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "say hi",
+        model: streamingModel,
+        repoRoot,
+      })) {
+        events.push(event);
+      }
+
+      const deltas = events.filter((e) => e.type === "assistant.delta");
+      expect(deltas.map((e) => (e.type === "assistant.delta" ? e.contentDelta : ""))).toEqual([
+        "Hello",
+        ", ",
+        "world",
+      ]);
+
+      // assistant.delta events must precede the model.response event for the
+      // same iteration — that's what lets the TUI grow the transcript
+      // incrementally and finalize once at the end.
+      const firstDeltaIdx = events.findIndex((e) => e.type === "assistant.delta");
+      const responseIdx = events.findIndex((e) => e.type === "model.response");
+      expect(firstDeltaIdx).toBeLessThan(responseIdx);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("aborts mid-run when the signal fires and ends the session interrupted", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-cancel-"));
     try {

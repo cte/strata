@@ -110,6 +110,8 @@ Initialize git. First commit: "Initial wiki skeleton."
 
 Set up each source. Test each one with a single sample fetch before moving on.
 
+Connector implementation should converge on a shared Bun/TypeScript contract under `packages/ingest/` before adding more UI surfaces. CLI commands, the TUI, scheduled jobs, and the future web control plane should all call the same connector APIs for configuration validation, status checks, dry-runs, pulls, and trace-backed results.
+
 #### 2a. Granola (API path)
 Build a small Python or Node script `tools/pull_granola.py`:
 - Authenticates with the API token from `.env`.
@@ -130,7 +132,10 @@ Use the official Slack MCP server (or a community one with read access). Configu
 - Each thread written as a single file with all messages, threaded, including reactions.
 
 #### 2d. Notion
-Use the official Notion MCP server. Configure with the workspace token. Build a `tools/pull_notion.py` that, given a page ID or recent-edits query, snapshots the doc into `raw/notion/`.
+Use the official Notion API with a workspace integration token. `packages/ingest/src/notion.ts` is the shared Bun/TypeScript connector; `cortex ingest notion --page-id <id-or-url>` snapshots a page into `raw/notion/` and records an ingest trace. Keep recent-edits and database/query pulls as later extensions after page snapshots are stable.
+
+#### 2e. Connector setup control plane
+After connector contracts and at least one raw-to-wiki ingest path are stable, add a local web UI for configuring sources. The web app should support connector setup/status, token/OAuth guidance, page/channel selection, dry-runs, last-pull history, scheduling, and proposal review. It must not own connector logic; it should call the same shared connector APIs as `cortex ingest`.
 
 ### Phase 3 — Ingest workflows
 
@@ -331,7 +336,7 @@ All pages have YAML frontmatter (see project plan §6).
 Same shape. But: many threads add nothing — that's correct, skip them. Surface only material content (decisions, commitments, new threads, factual updates).
 
 ### Ingest — Notion doc
-Same shape. Notion is already curated, so most updates are: link from project page, extract any decisions or new commitments, snapshot into `raw/notion/`.
+First snapshot the page into `raw/notion/` with `cortex ingest notion --page-id <id-or-url>`. Then apply the same raw-to-wiki shape as Granola: link from relevant project pages, extract decisions and commitments, update actions/threads, update `index.md`, and append `log.md`. Notion is already curated, so broad rewrites should usually be staged as proposals rather than applied silently.
 
 ### Query
 1. Read `priorities.md`, `me.md`, `index.md`.

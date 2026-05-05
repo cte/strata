@@ -8,6 +8,7 @@
     "./agent-loop": "./src/agentLoop.ts",
     "./auth-store": "./src/authStore.ts",
     "./chatgpt-oauth": "./src/chatgptOAuth.ts",
+    "./maintenance": "./src/maintenance.ts",
     "./model": "./src/model.ts",
     "./openai-codex": "./src/openaiCodex.ts",
     "./openai-compatible": "./src/openaiCompatible.ts",

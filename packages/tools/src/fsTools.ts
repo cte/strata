@@ -59,6 +59,7 @@ interface FsEditArgs extends JsonObject {
   path?: JsonValue;
   oldText?: JsonValue;
   newText?: JsonValue;
+  edits?: JsonValue;
   replaceAll?: JsonValue;
   maxFileBytes?: JsonValue;
 }
@@ -74,6 +75,8 @@ interface FsGrepMatch extends JsonObject {
   path: string;
   line: number;
   preview: string;
+  before?: string[];
+  after?: string[];
 }
 
 export interface WriteTextFileInput {
@@ -93,10 +96,14 @@ export interface WriteTextFileResult extends JsonObject {
   overwritten: boolean;
 }
 
-export interface EditTextFileInput {
-  path: string;
+export interface EditTextFileEdit {
   oldText: string;
   newText: string;
+}
+
+export interface EditTextFileInput {
+  path: string;
+  edits: EditTextFileEdit[];
   replaceAll: boolean;
   maxFileBytes: number;
 }
@@ -107,12 +114,17 @@ export interface EditTextFileResult extends JsonObject {
   replacements: number;
   bytes: number;
   hash: string;
+  /** Unified-diff hunk for the first changed region, or "" if no diff. */
+  diff: string;
 }
 
 type FsEntryType = "file" | "directory" | "symlink" | "other";
 
-const DEFAULT_LIST_LIMIT = 200;
-const DEFAULT_FIND_LIMIT = 200;
+// Pi-aligned defaults for tool result caps. fs.list / fs.find return 500 by
+// default; fs.grep returns 100 by default. The MAX_LIMIT cap above is still
+// respected as a hard upper bound on `limit` overrides.
+const DEFAULT_LIST_LIMIT = 500;
+const DEFAULT_FIND_LIMIT = 500;
 const DEFAULT_GREP_LIMIT = 100;
 const DEFAULT_MAX_READ_BYTES = 1_000_000;
 const DEFAULT_MAX_READ_CHARS = 64_000;
@@ -158,7 +170,10 @@ const fsListTool: ToolDefinition<FsListArgs> = {
   },
   maxResultChars: 96_000,
   async handler(args, context) {
-    const requestedPath = optionalString(args.path, ".", "path");
+    // Models frequently pass `path: ""` for "list the repo root". Treat empty
+    // (or whitespace-only) the same as omitted — defaults to ".".
+    const rawPath = optionalString(args.path, ".", "path").trim();
+    const requestedPath = rawPath === "" ? "." : rawPath;
     const recursive = optionalBoolean(args.recursive, false, "recursive");
     const includeRaw = optionalBoolean(args.includeRaw, false, "includeRaw");
     const limit = optionalInteger(args.limit, DEFAULT_LIST_LIMIT, "limit", 1, MAX_LIMIT);
@@ -184,7 +199,7 @@ const fsListTool: ToolDefinition<FsListArgs> = {
 const fsReadTool: ToolDefinition<FsReadArgs> = {
   name: "fs.read",
   description:
-    "Read a UTF-8 text file inside the Cortex repo without following symlinks. Raw sources require includeRaw.",
+    "Read a UTF-8 text file inside the Cortex repo without following symlinks. Use offset/limit to read a slice of large files. Raw sources require includeRaw.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -192,6 +207,16 @@ const fsReadTool: ToolDefinition<FsReadArgs> = {
     required: ["path"],
     properties: {
       path: { type: "string", description: "Repo-relative file path." },
+      offset: {
+        type: "integer",
+        minimum: 1,
+        description: "1-indexed line number to start reading from. Pi-aligned semantics.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        description: "Maximum number of lines to read. Defaults to all remaining lines.",
+      },
       includeRaw: { type: "boolean", description: "Allow reading immutable raw source files." },
       maxBytes: { type: "integer", minimum: 1, maximum: MAX_READ_BYTES },
       maxChars: { type: "integer", minimum: 1, maximum: MAX_READ_CHARS },
@@ -215,6 +240,8 @@ const fsReadTool: ToolDefinition<FsReadArgs> = {
       1,
       MAX_READ_CHARS,
     );
+    const offset = optionalInteger(args.offset, 1, "offset", 1, Number.MAX_SAFE_INTEGER);
+    const limit = optionalInteger(args.limit, 0, "limit", 0, Number.MAX_SAFE_INTEGER);
     const resolved = assertReadAllowed(context.repoRoot, requestedPath, {
       allowRawRead: includeRaw,
     });
@@ -228,7 +255,20 @@ const fsReadTool: ToolDefinition<FsReadArgs> = {
       );
     }
 
-    const content = decodeText(await readFile(resolved.absolutePath), resolved.relativePath);
+    const fullContent = decodeText(await readFile(resolved.absolutePath), resolved.relativePath);
+    const useSlice = args.offset !== undefined || args.limit !== undefined;
+    let content = fullContent;
+    let firstLine = 1;
+    let lastLine = fullContent === "" ? 0 : fullContent.split("\n").length;
+    if (useSlice) {
+      const lines = fullContent.split("\n");
+      const startIndex = Math.min(Math.max(0, offset - 1), lines.length);
+      const endIndex = limit > 0 ? Math.min(lines.length, startIndex + limit) : lines.length;
+      const slice = lines.slice(startIndex, endIndex);
+      content = slice.join("\n");
+      firstLine = startIndex + 1;
+      lastLine = startIndex + slice.length;
+    }
     const truncated = content.length > maxChars;
     return {
       path: resolved.relativePath,
@@ -236,6 +276,9 @@ const fsReadTool: ToolDefinition<FsReadArgs> = {
       chars: content.length,
       content: truncated ? content.slice(0, maxChars) : content,
       truncated,
+      firstLine,
+      lastLine,
+      totalLines: fullContent === "" ? 0 : fullContent.split("\n").length,
     };
   },
 };
@@ -265,7 +308,7 @@ const fsFindTool: ToolDefinition<FsFindArgs> = {
   maxResultChars: 96_000,
   async handler(args, context) {
     const pattern = requiredNonEmptyString(args.pattern, "pattern");
-    const root = optionalString(args.root, ".", "root");
+    const root = optionalString(args.root, ".", "root").trim() || ".";
     const caseSensitive = optionalBoolean(args.caseSensitive, false, "caseSensitive");
     const includeRaw = optionalBoolean(args.includeRaw, false, "includeRaw");
     const includeDirs = optionalBoolean(args.includeDirs, true, "includeDirs");
@@ -304,20 +347,37 @@ const fsFindTool: ToolDefinition<FsFindArgs> = {
 const fsGrepTool: ToolDefinition<FsGrepArgs> = {
   name: "fs.grep",
   description:
-    "Search UTF-8 text files in the Cortex repo by substring, skipping blocked directories and binary files.",
+    "Search UTF-8 text files in the Cortex repo. Pattern is a JavaScript regex by default; pass `literal: true` for substring search. Skips blocked directories and binary files.",
   mode: "read",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["query"],
     properties: {
-      query: { type: "string", description: "Text substring to search for." },
+      pattern: { type: "string", description: "Regex pattern (or literal string when literal=true)." },
+      query: {
+        type: "string",
+        description: "Alias for pattern. Kept for backward compatibility.",
+      },
       root: { type: "string", description: "Repo-relative directory or file to search." },
       pathPattern: {
         type: "string",
-        description: "Optional path substring or '*' wildcard filter for files.",
+        description: "Optional path substring or '*'-glob filter for files.",
       },
-      caseSensitive: { type: "boolean" },
+      ignoreCase: { type: "boolean", description: "Case-insensitive search." },
+      caseSensitive: {
+        type: "boolean",
+        description: "Inverse of ignoreCase. Kept for backward compatibility.",
+      },
+      literal: {
+        type: "boolean",
+        description: "Treat pattern as a literal string rather than a regex.",
+      },
+      context: {
+        type: "integer",
+        minimum: 0,
+        maximum: 50,
+        description: "Lines of context before and after each match (default 0).",
+      },
       includeRaw: { type: "boolean", description: "Allow searching immutable raw source files." },
       limit: { type: "integer", minimum: 1, maximum: MAX_LIMIT },
       maxFileBytes: { type: "integer", minimum: 1, maximum: MAX_GREP_FILE_BYTES },
@@ -325,10 +385,24 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
   },
   maxResultChars: 96_000,
   async handler(args, context) {
-    const query = requiredNonEmptyString(args.query, "query");
-    const root = optionalString(args.root, ".", "root");
+    // Pi calls it `pattern`; cortex used to require `query`. Accept either,
+    // preferring `pattern` when both are passed.
+    const rawPattern =
+      typeof args.pattern === "string" && args.pattern.length > 0
+        ? args.pattern
+        : optionalString(args.query, "", "query");
+    if (rawPattern === "") {
+      throw new PolicyViolationError("invalid_args", "pattern (or query) is required");
+    }
+    const root = optionalString(args.root, ".", "root").trim() || ".";
     const pathPattern = optionalString(args.pathPattern, "", "pathPattern");
-    const caseSensitive = optionalBoolean(args.caseSensitive, false, "caseSensitive");
+    // ignoreCase is the canonical name; caseSensitive (legacy) is its inverse.
+    let ignoreCase = optionalBoolean(args.ignoreCase, false, "ignoreCase");
+    if (args.caseSensitive !== undefined) {
+      ignoreCase = !optionalBoolean(args.caseSensitive, true, "caseSensitive");
+    }
+    const literal = optionalBoolean(args.literal, false, "literal");
+    const contextLines = optionalInteger(args.context, 0, "context", 0, 50);
     const includeRaw = optionalBoolean(args.includeRaw, false, "includeRaw");
     const limit = optionalInteger(args.limit, DEFAULT_GREP_LIMIT, "limit", 1, MAX_LIMIT);
     const maxFileBytes = optionalInteger(
@@ -343,20 +417,20 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
       allowRawRead: includeRaw,
     });
     await rejectSymlinkPathSegments(resolved.repoRoot, resolved.relativePath);
-    const grepOptions: GrepOptions = {
-      query,
-      caseSensitive,
-      includeRaw,
+    const result = await ripgrepSearch({
+      repoRoot: context.repoRoot,
+      searchPath: resolved.absolutePath,
+      pattern: rawPattern,
+      pathPattern,
+      ignoreCase,
+      literal,
+      contextLines,
       limit,
       maxFileBytes,
-    };
-    if (pathPattern !== "") {
-      grepOptions.pathMatcher = createPathMatcher(pathPattern, caseSensitive);
-    }
-
-    const result = await grepPaths(context.repoRoot, resolved.absolutePath, grepOptions);
+      includeRaw,
+    });
     return {
-      query,
+      pattern: rawPattern,
       root: resolved.relativePath,
       matches: result.matches,
       count: result.matches.length,
@@ -368,7 +442,7 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
 const fsWriteTool: ToolDefinition<FsWriteArgs> = {
   name: "fs.write",
   description:
-    "Create or explicitly overwrite a UTF-8 text file inside the Cortex repo. Writes under raw sources are forbidden.",
+    "Create or overwrite a UTF-8 text file inside the Cortex repo. Missing parent directories are created automatically. Writes under raw sources are forbidden.",
   mode: "write",
   inputSchema: {
     type: "object",
@@ -379,11 +453,11 @@ const fsWriteTool: ToolDefinition<FsWriteArgs> = {
       content: { type: "string", description: "UTF-8 text content to write." },
       overwrite: {
         type: "boolean",
-        description: "Allow replacing an existing file. Defaults to false.",
+        description: "Allow replacing an existing file. Defaults to true.",
       },
       createDirs: {
         type: "boolean",
-        description: "Create missing parent directories. Defaults to false.",
+        description: "Create missing parent directories. Defaults to true.",
       },
       maxChars: { type: "integer", minimum: 1, maximum: MAX_WRITE_CHARS },
     },
@@ -392,8 +466,11 @@ const fsWriteTool: ToolDefinition<FsWriteArgs> = {
   async handler(args, context) {
     const requestedPath = requiredString(args.path, "path");
     const content = requiredString(args.content, "content");
-    const overwrite = optionalBoolean(args.overwrite, false, "overwrite");
-    const createDirs = optionalBoolean(args.createDirs, false, "createDirs");
+    // Pi-aligned: write creates parent dirs and overwrites by default. Pass
+    // `overwrite: false` / `createDirs: false` explicitly when conservative
+    // behavior is needed.
+    const overwrite = optionalBoolean(args.overwrite, true, "overwrite");
+    const createDirs = optionalBoolean(args.createDirs, true, "createDirs");
     const maxChars = optionalInteger(
       args.maxChars,
       DEFAULT_MAX_WRITE_CHARS,
@@ -421,19 +498,33 @@ const fsWriteTool: ToolDefinition<FsWriteArgs> = {
 const fsEditTool: ToolDefinition<FsEditArgs> = {
   name: "fs.edit",
   description:
-    "Apply a targeted UTF-8 text replacement to an existing repo file. Ambiguous matches fail unless replaceAll is true.",
+    "Apply one or more targeted UTF-8 text replacements to an existing repo file. Each edit is matched against the ORIGINAL file (not incrementally); overlapping or nested edits must be merged into a single edit. Pass `edits: [{oldText, newText}, ...]` for multi-edit calls, or scalar `oldText`/`newText` for a single edit.",
   mode: "write",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["path", "oldText", "newText"],
+    required: ["path"],
     properties: {
       path: { type: "string", description: "Repo-relative file path to edit." },
-      oldText: { type: "string", description: "Exact text to replace. Must be non-empty." },
-      newText: { type: "string", description: "Replacement text." },
+      edits: {
+        type: "array",
+        description:
+          "One or more replacements applied to the original file. Use this OR oldText/newText.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["oldText", "newText"],
+          properties: {
+            oldText: { type: "string" },
+            newText: { type: "string" },
+          },
+        },
+      },
+      oldText: { type: "string", description: "Single-edit shortcut. Pi accepts this too." },
+      newText: { type: "string", description: "Single-edit shortcut. Pi accepts this too." },
       replaceAll: {
         type: "boolean",
-        description: "Replace all matches. Defaults to false and requires exactly one match.",
+        description: "Replace all matches per edit. Defaults to false (each edit must match exactly once).",
       },
       maxFileBytes: { type: "integer", minimum: 1, maximum: MAX_EDIT_FILE_BYTES },
     },
@@ -441,8 +532,7 @@ const fsEditTool: ToolDefinition<FsEditArgs> = {
   maxResultChars: 32_000,
   async handler(args, context) {
     const requestedPath = requiredString(args.path, "path");
-    const oldText = requiredNonEmptyString(args.oldText, "oldText");
-    const newText = requiredString(args.newText, "newText");
+    const edits = parseEditArgs(args);
     const replaceAll = optionalBoolean(args.replaceAll, false, "replaceAll");
     const maxFileBytes = optionalInteger(
       args.maxFileBytes,
@@ -451,19 +541,47 @@ const fsEditTool: ToolDefinition<FsEditArgs> = {
       1,
       MAX_EDIT_FILE_BYTES,
     );
-    if (oldText === newText) {
-      throw new PolicyViolationError("invalid_args", "oldText and newText must differ");
-    }
-
     return editTextFile(context, {
       path: requestedPath,
-      oldText,
-      newText,
+      edits,
       replaceAll,
       maxFileBytes,
     });
   },
 };
+
+function parseEditArgs(args: FsEditArgs): EditTextFileEdit[] {
+  if (Array.isArray(args.edits)) {
+    if (args.edits.length === 0) {
+      throw new PolicyViolationError("invalid_args", "edits must be a non-empty array");
+    }
+    const out: EditTextFileEdit[] = [];
+    for (let i = 0; i < args.edits.length; i += 1) {
+      const entry = args.edits[i];
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new PolicyViolationError("invalid_args", `edits[${i}] must be an object`);
+      }
+      const e = entry as Record<string, JsonValue>;
+      const oldText = requiredNonEmptyString(e.oldText, `edits[${i}].oldText`);
+      const newText = requiredString(e.newText, `edits[${i}].newText`);
+      if (oldText === newText) {
+        throw new PolicyViolationError(
+          "invalid_args",
+          `edits[${i}]: oldText and newText must differ`,
+        );
+      }
+      out.push({ oldText, newText });
+    }
+    return out;
+  }
+  // Scalar fallback (single edit) — mirrors pi's legacy oldText/newText path.
+  const oldText = requiredNonEmptyString(args.oldText, "oldText");
+  const newText = requiredString(args.newText, "newText");
+  if (oldText === newText) {
+    throw new PolicyViolationError("invalid_args", "oldText and newText must differ");
+  }
+  return [{ oldText, newText }];
+}
 
 export async function writeTextFile(
   context: ToolContext,
@@ -519,8 +637,8 @@ export async function editTextFile(
   context: ToolContext,
   input: EditTextFileInput,
 ): Promise<EditTextFileResult> {
-  if (input.oldText === input.newText) {
-    throw new PolicyViolationError("invalid_args", "oldText and newText must differ");
+  if (input.edits.length === 0) {
+    throw new PolicyViolationError("invalid_args", "edits must be a non-empty array");
   }
 
   const resolved = assertWriteAllowed(context.repoRoot, input.path);
@@ -528,20 +646,57 @@ export async function editTextFile(
   const before = await readEditableTextFile(resolved.absolutePath, resolved.relativePath, {
     maxFileBytes: input.maxFileBytes,
   });
-  const matches = countOccurrences(before, input.oldText);
-  if (matches === 0) {
-    throw new PolicyViolationError("no_match", `oldText was not found in ${resolved.relativePath}`);
-  }
-  if (matches > 1 && !input.replaceAll) {
-    throw new PolicyViolationError(
-      "ambiguous_match",
-      `oldText matched ${matches} times; set replaceAll: true or provide a more specific oldText`,
-    );
+
+  // Pi's semantics: each edit matches against the ORIGINAL content. Pre-compute
+  // every match position, validate (no overlap, exactly one match per edit
+  // unless replaceAll), then apply right-to-left so positions don't shift.
+  type EditMatch = { editIndex: number; start: number; end: number };
+  const allMatches: EditMatch[] = [];
+  let totalReplacements = 0;
+  for (let editIndex = 0; editIndex < input.edits.length; editIndex += 1) {
+    const edit = input.edits[editIndex];
+    if (edit === undefined) continue;
+    const positions = findAllOccurrences(before, edit.oldText);
+    if (positions.length === 0) {
+      throw new PolicyViolationError(
+        "no_match",
+        `edits[${editIndex}].oldText was not found in ${resolved.relativePath}`,
+      );
+    }
+    if (positions.length > 1 && !input.replaceAll) {
+      throw new PolicyViolationError(
+        "ambiguous_match",
+        `edits[${editIndex}].oldText matched ${positions.length} times; set replaceAll: true or use a more specific oldText`,
+      );
+    }
+    for (const start of positions) {
+      allMatches.push({ editIndex, start, end: start + edit.oldText.length });
+      totalReplacements += 1;
+    }
   }
 
-  const after = input.replaceAll
-    ? before.split(input.oldText).join(input.newText)
-    : before.replace(input.oldText, input.newText);
+  // Detect overlapping match regions across edits.
+  const sorted = allMatches.slice().sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sorted.length; i += 1) {
+    const prev = sorted[i - 1];
+    const cur = sorted[i];
+    if (prev !== undefined && cur !== undefined && cur.start < prev.end) {
+      throw new PolicyViolationError(
+        "edit_overlap",
+        `edits[${prev.editIndex}] and edits[${cur.editIndex}] match overlapping regions; merge them into a single edit`,
+      );
+    }
+  }
+
+  // Apply right-to-left so left-side positions remain valid.
+  let after = before;
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const m = sorted[i];
+    if (m === undefined) continue;
+    const edit = input.edits[m.editIndex];
+    if (edit === undefined) continue;
+    after = after.slice(0, m.start) + edit.newText + after.slice(m.end);
+  }
   await writeFile(resolved.absolutePath, after, "utf8");
   const change = await recordTextFileChange(context, {
     path: resolved.relativePath,
@@ -550,22 +705,99 @@ export async function editTextFile(
     after,
   });
 
+  // Generate a unified-diff hunk per edit (first match only) and concatenate.
+  // Keeps the LLM's view tidy while showing what changed.
+  const firstEdit = input.edits[0];
+  const diff =
+    firstEdit === undefined
+      ? ""
+      : buildEditDiffString({
+          before,
+          oldText: firstEdit.oldText,
+          newText: firstEdit.newText,
+          path: resolved.relativePath,
+        });
+
   return {
     path: resolved.relativePath,
     changeType: "update",
-    replacements: input.replaceAll ? matches : 1,
+    replacements: totalReplacements,
     bytes: change.afterBytes,
     hash: change.afterHash,
+    diff,
   };
 }
 
-interface GrepOptions {
-  query: string;
-  pathMatcher?: (path: string) => boolean;
-  caseSensitive: boolean;
-  includeRaw: boolean;
+function findAllOccurrences(haystack: string, needle: string): number[] {
+  if (needle === "") return [];
+  const out: number[] = [];
+  let from = 0;
+  while (true) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx === -1) break;
+    out.push(idx);
+    from = idx + needle.length;
+  }
+  return out;
+}
+
+interface BuildEditDiffOptions {
+  before: string;
+  oldText: string;
+  newText: string;
+  path?: string;
+}
+
+const DIFF_CONTEXT_LINES = 3;
+const DIFF_MAX_LINES = 200;
+
+function buildEditDiffString(options: BuildEditDiffOptions): string {
+  const idx = options.before.indexOf(options.oldText);
+  if (idx === -1) return "";
+  const beforePrefix = options.before.slice(0, idx);
+  const beforeSuffix = options.before.slice(idx + options.oldText.length);
+
+  const prefixLines = beforePrefix === "" ? [] : beforePrefix.split("\n");
+  const suffixLines = beforeSuffix === "" ? [] : beforeSuffix.split("\n");
+  const oldTextLines = options.oldText.split("\n");
+  const newTextLines = options.newText.split("\n");
+
+  const contextBefore = prefixLines.slice(Math.max(0, prefixLines.length - DIFF_CONTEXT_LINES));
+  const contextAfter = suffixLines.slice(0, DIFF_CONTEXT_LINES);
+  const startLine = Math.max(1, prefixLines.length - contextBefore.length + 1);
+
+  const out: string[] = [];
+  if (options.path !== undefined) {
+    out.push(`--- a/${options.path}`);
+    out.push(`+++ b/${options.path}`);
+  }
+  const oldHunkLength = contextBefore.length + oldTextLines.length + contextAfter.length;
+  const newHunkLength = contextBefore.length + newTextLines.length + contextAfter.length;
+  out.push(`@@ -${startLine},${oldHunkLength} +${startLine},${newHunkLength} @@`);
+  for (const line of contextBefore) out.push(` ${line}`);
+  for (const line of oldTextLines) out.push(`-${line}`);
+  for (const line of newTextLines) out.push(`+${line}`);
+  for (const line of contextAfter) out.push(` ${line}`);
+
+  if (out.length > DIFF_MAX_LINES) {
+    const head = out.slice(0, DIFF_MAX_LINES);
+    head.push("@@ truncated @@");
+    return head.join("\n");
+  }
+  return out.join("\n");
+}
+
+interface RipgrepSearchOptions {
+  repoRoot: string;
+  searchPath: string;
+  pattern: string;
+  pathPattern: string;
+  ignoreCase: boolean;
+  literal: boolean;
+  contextLines: number;
   limit: number;
   maxFileBytes: number;
+  includeRaw: boolean;
 }
 
 async function listPath(
@@ -649,75 +881,136 @@ async function findPaths(
   return { matches, truncated };
 }
 
-async function grepPaths(
-  repoRoot: string,
-  absolutePath: string,
-  options: GrepOptions,
+// Pi-style: shell out to ripgrep for fast, gitignore-aware search. Honors
+// ignoreCase, literal, glob (pathPattern), and context flags. Requires `rg`
+// on PATH — fails with a clear message otherwise. Returns structured matches
+// shaped to cortex's existing `FsGrepMatch` type.
+async function ripgrepSearch(
+  options: RipgrepSearchOptions,
 ): Promise<{ matches: FsGrepMatch[]; truncated: boolean }> {
+  const { spawn } = await import("node:child_process");
+  const { createInterface } = await import("node:readline");
+
+  const args: string[] = [
+    "--json",
+    "--line-number",
+    "--color=never",
+    "--hidden",
+    `--max-filesize=${options.maxFileBytes}`,
+  ];
+  if (options.ignoreCase) args.push("--ignore-case");
+  if (options.literal) args.push("--fixed-strings");
+  if (options.pathPattern !== "") args.push("--glob", options.pathPattern);
+  args.push("--", options.pattern, options.searchPath);
+  // Note: includeRaw filtering happens as a post-pass after ripgrep returns.
+  // ripgrep's --glob is matched relative to the search root, so a "wiki/raw"
+  // exclusion wouldn't catch matches when the search itself starts inside
+  // wiki/. Filtering on the repo-relative path is correct.
+
   const matches: FsGrepMatch[] = [];
   let truncated = false;
-  const metadata = await lstat(absolutePath);
-  rejectSymlinkRoot(repoRelativePath(repoRoot, absolutePath), metadata);
 
-  async function searchFile(filePath: string, fileStats: Stats): Promise<void> {
-    if (matches.length >= options.limit || !fileStats.isFile()) {
-      return;
-    }
-    const relativePath = repoRelativePath(repoRoot, filePath);
-    if (options.pathMatcher !== undefined && !options.pathMatcher(relativePath)) {
-      return;
-    }
-    if (fileStats.size > options.maxFileBytes) {
-      return;
-    }
+  const child = spawn("rg", args, { stdio: ["ignore", "pipe", "pipe"] });
+  const rl = createInterface({ input: child.stdout });
+  let stderr = "";
+  let killedDueToLimit = false;
+  let spawnError: Error | undefined;
 
-    let content: string;
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  child.on("error", (error) => {
+    spawnError = error;
+  });
+
+  rl.on("line", (raw: string) => {
+    if (raw.trim() === "" || matches.length >= options.limit) return;
+    let event: { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
     try {
-      content = decodeText(await readFile(filePath), relativePath);
-    } catch (error: unknown) {
-      if (error instanceof PolicyViolationError && error.code === "binary_file") {
-        return;
-      }
-      throw error;
+      event = JSON.parse(raw);
+    } catch {
+      return;
     }
+    if (event.type !== "match") return;
+    const filePath = event.data?.path?.text;
+    const lineNumber = event.data?.line_number;
+    const lineText = event.data?.lines?.text ?? "";
+    if (typeof filePath !== "string" || typeof lineNumber !== "number") return;
+    const relPath = repoRelativePath(options.repoRoot, filePath);
+    if (!options.includeRaw && relPath.startsWith("wiki/raw/")) {
+      // Skip immutable raw sources unless the caller explicitly opted in.
+      return;
+    }
+    matches.push({
+      path: relPath,
+      line: lineNumber,
+      preview: lineText.replace(/\n$/, "").trim().slice(0, 240),
+    });
+    if (matches.length >= options.limit) {
+      truncated = true;
+      killedDueToLimit = true;
+      child.kill();
+    }
+  });
 
-    const needle = options.caseSensitive ? options.query : options.query.toLowerCase();
-    const lines = content.split(/\r?\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index] ?? "";
-      const haystack = options.caseSensitive ? line : line.toLowerCase();
-      if (!haystack.includes(needle)) {
-        continue;
-      }
-      matches.push({
-        path: relativePath,
-        line: index + 1,
-        preview: line.trim().slice(0, 240),
-      });
-      if (matches.length >= options.limit) {
-        truncated = true;
-        return;
-      }
+  const code: number | null = await new Promise((resolve) => {
+    child.on("close", (c) => resolve(c));
+  });
+  rl.close();
+
+  if (spawnError !== undefined) {
+    if ((spawnError as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new PolicyViolationError(
+        "ripgrep_missing",
+        "ripgrep (rg) is not installed. Install it (e.g. `brew install ripgrep`, `apt install ripgrep`) and retry.",
+      );
     }
+    throw new PolicyViolationError("ripgrep_failed", `ripgrep error: ${spawnError.message}`);
   }
-
-  if (metadata.isFile()) {
-    await searchFile(absolutePath, metadata);
-  } else if (metadata.isDirectory()) {
-    await walkDirectory(
-      repoRoot,
-      absolutePath,
-      { includeRaw: options.includeRaw },
-      async (entryPath, entryStats) => {
-        await searchFile(entryPath, entryStats);
-        if (matches.length >= options.limit) {
-          truncated = true;
-          return false;
-        }
-        return true;
-      },
+  // ripgrep exits 0 on matches, 1 on no matches, 2+ on error. A signal-kill
+  // (because we hit the match limit) shows up as code === null.
+  if (!killedDueToLimit && code !== null && code !== 0 && code !== 1) {
+    throw new PolicyViolationError(
+      "ripgrep_failed",
+      `ripgrep exited with code ${code}: ${stderr.trim() || "(no stderr)"}`,
     );
   }
+
+  // Pi-style: read each matched file once and slice context lines. Cheaper
+  // than asking rg to emit context events, and lets us bound by maxFileBytes.
+  if (options.contextLines > 0 && matches.length > 0) {
+    const fileLines = new Map<string, string[]>();
+    for (const match of matches) {
+      let lines = fileLines.get(match.path);
+      if (lines === undefined) {
+        try {
+          const absolute = path.join(options.repoRoot, match.path);
+          const content = decodeText(await readFile(absolute), match.path);
+          lines = content.split(/\r?\n/);
+        } catch {
+          lines = [];
+        }
+        fileLines.set(match.path, lines);
+      }
+      const idx = match.line - 1;
+      const before: string[] = [];
+      const after: string[] = [];
+      for (let i = Math.max(0, idx - options.contextLines); i < idx; i += 1) {
+        before.push((lines[i] ?? "").trim().slice(0, 240));
+      }
+      for (
+        let i = idx + 1;
+        i < Math.min(lines.length, idx + 1 + options.contextLines);
+        i += 1
+      ) {
+        after.push((lines[i] ?? "").trim().slice(0, 240));
+      }
+      match.before = before;
+      match.after = after;
+    }
+  }
+
   return { matches, truncated };
 }
 
@@ -897,16 +1190,6 @@ function previewText(value: string): string {
   return value.slice(0, FILE_CHANGE_PREVIEW_CHARS);
 }
 
-function countOccurrences(value: string, needle: string): number {
-  let count = 0;
-  let index = value.indexOf(needle);
-  while (index !== -1) {
-    count += 1;
-    index = value.indexOf(needle, index + needle.length);
-  }
-  return count;
-}
-
 function entryFor(relativePath: string, metadata: Stats): FsEntry {
   const entry: FsEntry = {
     path: relativePath,
@@ -946,10 +1229,7 @@ function decodeText(buffer: Buffer, relativePath: string): string {
 function createPathMatcher(pattern: string, caseSensitive: boolean): (path: string) => boolean {
   const normalizedPattern = pattern.replaceAll("\\", "/");
   if (normalizedPattern.includes("*")) {
-    const regex = new RegExp(
-      `^${normalizedPattern.split("*").map(escapeRegex).join(".*")}$`,
-      caseSensitive ? "" : "i",
-    );
+    const regex = new RegExp(`^${globToRegex(normalizedPattern)}$`, caseSensitive ? "" : "i");
     return (relativePath) => regex.test(relativePath);
   }
 
@@ -958,6 +1238,59 @@ function createPathMatcher(pattern: string, caseSensitive: boolean): (path: stri
     const haystack = caseSensitive ? relativePath : relativePath.toLowerCase();
     return haystack.includes(needle);
   };
+}
+
+// Convert a shell-style glob pattern into a regex source.
+//
+// Pi-aligned semantics:
+//   - `**` matches any number of path segments (including zero) and the
+//     surrounding path separators.
+//   - `*` matches anything except `/`.
+//   - `?` matches a single character except `/`.
+//   - All other regex metacharacters are escaped literally.
+function globToRegex(pattern: string): string {
+  let out = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i] ?? "";
+    if (ch === "*") {
+      // `**/` or `/**`: collapse leading/trailing separator into the wildcard.
+      const isDouble = pattern[i + 1] === "*";
+      if (isDouble) {
+        // Eat `**` and any adjacent slash on either side; emit a permissive
+        // "any path / nothing" alternation.
+        const prevWasSlash = out.endsWith("/");
+        let j = i + 2;
+        if (pattern[j] === "/") {
+          j += 1;
+        }
+        if (prevWasSlash) {
+          // strip the trailing "/" we already emitted
+          out = out.slice(0, -1);
+          out += "(?:.*/)?";
+        } else {
+          out += ".*";
+        }
+        i = j;
+        continue;
+      }
+      out += "[^/]*";
+      i += 1;
+      continue;
+    }
+    if (ch === "?") {
+      out += "[^/]";
+      i += 1;
+      continue;
+    }
+    if (".+^${}()|[]\\".includes(ch)) {
+      out += `\\${ch}`;
+    } else {
+      out += ch;
+    }
+    i += 1;
+  }
+  return out;
 }
 
 function repoRelativePath(repoRoot: string, absolutePath: string): string {
@@ -1016,10 +1349,6 @@ function optionalInteger(
     );
   }
   return value;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function toPosixPath(value: string): string {

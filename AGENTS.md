@@ -9,7 +9,7 @@ Cortex is a local, agent-maintained personal work system.
 It has two connected parts:
 
 1. A Markdown work wiki that captures the user's priorities, projects, people, meetings, decisions, open threads, action items, and source material.
-2. A Bun/TypeScript agentic harness that can query, maintain, and improve that wiki through explicit tools, durable traces, memory, skills, scheduled maintenance jobs, and a TUI.
+2. A Bun/TypeScript agentic harness that can query, maintain, and improve that wiki through explicit tools, durable traces, memory, skills, scheduled maintenance jobs, a TUI, and eventually a local web control plane for connector setup.
 
 The wiki is the durable knowledge base. The harness is the working system that keeps that knowledge base useful.
 
@@ -26,10 +26,11 @@ The detailed plans are subordinate to the roadmap:
 - [docs/wiki-plan.md](docs/wiki-plan.md): wiki structure, source ingestion, entity schemas, and maintenance workflows.
 - [docs/agent-harness-plan.md](docs/agent-harness-plan.md): model loop, tools, memory, skills, traces, and learning architecture.
 - [docs/tui-plan.md](docs/tui-plan.md): terminal UI architecture and implementation direction.
+- [docs/web-control-plane-plan.md](docs/web-control-plane-plan.md): local browser UI for connector setup, schedules, ingest history, and proposal review.
 
 When plans conflict, update `docs/roadmap.md` first, then reconcile `docs/status.md` and the relevant detailed plan.
 
-The current implementation focus is the tool expansion milestone: registry profiles, safe filesystem read/search tools, guarded edit/write tools, a gated shell tool, and then todo, memory, session-search, skills, reflection, and scheduled maintenance.
+The current implementation focus is the Notion ingestion follow-through milestone: shared connector contracts, Notion raw-to-wiki ingestion, proposal staging for ambiguous changes, then bringing Granola and Slack through the same trace-backed path.
 
 ## Agent Roles
 

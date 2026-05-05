@@ -6,13 +6,17 @@ import {
   getChatGptCredentials,
   getValidChatGptCredentials,
   loginChatGpt,
+  listMaintenanceJobs,
   OpenAICodexModelAdapter,
   OpenAICompatibleChatModelAdapter,
   runAgentLoop,
+  runMaintenanceJob,
   runReflection,
   setChatGptCredentials,
 } from "@cortex/agent";
 import { ensureRuntimeDirs, getCortexPaths, SessionStore, type SessionRecord } from "@cortex/core";
+import { loadDotenv } from "@cortex/ingest/common";
+import { pullNotionPage } from "@cortex/ingest/notion";
 import { createDefaultToolRegistry, type ToolProfile } from "@cortex/tools";
 import { runTui } from "@cortex/tui";
 
@@ -26,8 +30,11 @@ commands:
   auth login openai-codex      sign in with ChatGPT for Codex model access
   auth logout openai-codex     remove stored ChatGPT credentials
   init                         initialize .cortex runtime directories
+  ingest notion --page-id ID    snapshot a Notion page or URL into wiki/raw/notion
   query [options] <question>   run an agent query using the default dangerous tool profile
   learn reflect [options] <id>  reflect on a completed session trace
+  maintain list                list maintenance jobs
+  maintain run <job>           run one maintenance job and persist a trace
   tui                          launch the interactive Cortex TUI
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions
@@ -51,6 +58,13 @@ interface QueryOptions extends ModelOptions {
 interface ReflectOptions extends ModelOptions {
   sessionId: string;
 }
+
+interface NotionIngestOptions {
+  pageId: string;
+  dryRun: boolean;
+}
+
+const NOTION_INGEST_USAGE = "usage: cortex ingest notion --page-id PAGE_ID_OR_URL [--dry-run]";
 
 function parseLimit(args: string[], fallback = 20): number {
   const index = args.indexOf("--limit");
@@ -133,6 +147,75 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
     `\n[session: ${result.sessionId}; status: ${result.status}; iterations: ${result.iterations}; tool calls: ${result.toolCalls}]`,
   );
   return result.status === "failed" ? 1 : 0;
+}
+
+async function cmdIngest(args: string[]): Promise<CommandResult> {
+  const source = args.shift();
+  if (!source || source === "--help" || source === "-h") {
+    console.log(NOTION_INGEST_USAGE);
+    return 0;
+  }
+
+  if (source === "notion") {
+    if (args.includes("--help") || args.includes("-h")) {
+      console.log(NOTION_INGEST_USAGE);
+      return 0;
+    }
+    const options = parseNotionIngestOptions(args);
+    await loadDotenv();
+    const token = Bun.env.NOTION_TOKEN ?? "";
+    if (token === "") {
+      throw new Error("Set NOTION_TOKEN in .env or the environment.");
+    }
+    const repoRoot = getCortexPaths().repoRoot;
+    return withStore(async (store) => {
+      const session = await store.createSession({
+        kind: "ingest",
+        title: `Ingest Notion page ${options.pageId}`,
+      });
+      try {
+        await store.appendMessage({
+          sessionId: session.id,
+          role: "user",
+          content: `Ingest Notion page ${options.pageId}`,
+        });
+        await store.appendEvent(session.id, "ingest.notion.started", {
+          pageId: options.pageId,
+          dryRun: options.dryRun,
+        });
+        const version = Bun.env.NOTION_VERSION;
+        const result = await pullNotionPage({
+          pageId: options.pageId,
+          repoRoot,
+          token,
+          dryRun: options.dryRun,
+          ...(version === undefined ? {} : { version }),
+        });
+        await store.appendEvent(session.id, "ingest.notion.completed", {
+          ...result,
+        });
+        await store.endSession(session.id, "completed");
+        if (result.dryRun) {
+          console.log(`would write ${result.path}`);
+        } else if (result.written) {
+          console.log(`wrote ${result.path}`);
+        } else {
+          console.log(`skipped existing ${result.path}`);
+        }
+        console.log(`session: ${session.id}`);
+        return 0;
+      } catch (error: unknown) {
+        await store.appendEvent(session.id, "ingest.notion.failed", {
+          pageId: options.pageId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        await store.endSession(session.id, "failed");
+        throw error;
+      }
+    });
+  }
+
+  throw new Error(`Unknown ingest source: ${source}`);
 }
 
 async function cmdAuth(args: string[]): Promise<CommandResult> {
@@ -263,6 +346,50 @@ async function cmdLearn(args: string[]): Promise<CommandResult> {
   throw new Error(`Unknown learn subcommand: ${subcommand}`);
 }
 
+async function cmdMaintain(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(`usage: cortex maintain <list|run> [job]`);
+    return 0;
+  }
+
+  if (subcommand === "list") {
+    if (args.length !== 0) {
+      throw new Error(`Unknown maintain list argument: ${args.join(" ")}`);
+    }
+    for (const job of listMaintenanceJobs()) {
+      console.log(`${job.name.padEnd(18)} ${job.description}`);
+    }
+    return 0;
+  }
+
+  if (subcommand === "run") {
+    const jobName = args.shift();
+    if (jobName === undefined || jobName.trim() === "") {
+      throw new Error("maintain run requires a job name");
+    }
+    if (args.length !== 0) {
+      throw new Error(`Unknown maintain run argument: ${args.join(" ")}`);
+    }
+    const result = await runMaintenanceJob({
+      jobName,
+      repoRoot: getCortexPaths().repoRoot,
+    });
+    console.log(`${result.job}: ${result.status}`);
+    console.log(result.summary);
+    console.log(`session: ${result.sessionId}`);
+    console.log(`report: ${result.reportPath}`);
+    console.log(`findings: ${result.findings.length}`);
+    console.log(`proposals: ${result.proposals.length}`);
+    for (const proposal of result.proposals) {
+      console.log(`proposal: ${proposal.path}`);
+    }
+    return result.status === "ok" ? 0 : 2;
+  }
+
+  throw new Error(`Unknown maintain subcommand: ${subcommand}`);
+}
+
 async function cmdTools(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
 
@@ -317,11 +444,17 @@ async function main(argv: string[]): Promise<CommandResult> {
   if (command === "auth") {
     return cmdAuth(argv);
   }
+  if (command === "ingest") {
+    return cmdIngest(argv);
+  }
   if (command === "query") {
     return cmdQuery(argv);
   }
   if (command === "learn") {
     return cmdLearn(argv);
+  }
+  if (command === "maintain") {
+    return cmdMaintain(argv);
   }
   if (command === "tui") {
     await runTui({ repoRoot: getCortexPaths().repoRoot });
@@ -401,6 +534,32 @@ function parseReflectOptions(args: string[]): ReflectOptions {
     parsed.model = model;
   }
   return parsed;
+}
+
+function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
+  const parsed: Partial<NotionIngestOptions> = { dryRun: false };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--page-id") {
+      const value = args[index + 1];
+      if (value === undefined || value.trim() === "") {
+        throw new Error("--page-id requires a value");
+      }
+      parsed.pageId = value;
+      index += 1;
+    } else if (arg === "--dry-run") {
+      parsed.dryRun = true;
+    } else {
+      throw new Error(`Unknown ingest notion argument: ${arg}`);
+    }
+  }
+  if (parsed.pageId === undefined || parsed.pageId.trim() === "") {
+    throw new Error("ingest notion requires --page-id");
+  }
+  return {
+    pageId: parsed.pageId,
+    dryRun: parsed.dryRun ?? false,
+  };
 }
 
 function parseModelOptions(args: string[]): ModelOptions & { rest: string[] } {

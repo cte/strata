@@ -17,15 +17,14 @@ import type {
 } from "./types.js";
 import { buildRunContext } from "./runContext.js";
 
-const DEFAULT_MAX_ITERATIONS = 12;
-const DEFAULT_MAX_TOOL_CALLS = 40;
+// Pi parity: no iteration / tool-call ceiling. The loop runs until the model
+// returns no tool calls (final answer), the model errors out, or the user
+// cancels via Ctrl+C (signal abort).
 
 export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerator<AgentRunEvent> {
   const repoRoot = getCortexPaths(config.repoRoot).repoRoot;
   const store = await SessionStore.open(repoRoot);
   const tools = config.tools ?? createDefaultToolRegistry();
-  const maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-  const maxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const signal = config.signal;
   let messages: AgentMessage[] = [];
   let systemContext: JsonObject = {};
@@ -95,8 +94,6 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       }
       await store.appendEvent(session.id, "message.system_context", systemContext);
       await store.appendEvent(session.id, "agent.loop.resumed", {
-        maxIterations,
-        maxToolCalls,
         tools: tools.list().map((tool) => tool.name),
         priorMessages: priorNonSystem.length,
       });
@@ -112,8 +109,6 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       }
       await store.appendEvent(session.id, "message.system_context", systemContext);
       await store.appendEvent(session.id, "agent.loop.started", {
-        maxIterations,
-        maxToolCalls,
         tools: tools.list().map((tool) => tool.name),
       });
     }
@@ -126,7 +121,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
     };
     yield { type: "message.user", content: config.question };
 
-    while (iterations < maxIterations) {
+    while (true) {
       if (isAborted()) {
         cancelled = true;
         break;
@@ -139,30 +134,76 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       yield { type: "model.request", iteration: iterations, messageCount: messages.length };
 
       let response: ModelResponse;
+      // Streaming bridge: deltas come from the adapter via callback while we
+      // await the response. Push them into a queue, race the response promise
+      // against a "delta-arrived" wakeup, and yield queued deltas as soon as
+      // they appear so the TUI can render them in real time.
+      const deltaQueue: string[] = [];
+      let wakeup: (() => void) | undefined;
+      const wake = () => {
+        const fn = wakeup;
+        wakeup = undefined;
+        fn?.();
+      };
+      const modelRequest: {
+        messages: typeof messages;
+        tools: ReturnType<typeof tools.list>;
+        signal?: AbortSignal;
+        reasoningEffort?: typeof config.reasoningEffort;
+        onAssistantDelta?: (delta: string) => void;
+      } = {
+        messages,
+        tools: tools.list(),
+        onAssistantDelta: (delta: string) => {
+          if (delta === "") return;
+          deltaQueue.push(delta);
+          wake();
+        },
+      };
+      if (signal !== undefined) {
+        modelRequest.signal = signal;
+      }
+      if (config.reasoningEffort !== undefined && config.reasoningEffort !== "off") {
+        modelRequest.reasoningEffort = config.reasoningEffort;
+      }
+      let settled: { ok: true; value: ModelResponse } | { ok: false; error: unknown } | undefined;
+      const responsePromise = config.model
+        .complete(modelRequest)
+        .then((value) => {
+          settled = { ok: true, value };
+          wake();
+        })
+        .catch((error: unknown) => {
+          settled = { ok: false, error };
+          wake();
+        });
+
       try {
-        const modelRequest: {
-          messages: typeof messages;
-          tools: ReturnType<typeof tools.list>;
-          signal?: AbortSignal;
-          reasoningEffort?: typeof config.reasoningEffort;
-        } = {
-          messages,
-          tools: tools.list(),
-        };
-        if (signal !== undefined) {
-          modelRequest.signal = signal;
+        while (settled === undefined || deltaQueue.length > 0) {
+          while (deltaQueue.length > 0) {
+            const delta = deltaQueue.shift() ?? "";
+            yield { type: "assistant.delta", iteration: iterations, contentDelta: delta };
+          }
+          if (settled !== undefined) break;
+          await new Promise<void>((resolve) => {
+            wakeup = resolve;
+          });
         }
-        if (config.reasoningEffort !== undefined && config.reasoningEffort !== "off") {
-          modelRequest.reasoningEffort = config.reasoningEffort;
-        }
-        response = await config.model.complete(modelRequest);
-      } catch (error: unknown) {
+      } finally {
+        // Make sure the in-flight request is awaited so we don't leak it.
+        await responsePromise;
+      }
+      if (settled === undefined) {
+        throw new Error("Model request settled without producing a result");
+      }
+      if (!settled.ok) {
         if (isAborted()) {
           cancelled = true;
           break;
         }
-        throw error;
+        throw settled.error;
       }
+      response = settled.value;
 
       await persistModelResponse(store, session.id, iterations, response);
       messages.push({
@@ -207,26 +248,6 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         return;
       }
 
-      if (toolCallCount + response.toolCalls.length > maxToolCalls) {
-        finalAnswer = response.content;
-        await store.appendEvent(session.id, "agent.loop.stopped", {
-          reason: "max_tool_calls",
-          iterations,
-          toolCalls: toolCallCount,
-        });
-        await store.endSession(session.id, "interrupted");
-        const result: AgentRunResult = {
-          sessionId: session.id,
-          status: "interrupted",
-          stoppedReason: "max_tool_calls",
-          finalAnswer,
-          iterations,
-          toolCalls: toolCallCount,
-        };
-        yield { type: "agent.completed", result };
-        return;
-      }
-
       for (const toolCall of response.toolCalls) {
         if (isAborted()) {
           cancelled = true;
@@ -260,32 +281,15 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       }
     }
 
-    if (cancelled) {
-      await store.appendEvent(session.id, "agent.loop.stopped", {
-        reason: "cancelled",
-        iterations,
-        toolCalls: toolCallCount,
-      });
-      await store.endSession(session.id, "interrupted");
-      yield { type: "agent.completed", result: buildCancelledResult() };
-      return;
-    }
-
+    // The only way to fall out of `while (true)` is cancellation — final
+    // answer paths return directly from inside the loop. Emit the cancel.
     await store.appendEvent(session.id, "agent.loop.stopped", {
-      reason: "max_iterations",
+      reason: "cancelled",
       iterations,
       toolCalls: toolCallCount,
     });
     await store.endSession(session.id, "interrupted");
-    const result: AgentRunResult = {
-      sessionId: session.id,
-      status: "interrupted",
-      stoppedReason: "max_iterations",
-      finalAnswer,
-      iterations,
-      toolCalls: toolCallCount,
-    };
-    yield { type: "agent.completed", result };
+    yield { type: "agent.completed", result: buildCancelledResult() };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     if (session !== undefined) {

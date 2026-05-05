@@ -238,10 +238,25 @@ const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 export class Loader implements Component {
   message: string;
   active = true;
+  /** Optional muted hint (e.g. "esc to cancel") rendered to the right. */
+  hint: string | undefined;
   private startedAt = Date.now();
 
-  constructor(message = "Working") {
+  constructor(message = "Working", hint?: string) {
     this.message = message;
+    if (hint !== undefined) {
+      this.hint = hint;
+    }
+  }
+
+  /** Reset the elapsed-time counter; call when starting a fresh operation. */
+  start(): void {
+    this.startedAt = Date.now();
+    this.active = true;
+  }
+
+  stop(): void {
+    this.active = false;
   }
 
   render(ctx: RenderContext): Frame {
@@ -250,9 +265,22 @@ export class Loader implements Component {
     }
     const frame =
       SPINNER_FRAMES[Math.floor((Date.now() - this.startedAt) / 80) % SPINNER_FRAMES.length] ?? "⠋";
-    const text = `${theme.accent(frame)} ${this.message}`;
+    const elapsedMs = Date.now() - this.startedAt;
+    const elapsed = formatElapsed(elapsedMs);
+    const left = `${theme.accent(frame)} ${this.message}${theme.muted(` (${elapsed})`)}`;
+    const text =
+      this.hint === undefined ? left : `${left}  ${theme.muted(this.hint)}`;
     return { lines: [padToWidth(truncateToWidth(text, ctx.width), ctx.width)] };
   }
+}
+
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = Math.round(seconds - minutes * 60);
+  return `${minutes}m${remSeconds}s`;
 }
 
 export { Markdown } from "./markdown.js";

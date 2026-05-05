@@ -69,7 +69,7 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
   maxResultChars: 80_000,
   async handler(args, context) {
     const command = requiredNonEmptyString(args.command, "command");
-    const cwd = resolveCwd(context.repoRoot, optionalString(args.cwd, ".", "cwd"));
+    const cwd = resolveCwd(context.repoRoot, optionalString(args.cwd, ".", "cwd").trim() || ".");
     const shell = optionalString(args.shell, Bun.env.SHELL ?? "/bin/sh", "shell");
     const timeoutMs = optionalPositiveInteger(args.timeoutMs, DEFAULT_TIMEOUT_MS, "timeoutMs");
     const maxOutputChars = optionalPositiveInteger(

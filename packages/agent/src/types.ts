@@ -50,6 +50,13 @@ export interface ModelRequest {
   tools: ToolMetadata[];
   signal?: AbortSignal;
   reasoningEffort?: ThinkingLevel;
+  /**
+   * Streaming hook. Adapters that parse SSE deltas call this for each text
+   * fragment as it arrives. Adapters that don't stream (e.g. blocking chat
+   * completions) simply omit the call. Pi-aligned: deltas are text-only;
+   * tool-call argument streaming is not exposed here yet.
+   */
+  onAssistantDelta?(delta: string): void;
 }
 
 export interface ModelResponse {
@@ -71,8 +78,6 @@ export interface AgentRunConfig {
   tools?: ToolRegistry;
   repoRoot?: string;
   sessionTitle?: string;
-  maxIterations?: number;
-  maxToolCalls?: number;
   signal?: AbortSignal;
   reasoningEffort?: ThinkingLevel;
   /** Optional image (and future: audio/file) attachments for this user turn. */
@@ -89,7 +94,7 @@ export interface AgentRunConfig {
 export interface AgentRunResult {
   sessionId: string;
   status: Exclude<SessionStatus, "running">;
-  stoppedReason: "final_answer" | "max_iterations" | "max_tool_calls" | "model_error" | "cancelled";
+  stoppedReason: "final_answer" | "model_error" | "cancelled";
   finalAnswer: string;
   iterations: number;
   toolCalls: number;
@@ -101,6 +106,7 @@ export type AgentRunEvent =
   | { type: "session.started"; sessionId: string; title: string; model: string }
   | { type: "message.user"; content: string }
   | { type: "model.request"; iteration: number; messageCount: number }
+  | { type: "assistant.delta"; iteration: number; contentDelta: string }
   | {
       type: "model.response";
       iteration: number;

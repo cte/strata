@@ -117,6 +117,16 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
   while (pos < buffer.length) {
     const remaining = buffer.slice(pos);
     if (remaining.startsWith(ESC)) {
+      // ESC immediately followed by another ESC is a user rapid-tapping
+      // Esc-Esc — both bytes arrive in one stdin read on macOS Terminal /
+      // iTerm2. Without splitting, the framer greedily consumes both as a
+      // single sequence and `parseKey` maps `\x1b\x1b` to `ctrl+alt+[`,
+      // swallowing the double-Esc gesture (e.g. our resume-picker open).
+      if (remaining.length >= 2 && remaining[1] === ESC) {
+        sequences.push(ESC);
+        pos += 1;
+        continue;
+      }
       let seqEnd = 1;
       let consumed = false;
       while (seqEnd <= remaining.length) {

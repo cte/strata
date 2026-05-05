@@ -29,8 +29,12 @@ describe("CortexApp", () => {
       const output = stripAnsi(terminal.output);
       expect(output).toContain("─".repeat(60));
       expect(output).toContain("gpt-test");
-      expect(output).toContain("Type a question or /help");
-      expect(output).toContain("/help");
+      // Pi-style startup header: logo, key-hint summary, onboarding pointer.
+      expect(output).toContain("cortex v");
+      expect(output).toContain("escape interrupt");
+      expect(output).toContain("ctrl+c/ctrl+d clear/exit");
+      expect(output).toContain("/ commands");
+      expect(output).toContain("Type /help for the full keymap");
       expect(output).toContain("no session");
       expect(output).toContain("thinking off");
       expect(output).not.toContain("auth✗");
@@ -65,7 +69,7 @@ describe("CortexApp", () => {
     }
   });
 
-  test("/help opens a centered modal that dismisses on Esc", async () => {
+  test("/help prints inline into the transcript so it inherits terminal scrollback", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
     try {
       const terminal = new FakeTerminal(80, 24);
@@ -82,18 +86,58 @@ describe("CortexApp", () => {
       terminal.feed("/help\r");
       await pump();
       const helpOutput = stripAnsi(terminal.output);
-      expect(helpOutput).toContain("─ help ─");
-      expect(helpOutput).toContain("Cortex TUI");
+      // Pi-aligned: help is text in the transcript, not a modal overlay,
+      // so there is no `─ help ─` framing and the editor prompt stays
+      // visible below it.
+      expect(helpOutput).not.toContain("─ help ─");
+      expect(helpOutput).toContain("Editor");
       expect(helpOutput).toContain("Slash commands");
-
-      terminal.output = "";
-      terminal.feed("\r");
-      await pump(80);
-      const dismissed = stripAnsi(terminal.output);
-      // After dismissal the editor prompt is back and modal title is gone.
-      expect(dismissed).not.toContain("─ help ─");
-      expect(dismissed).toContain("›");
+      expect(helpOutput).toContain("/help");
+      expect(helpOutput).toContain("›");
       runtime.stop();
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("escape during an active run aborts instead of opening the session picker", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    try {
+      const terminal = new FakeTerminal(80, 24);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new CortexApp(
+        runtime,
+        { repoRoot, provider: "openai-codex", model: "gpt-test" },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      runtime.start();
+      await pump();
+
+      // Pretend an agent run is in flight (matches what runAgent assigns).
+      const aborted = { value: false };
+      const fakeAbort = new AbortController();
+      fakeAbort.signal.addEventListener("abort", () => {
+        aborted.value = true;
+      });
+      const internal = app as unknown as {
+        currentRun: AbortController | undefined;
+        handleEditorEscape: () => void;
+        sessionSelector: { active: boolean };
+      };
+      internal.currentRun = fakeAbort;
+
+      // Two rapid Escapes — pre-fix this would open the resume picker mid-run.
+      // Pi-aligned: the first Esc aborts; the second is a no-op (run is gone).
+      internal.handleEditorEscape();
+      internal.handleEditorEscape();
+      await pump();
+      runtime.stop();
+
+      expect(aborted.value).toBe(true);
+      expect(internal.sessionSelector.active).toBe(false);
+      const output = stripAnsi(terminal.output);
+      expect(output).toContain("interrupting agent");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

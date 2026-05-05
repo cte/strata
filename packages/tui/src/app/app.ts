@@ -8,13 +8,13 @@ import {
   type AgentRunEvent,
   type ModelAdapter,
 } from "@cortex/agent";
-import { SessionStore, getCortexPaths } from "@cortex/core";
+import { SessionStore, getCortexPaths, listSkills, readSkill } from "@cortex/core";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { SlashCommandRegistry } from "../commands.js";
 import { DynamicBorder } from "../components.js";
 import { Editor } from "../editor.js";
 import { TuiRuntime } from "../runtime.js";
-import { HelpOverlay, Footer, StatusLine } from "./chrome.js";
+import { Footer, StatusLine } from "./chrome.js";
 import { AuthDialog, logoutChatGpt } from "./authDialog.js";
 import {
   createModelAdapter,
@@ -23,7 +23,6 @@ import {
   listModels,
   loadAuthStatus,
 } from "./modelFactory.js";
-import path from "node:path";
 import { copyToClipboard } from "./clipboard.js";
 import { resetTokenUsage } from "./usage.js";
 import { CombinedAutocompleteProvider } from "./combinedAutocomplete.js";
@@ -34,9 +33,12 @@ import { loadPreferences, savePreferences } from "./preferences.js";
 import { SessionSelector } from "./sessionSelector.js";
 import type { ThinkingLevel } from "@cortex/agent";
 import { THINKING_LEVELS } from "@cortex/agent";
+import { buildHelpNotice, buildStartupHeader } from "./header.js";
 import {
+  appendAssistantDelta,
   appendTranscript,
   clearTranscript,
+  finalizeAssistantStream,
   initialAppState,
   nextThinkingLevel,
   recordCompletion,
@@ -67,7 +69,6 @@ export class CortexApp implements Component {
   private readonly modelSelector: ModelSelector;
   private readonly statusLine: StatusLine;
   private readonly footer: Footer;
-  private readonly help: HelpOverlay;
   private readonly repoRoot: string;
   private currentRun: AbortController | undefined;
   private animationTimer: ReturnType<typeof setInterval> | undefined;
@@ -86,12 +87,13 @@ export class CortexApp implements Component {
       this.state.reasoningEffort = options.reasoningEffort;
     }
     this.registry = new SlashCommandRegistry();
-    const fileMentions = new FileMentionProvider(path.join(this.repoRoot, "wiki"));
+    const fileMentions = new FileMentionProvider(this.repoRoot);
     const autocomplete = new CombinedAutocompleteProvider([this.registry, fileMentions]);
     this.editor = new Editor({
       placeholder: "Ask Cortex about your wiki, or type /help",
       autocomplete,
       onSubmit: (text) => void this.onSubmit(text),
+      onCancel: () => this.handleEditorEscape(),
     });
     void this.loadEditorHistory();
     this.authDialog = new AuthDialog(() => this.invalidate());
@@ -99,9 +101,9 @@ export class CortexApp implements Component {
     this.modelSelector = new ModelSelector();
     this.statusLine = new StatusLine(this.state);
     this.footer = new Footer(this.state, this.repoRoot);
-    this.help = new HelpOverlay([]);
-    this.help.onDismiss = () => this.closeOverlay();
     this.registerCommands();
+    void this.registerSkillCommands();
+    appendTranscript(this.state, { kind: "header", lines: buildStartupHeader() });
     this.runtime.onInput((event) => {
       if (event.type === "key") {
         if (event.key === "ctrl+c") {
@@ -112,6 +114,8 @@ export class CortexApp implements Component {
           this.requestExit();
         } else if (event.key === "shift+tab") {
           this.cycleThinkingLevel();
+        } else if (event.key === "alt+enter") {
+          this.handleAltEnter();
         }
       }
     });
@@ -126,6 +130,17 @@ export class CortexApp implements Component {
     const status = this.statusLine.render(ctx);
     const editorBorder = new DynamicBorder().render(ctx);
     const editor = this.editor.render(ctx);
+    // Inline pickers / dialogs render *below* the editor — same position
+    // strategy as the editor's slash-command autocomplete (which renders
+    // inside `editor.render` after the prompt). The intent was to make
+    // picker updates flow *below* the cursor so the diff redraw avoids
+    // big cursor-up moves, mirroring the working slash-completion path.
+    //
+    // NOTE: this layout choice did NOT fully resolve the picker
+    // duplication seen on iTerm2 — see `docs/picker-rendering-bug.md`
+    // for the open issue. Future work may swap this for a modal overlay
+    // (`centerModal`) or render the picker inside `editor.render()`.
+    const overlayFrame = this.activeOverlay()?.render(ctx) ?? { lines: [] };
     const footer = this.footer.render(ctx);
 
     const lines: string[] = [
@@ -133,9 +148,14 @@ export class CortexApp implements Component {
       ...status.lines,
       ...editorBorder.lines,
       ...editor.lines,
+      ...overlayFrame.lines,
       ...footer.lines,
     ];
 
+    // Cursor stays at the editor prompt even when an overlay is active —
+    // matches the slash-completion flow. The user is interacting with the
+    // picker via arrow keys, so a visible cursor at the editor row is
+    // harmless.
     let cursor: Frame["cursor"] | undefined;
     if (editor.cursor !== undefined) {
       cursor = {
@@ -151,15 +171,18 @@ export class CortexApp implements Component {
   }
 
   handleInput(event: import("../keys.js").InputEvent): "consumed" | "passthrough" {
+    const overlay = this.activeOverlay();
+    if (overlay !== undefined) {
+      return overlay.handleInput?.(event) ?? "consumed";
+    }
     return this.editor.handleInput?.(event) ?? "passthrough";
   }
 
-  private openOverlay(component: Component): void {
-    this.runtime.setOverlay(component);
-  }
-
-  private closeOverlay(): void {
-    this.runtime.setOverlay(undefined);
+  private activeOverlay(): Component | undefined {
+    if (this.sessionSelector.active) return this.sessionSelector;
+    if (this.modelSelector.active) return this.modelSelector;
+    if (this.authDialog.active) return this.authDialog;
+    return undefined;
   }
 
   invalidate(): void {
@@ -177,8 +200,15 @@ export class CortexApp implements Component {
       name: "help",
       description: "show keymap and command list",
       run: () => {
-        this.help.active = true;
-        this.openOverlay(this.help);
+        // Pi-aligned: print into the transcript (which inherits terminal
+        // scrollback) instead of a height-bounded modal — `/help` content
+        // can grow with the slash-command list and would otherwise be
+        // silently truncated on short terminals.
+        const commands = this.registry
+          .list()
+          .map((cmd) => ({ name: cmd.name, description: cmd.description }));
+        appendTranscript(this.state, { kind: "notice", lines: buildHelpNotice(commands) });
+        this.invalidate();
       },
     });
     this.registry.register({
@@ -328,7 +358,6 @@ export class CortexApp implements Component {
       description: "sign in to openai-codex",
       run: () => {
         this.authDialog.start((result) => {
-          this.closeOverlay();
           appendTranscript(this.state, {
             kind: result.ok ? "status" : "error",
             content: result.message,
@@ -339,10 +368,10 @@ export class CortexApp implements Component {
               this.state.provider = "openai-codex";
               this.persistPreferences();
             }
-            this.invalidate();
+            this.runtime.invalidate("clear");
           });
         });
-        this.openOverlay(this.authDialog);
+        this.runtime.invalidate("clear");
       },
     });
     this.registry.register({
@@ -370,14 +399,14 @@ export class CortexApp implements Component {
               content: `model set to ${model.id}`,
             });
             this.modelSelector.close();
-            this.closeOverlay();
+            this.runtime.invalidate("clear");
           },
           () => {
             this.modelSelector.close();
-            this.closeOverlay();
+            this.runtime.invalidate("clear");
           },
         );
-        this.openOverlay(this.modelSelector);
+        this.runtime.invalidate("clear");
         void listModels(provider).then(
           (results) => {
             this.modelSelector.setModels(results);
@@ -473,7 +502,45 @@ export class CortexApp implements Component {
         this.invalidate();
       },
     });
-    this.help.lines = buildHelpLines(this.registry);
+  }
+
+  // Pi-style: each user-defined skill in `.cortex/skills/` is exposed as a
+  // `/skill:<name>` slash command. Invoking it reads the skill's SKILL.md and
+  // sends its content as a user message. Args after the name are appended.
+  private async registerSkillCommands(): Promise<void> {
+    let skills: Awaited<ReturnType<typeof listSkills>>;
+    try {
+      skills = await listSkills(this.repoRoot);
+    } catch {
+      return;
+    }
+    for (const skill of skills) {
+      const commandName = `skill:${skill.name}`;
+      this.registry.register({
+        name: commandName,
+        description: skill.description === "" ? `run skill ${skill.name}` : skill.description,
+        run: (args) => this.invokeSkill(skill.name, args),
+      });
+    }
+  }
+
+  private async invokeSkill(name: string, args: string): Promise<void> {
+    let document: Awaited<ReturnType<typeof readSkill>>;
+    try {
+      document = await readSkill(this.repoRoot, name);
+    } catch (error: unknown) {
+      appendTranscript(this.state, {
+        kind: "error",
+        content: `failed to load skill ${name}: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      this.invalidate();
+      return;
+    }
+    const trimmedArgs = args.trim();
+    const prompt = trimmedArgs === ""
+      ? `Apply the skill "${name}":\n\n${document.content}`
+      : `Apply the skill "${name}" to: ${trimmedArgs}\n\n${document.content}`;
+    await this.onSubmit(prompt);
   }
 
   private async onSubmit(text: string): Promise<void> {
@@ -501,7 +568,15 @@ export class CortexApp implements Component {
       return;
     }
     if (this.state.running) {
-      appendTranscript(this.state, { kind: "error", content: "agent is already running" });
+      // Queue the message to be sent after the current run finishes — same
+      // behavior as alt+enter while streaming. Pi treats Enter and Alt+Enter
+      // identically when streaming.
+      this.state.queuedMessages.push(trimmed);
+      const preview = trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed;
+      appendTranscript(this.state, {
+        kind: "status",
+        content: `queued (${this.state.queuedMessages.length}): ${preview}`,
+      });
       this.invalidate();
       return;
     }
@@ -527,7 +602,9 @@ export class CortexApp implements Component {
     this.state.running = true;
     this.state.status = undefined;
     appendTranscript(this.state, { kind: "user", content: question });
-    this.editor.disabled = true;
+    // Note: we do NOT disable the editor while the agent is running. The user
+    // can keep typing, browse history with up/down, and submit via Enter or
+    // alt+enter — both paths queue the message until the current run finishes.
     this.invalidate();
 
     this.currentRun = new AbortController();
@@ -565,12 +642,47 @@ export class CortexApp implements Component {
         content: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      this.editor.disabled = false;
       this.state.running = false;
       this.currentRun = undefined;
       this.invalidate();
-      void this.maybeAutoCompact();
+      void this.afterRun();
     }
+  }
+
+  private async afterRun(): Promise<void> {
+    await this.maybeAutoCompact();
+    await this.drainQueuedMessages();
+  }
+
+  // Pi-style alt+enter: when the agent is running, queue the editor's text
+  // to be sent after the current run finishes. When the agent isn't running,
+  // alt+enter behaves like enter. Plain enter while running also queues now,
+  // so this path is mostly redundant — but kept so users with both habits get
+  // the same result either way.
+  private handleAltEnter(): void {
+    const text = this.editor.text;
+    if (text.trim() === "") {
+      return;
+    }
+    this.editor.history.push(text);
+    this.editor.historyIndex = undefined;
+    this.editor.text = "";
+    this.editor.cursor = 0;
+    void this.onSubmit(text);
+  }
+
+  private async drainQueuedMessages(): Promise<void> {
+    if (this.state.queuedMessages.length === 0 || this.state.running) {
+      return;
+    }
+    const next = this.state.queuedMessages.shift();
+    if (next === undefined) return;
+    appendTranscript(this.state, {
+      kind: "status",
+      content: `▸ sending queued message`,
+    });
+    this.invalidate();
+    await this.onSubmit(next);
   }
 
   private async maybeAutoCompact(): Promise<void> {
@@ -621,15 +733,12 @@ export class CortexApp implements Component {
       case "model.request":
         this.state.status = `thinking (iter ${event.iteration})`;
         return;
+      case "assistant.delta":
+        appendAssistantDelta(this.state, event.iteration, event.contentDelta);
+        return;
       case "model.response":
         recordModelUsage(this.state, event.usage);
-        if (event.content.trim() !== "") {
-          appendTranscript(this.state, {
-            kind: "assistant",
-            content: event.content,
-            iteration: event.iteration,
-          });
-        }
+        finalizeAssistantStream(this.state, event.iteration, event.content);
         return;
       case "tool.call.started":
         recordToolStart(this.state, {
@@ -709,6 +818,41 @@ export class CortexApp implements Component {
     this.animationTimer = undefined;
   }
 
+  // Pi-aligned escape handler. Mirrors `interactive-mode.ts:onEscape`:
+  // a single Esc during an active run aborts the run (and queued messages);
+  // double-Esc on an empty/idle editor opens the resume picker. Esc with
+  // text in the editor is a no-op (the editor itself handled completion
+  // dismissal before reaching us). We only get called when the editor has
+  // no completion list to close.
+  private lastEscapeAt = 0;
+  private static readonly DOUBLE_ESCAPE_MS = 500;
+
+  private handleEditorEscape(): void {
+    // Pi's first branch: streaming → abort the run. Cortex's equivalent is
+    // an in-flight `currentRun`. Resetting `lastEscapeAt` here ensures the
+    // user can't accidentally chain Esc-Esc-Esc into "abort + open picker"
+    // — which is what made double-Esc look "screwed up" when a run was
+    // mid-stream.
+    if (this.currentRun !== undefined) {
+      this.currentRun.abort();
+      this.lastEscapeAt = 0;
+      appendTranscript(this.state, { kind: "status", content: "interrupting agent…" });
+      this.invalidate();
+      return;
+    }
+    if (this.editor.text.trim() !== "") {
+      this.lastEscapeAt = 0;
+      return;
+    }
+    const now = Date.now();
+    if (now - this.lastEscapeAt < CortexApp.DOUBLE_ESCAPE_MS) {
+      this.lastEscapeAt = 0;
+      void this.openSessionPicker("resume");
+      return;
+    }
+    this.lastEscapeAt = now;
+  }
+
   private cycleThinkingLevel(): void {
     this.state.reasoningEffort = nextThinkingLevel(this.state.reasoningEffort);
     this.persistPreferences();
@@ -749,17 +893,20 @@ export class CortexApp implements Component {
         sessions,
         (session) => {
           this.sessionSelector.close();
-          this.closeOverlay();
+          this.runtime.invalidate("clear");
           if (action === "resume") {
             void this.resumeSession(session.id);
           }
         },
         () => {
           this.sessionSelector.close();
-          this.closeOverlay();
+          this.runtime.invalidate("clear");
         },
       );
-      this.openOverlay(this.sessionSelector);
+      // Picker open is a frame-size transition (10 → ~22 rows). Force a
+      // clear+rehome so the diff redraw can't leave residual rows from the
+      // previous frame size on screen.
+      this.runtime.invalidate("clear");
     } finally {
       store.close();
     }
@@ -927,6 +1074,7 @@ export class CortexApp implements Component {
           name: pathMod.basename(absolute),
         };
         this.state.pendingAttachments.push(attachment);
+        appendTranscript(this.state, { kind: "image", attachment });
         appendTranscript(this.state, {
           kind: "status",
           content: `queued image: ${attachment.name} (${formatBytes(bytes.byteLength)}). It will be sent with your next message.`,
@@ -1013,26 +1161,6 @@ export class CortexApp implements Component {
       // History is best-effort; silently swallow.
     }
   }
-}
-
-function buildHelpLines(registry: SlashCommandRegistry): string[] {
-  return [
-    "Cortex TUI",
-    "",
-    "Editor:",
-    "  Enter        submit",
-    "  Shift+Enter  newline",
-    "  Tab          autocomplete /commands",
-    "  Shift+Tab    cycle thinking level",
-    "  Up/Down      history",
-    "  Ctrl+L       redraw",
-    "  Ctrl+C       cancel run / clear / exit",
-    "",
-    "Slash commands:",
-    ...registry.list().map((cmd) => `  /${cmd.name.padEnd(10)} ${cmd.description}`),
-    "",
-    "Press Esc or Enter to dismiss.",
-  ];
 }
 
 export async function buildAppOptions(repoRoot: string): Promise<{

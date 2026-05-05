@@ -171,4 +171,7 @@ export const theme = {
   bold: (text: string): string => `${CSI}1m${text}${CSI}22m`,
   inverse: (text: string): string => `${CSI}7m${text}${CSI}27m`,
   underline: (text: string): string => `${CSI}4m${text}${CSI}24m`,
+  // Pi-style user-message background. Approximates pi's `#343541` in the
+  // 256-color palette (color 237 ≈ #3a3a3a).
+  userBg: (text: string): string => `${CSI}48;5;237m${text}${CSI}49m`,
 };

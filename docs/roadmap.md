@@ -2,7 +2,7 @@
 
 Status: canonical top-level planning document.
 
-This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), and [tui-plan.md](./tui-plan.md). Those documents contain implementation details. This document defines what Cortex is, what we are building first, and how the pieces fit together.
+This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [tui-plan.md](./tui-plan.md), and [web-control-plane-plan.md](./web-control-plane-plan.md). Those documents contain implementation details. This document defines what Cortex is, what we are building first, and how the pieces fit together.
 
 Current implementation status: [status.md](./status.md).
 
@@ -13,7 +13,7 @@ Cortex is a local, agent-maintained personal work system.
 It has two tightly connected parts:
 
 1. A Markdown work wiki that captures the user's priorities, projects, people, decisions, meetings, open threads, action items, and source material.
-2. A Bun/TypeScript agentic harness that can query, maintain, and improve that wiki through explicit tools, persistent traces, memory, skills, scheduled maintenance jobs, and a TUI.
+2. A Bun/TypeScript agentic harness that can query, maintain, and improve that wiki through explicit tools, persistent traces, memory, skills, scheduled maintenance jobs, a TUI, and eventually a local web control plane for connector setup.
 
 The wiki is the durable knowledge base. The harness is the working system that keeps the knowledge base useful.
 
@@ -66,6 +66,14 @@ The TUI should be implemented end-to-end in this repo, using Pi as a reference b
 
 Detailed plan: [tui-plan.md](./tui-plan.md).
 
+### 4. Web Control Plane
+
+The web control plane is a future local browser UI for setup and operations, not a separate product and not the ingestion runtime itself. It should expose connector setup, OAuth/token status, dry-run pulls, ingest history, schedules, and proposal review for sources such as Notion, Granola, and Slack.
+
+The web app must call the same connector, scheduler, session, and proposal APIs used by the CLI and TUI. Connector logic belongs in shared packages; the web app is only another interface over those packages.
+
+Detailed plan: [web-control-plane-plan.md](./web-control-plane-plan.md).
+
 ## Learning Loops
 
 Learning is not model training. In Cortex, learning means improving durable local artifacts that future sessions can use.
@@ -88,6 +96,7 @@ Cortex is not trying to be:
 - A cloud SaaS product.
 - A multi-user team knowledge base.
 - A full automation platform with arbitrary integrations by default.
+- A web server exposed to the public internet.
 - A replacement for the user's source systems such as Slack, Notion, or Granola.
 - A model fine-tuning system.
 
@@ -98,8 +107,10 @@ We should copy good implementation ideas from Hermes and Pi. Pi is especially re
 - Local-first: the repo and `.cortex/` runtime state are the system of record.
 - Bun/TypeScript-first: all new first-party implementation should live in the current Bun workspace.
 - Explicit tools: the agent acts through named, auditable tools, not hidden side effects.
+- Shared connector contracts: CLI, TUI, scheduler, and web surfaces should call the same connector APIs.
 - Safe writes: raw sources are immutable, broad writes are guarded, and risky changes should be staged for review.
 - Durable traces: completed work should be inspectable and searchable later.
+- Local-only control surfaces: any web UI should bind to loopback by default and treat connector credentials as secrets.
 - Scheduled upkeep: the system should eventually run recurring maintenance jobs that keep the wiki, memory, skills, and indexes healthy.
 - Progressive capability: start with narrow useful tools, then add more powerful tools once policy and observability are solid.
 - Learning-first: memory, skills, and session recall should arrive early enough to shape the rest of the system.
@@ -118,7 +129,8 @@ The next implementation sequence is:
 6. Wire reflection so learning artifacts improve after useful sessions. Status: basic slice complete.
 7. Add scheduled maintenance jobs for wiki hygiene, memory review, skill curation, stale actions, and index refreshes.
 8. Continue improving the TUI around the richer agent runtime.
-9. Return to source ingestion and wiki automation once the harness can maintain the wiki with observable tools and learning loops.
+9. Return to source ingestion and wiki automation once the harness can maintain the wiki with observable tools and learning loops. Status: Notion raw page snapshots are in progress.
+10. After connector contracts and at least one raw-to-wiki ingestion path are stable, add a local web control plane for connector setup, dry-runs, schedules, ingest history, and proposal review.
 
 ## Reference Implementations
 
@@ -148,5 +160,6 @@ Scheduled maintenance should be treated as a first-class product feature. The po
 - [wiki-plan.md](./wiki-plan.md): wiki structure, source ingestion, entity schemas, and maintenance workflows.
 - [agent-harness-plan.md](./agent-harness-plan.md): model loop, tools, memory, skills, traces, and learning architecture.
 - [tui-plan.md](./tui-plan.md): terminal UI architecture and implementation direction.
+- [web-control-plane-plan.md](./web-control-plane-plan.md): local web UI for connector setup, operational status, scheduling, and proposal review.
 
 When the plans conflict, update this document first, then reconcile the lower-level plan.

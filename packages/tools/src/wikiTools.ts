@@ -129,7 +129,9 @@ const wikiListPagesTool: ToolDefinition<WikiListPagesArgs> = {
   async handler(args, context) {
     const includeRaw = optionalBoolean(args.includeRaw, false, "includeRaw");
     const limit = optionalPositiveInteger(args.limit, DEFAULT_LIST_LIMIT, "limit");
-    const root = optionalString(args.root, ".", "root");
+    // Models often pass `root: ""` for "list everything"; treat empty/blank
+    // the same as omitted.
+    const root = optionalString(args.root, ".", "root").trim() || ".";
     const start = resolveWikiPath(context.repoRoot, root, {
       allowRoot: true,
       allowRawRead: includeRaw,
@@ -215,7 +217,7 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
       DEFAULT_MAX_SEARCH_FILE_BYTES,
       "maxFileBytes",
     );
-    const root = optionalString(args.root, ".", "root");
+    const root = optionalString(args.root, ".", "root").trim() || ".";
     const start = resolveWikiPath(context.repoRoot, root, {
       allowRoot: true,
       allowRawRead: includeRaw,
@@ -305,8 +307,7 @@ const wikiPatchPageTool: ToolDefinition<WikiPatchPageArgs> = {
 
     const result = await editTextFile(context, {
       path: toRepoWikiPath(resolved.relativePath),
-      oldText,
-      newText,
+      edits: [{ oldText, newText }],
       replaceAll,
       maxFileBytes,
     });

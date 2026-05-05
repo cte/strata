@@ -19,7 +19,7 @@ The end state is not "a chatbot over Markdown." The end state is a durable work 
 ## 2. Non-Goals
 
 - Do not clone Hermes wholesale.
-- Do not build gateways, TUI, cron, plugin marketplaces, multi-provider routing, subagents, or browser/terminal automation in the first version.
+- Do not build gateways, plugin marketplaces, multi-provider routing, subagents, browser automation, or a web control plane in the first version.
 - Do not fine-tune models. "Learning" means improving durable context artifacts and retrieval indexes.
 - Do not give the model a generic shell tool by default. Wiki tools should be narrow and auditable.
 - Do not auto-edit `wiki/raw/` under any circumstance.
@@ -82,6 +82,18 @@ packages/
       registry.ts
       wikiTools.ts
       learningTools.ts
+  ingest/
+    src/
+      connectors.ts
+      notion.ts
+      granola.ts
+      slack.ts
+  web-api/
+    src/
+      server.ts
+      connectors.ts
+      sessions.ts
+      proposals.ts
   learning/
     src/
       reflection.ts
@@ -95,6 +107,13 @@ src/
     pullGranola.ts
     pullSlack.ts
     pullNotion.ts
+```
+
+Future application surfaces can live under `apps/` once shared package contracts are stable:
+
+```text
+apps/
+  web/        Local connector setup and operations UI
 ```
 
 Harness runtime state:
@@ -1013,14 +1032,31 @@ Acceptance:
 
 Deliverables:
 
+- Shared connector contract for config schema, validation/status, dry-runs, pulls, and trace-backed results.
 - Connect existing pull scripts into harness workflows.
 - Track source pulls as sessions.
 - Run ingest after source pull when requested.
 
 Acceptance:
 
+- CLI, TUI, scheduler, and future web surfaces can call the same connector APIs.
 - `pull:*` scripts can feed `cortex ingest`.
 - Raw source files remain immutable.
+
+### Phase 10: Local Web Control Plane
+
+Deliverables:
+
+- Small local HTTP API over connector configuration, connector status, dry-runs, ingest history, schedules, sessions, and proposals.
+- `apps/web` browser UI that binds to local-only APIs and never implements connector logic directly.
+- Connector setup flows for Notion, Granola, and Slack, starting with the connector that already has the strongest backend contract.
+
+Acceptance:
+
+- The web app can validate a connector configuration without writing raw source snapshots.
+- The web app can trigger the same trace-backed dry-run and pull paths as the CLI.
+- The web app can show recent ingest sessions and proposal status from `.cortex/`.
+- The web server binds to loopback by default and does not expose secrets in logs, traces, or client-rendered pages.
 
 ## 14. Configuration
 

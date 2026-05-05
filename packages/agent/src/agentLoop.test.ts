@@ -14,7 +14,10 @@ class SequenceModelAdapter implements ModelAdapter {
   constructor(private readonly responses: ModelResponse[]) {}
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    this.requests.push(structuredClone(request));
+    // Drop the streaming callback before snapshotting — structuredClone
+    // can't clone functions, and the test only inspects message/tool data.
+    const { onAssistantDelta: _omit, ...rest } = request;
+    this.requests.push(structuredClone(rest));
     const response = this.responses[this.index];
     this.index += 1;
     if (response === undefined) {

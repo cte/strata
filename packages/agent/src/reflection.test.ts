@@ -13,7 +13,8 @@ class JsonReflectionModel implements ModelAdapter {
   constructor(private readonly payload: unknown) {}
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    this.requests.push(structuredClone(request));
+    const { onAssistantDelta: _omit, ...rest } = request;
+    this.requests.push(structuredClone(rest));
     return {
       content: JSON.stringify(this.payload),
       finishReason: "stop",
