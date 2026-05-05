@@ -29,7 +29,9 @@ export async function copyToClipboard(text: string): Promise<void> {
   }
 
   if (!copied) {
-    throw new Error("No clipboard mechanism available (install xclip/wl-copy or use a terminal that supports OSC 52)");
+    throw new Error(
+      "No clipboard mechanism available (install xclip/wl-copy or use a terminal that supports OSC 52)",
+    );
   }
 }
 

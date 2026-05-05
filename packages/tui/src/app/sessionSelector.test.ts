@@ -16,11 +16,7 @@ function makeSession(id: string, title: string): SessionRecord {
   };
 }
 
-function renderSelector(
-  selector: SessionSelector,
-  width: number,
-  height: number,
-): string[] {
+function renderSelector(selector: SessionSelector, width: number, height: number): string[] {
   const frame = selector.render({ width, height });
   return frame.lines.map((line) => stripAnsi(line));
 }

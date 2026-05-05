@@ -1,8 +1,8 @@
 import { createServer, type Server } from "node:http";
 import {
+  type ChatGptCredentials,
   getChatGptCredentials,
   setChatGptCredentials,
-  type ChatGptCredentials,
 } from "./authStore.js";
 
 const CALLBACK_HOST = Bun.env.CORTEX_OAUTH_CALLBACK_HOST ?? "127.0.0.1";

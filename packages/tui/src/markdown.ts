@@ -252,11 +252,7 @@ function renderHorizontalRule(width: number, nextType: string | undefined): stri
   return lines;
 }
 
-function renderTable(
-  token: Tokens.Table,
-  width: number,
-  nextType: string | undefined,
-): string[] {
+function renderTable(token: Tokens.Table, width: number, nextType: string | undefined): string[] {
   const header = (token.header ?? []) as Tokens.TableCell[];
   const rows = (token.rows ?? []) as Tokens.TableCell[][];
   const numCols = header.length;
@@ -283,9 +279,7 @@ function renderTable(
   });
   const totalNatural = naturalWidths.reduce((a, b) => a + b, 0) + overhead;
   const colWidths =
-    totalNatural <= width
-      ? naturalWidths
-      : distributeColumns(naturalWidths, availableForCells);
+    totalNatural <= width ? naturalWidths : distributeColumns(naturalWidths, availableForCells);
 
   const out: string[] = [];
   out.push(`┌─${colWidths.map((w) => "─".repeat(w)).join("─┬─")}─┐`);

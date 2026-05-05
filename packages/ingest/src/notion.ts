@@ -6,11 +6,11 @@ import {
   asString,
   firstString,
   frontmatter,
+  type JsonObject,
   requireString,
   slugify,
   utcNow,
   writeOnce,
-  type JsonObject,
 } from "./common.js";
 
 const DEFAULT_NOTION_VERSION = "2026-03-11";

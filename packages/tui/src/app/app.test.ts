@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripAnsi } from "../ansi.js";
-import { FakeTerminal } from "../terminal.js";
 import { TuiRuntime } from "../runtime.js";
+import { FakeTerminal } from "../terminal.js";
 import { CortexApp } from "./app.js";
 
 function pump(ms = 30): Promise<void> {

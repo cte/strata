@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionStore } from "@cortex/core";
-import { compactSession, shouldAutoCompact } from "./compaction.js";
 import { runAgentLoop } from "./agentLoop.js";
+import { compactSession, shouldAutoCompact } from "./compaction.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
 class SequenceModelAdapter implements ModelAdapter {
@@ -78,9 +78,7 @@ describe("compactSession", () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-compact-"));
     try {
       // First turn
-      const m1 = new SequenceModelAdapter([
-        { content: "hi", finishReason: "stop", toolCalls: [] },
-      ]);
+      const m1 = new SequenceModelAdapter([{ content: "hi", finishReason: "stop", toolCalls: [] }]);
       const first = await runAgentLoop({ question: "q1", model: m1, repoRoot });
 
       // First compaction (initial)
@@ -130,9 +128,7 @@ describe("compactSession", () => {
   test("compacting twice with no new turns errors clearly", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-compact-"));
     try {
-      const m = new SequenceModelAdapter([
-        { content: "x", finishReason: "stop", toolCalls: [] },
-      ]);
+      const m = new SequenceModelAdapter([{ content: "x", finishReason: "stop", toolCalls: [] }]);
       const session = await runAgentLoop({ question: "q", model: m, repoRoot });
       const sum = new SequenceModelAdapter([
         { content: "## Goal", finishReason: "stop", toolCalls: [] },
@@ -150,12 +146,10 @@ describe("compactSession", () => {
     expect(shouldAutoCompact({ contextWindow: 1000, latestContextTokens: 750 })).toBe(true);
     expect(shouldAutoCompact({ contextWindow: 1000, latestContextTokens: 749 })).toBe(false);
     // Default threshold 0.75; explicit threshold overrides.
-    expect(
-      shouldAutoCompact({ contextWindow: 100, latestContextTokens: 50, threshold: 0.4 }),
-    ).toBe(true);
-    expect(
-      shouldAutoCompact({ contextWindow: 100, latestContextTokens: undefined }),
-    ).toBe(false);
+    expect(shouldAutoCompact({ contextWindow: 100, latestContextTokens: 50, threshold: 0.4 })).toBe(
+      true,
+    );
+    expect(shouldAutoCompact({ contextWindow: 100, latestContextTokens: undefined })).toBe(false);
     expect(shouldAutoCompact({ contextWindow: undefined, latestContextTokens: 9999 })).toBe(false);
   });
 

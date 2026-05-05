@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { stripAnsi } from "./ansi.js";
-import { FakeTerminal } from "./terminal.js";
-import { TuiRuntime } from "./runtime.js";
 import { Container, Text } from "./components.js";
+import { TuiRuntime } from "./runtime.js";
+import { FakeTerminal } from "./terminal.js";
 
 function pump(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 30));

@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdir, appendFile } from "node:fs/promises";
+import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createSessionId, nowIso, safeJsonStringify } from "./events.js";
 import { getCortexPaths } from "./paths.js";
@@ -150,16 +150,12 @@ export class SessionStore {
   }
 
   deleteMessages(sessionId: string): number {
-    const result = this.db
-      .query("delete from messages where session_id = ?")
-      .run(sessionId);
+    const result = this.db.query("delete from messages where session_id = ?").run(sessionId);
     return Number(result.changes);
   }
 
   updateSessionTitle(sessionId: string, title: string): void {
-    this.db
-      .query("update sessions set title = ? where id = ?")
-      .run(title, sessionId);
+    this.db.query("update sessions set title = ? where id = ?").run(title, sessionId);
   }
 
   /**
@@ -230,13 +226,9 @@ export class SessionStore {
       content: row.content,
       toolCallId: row.tool_call_id,
       toolCalls:
-        row.tool_calls_json === null
-          ? null
-          : (JSON.parse(row.tool_calls_json) as JsonValue),
+        row.tool_calls_json === null ? null : (JSON.parse(row.tool_calls_json) as JsonValue),
       attachments:
-        row.attachments_json === null
-          ? null
-          : (JSON.parse(row.attachments_json) as JsonValue),
+        row.attachments_json === null ? null : (JSON.parse(row.attachments_json) as JsonValue),
       ts: row.ts,
     }));
   }

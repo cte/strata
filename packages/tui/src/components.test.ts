@@ -3,7 +3,9 @@ import { stripAnsi } from "./ansi.js";
 import { Markdown } from "./components.js";
 
 function render(text: string, width = 60): string[] {
-  return new Markdown(text).render({ width, height: 0 }).lines.map((line) => stripAnsi(line).replace(/\s+$/, ""));
+  return new Markdown(text)
+    .render({ width, height: 0 })
+    .lines.map((line) => stripAnsi(line).replace(/\s+$/, ""));
 }
 
 describe("Markdown", () => {

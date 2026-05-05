@@ -1,14 +1,14 @@
+import type { JsonObject, JsonValue } from "@cortex/core";
 import {
   addTodo,
   listTodos,
   removeTodo,
-  updateTodo,
   type TodoAddInput,
   type TodoPriority,
   type TodoStatus,
   type TodoUpdateInput,
+  updateTodo,
 } from "@cortex/core";
-import type { JsonObject, JsonValue } from "@cortex/core";
 import {
   optionalBoolean,
   optionalEnum,

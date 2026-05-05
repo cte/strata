@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { runAgentLoopEvents } from "@cortex/agent/agent-loop";
 import type { AgentRunEvent, ModelAdapter, ModelRequest, ModelResponse } from "@cortex/agent/types";
-import { FakeTerminal, TuiRuntime, stripAnsi } from "@cortex/tui";
+import { FakeTerminal, stripAnsi, TuiRuntime } from "@cortex/tui";
 import { CortexApp } from "@cortex/tui/internal/app";
 
 class ScriptedModel implements ModelAdapter {

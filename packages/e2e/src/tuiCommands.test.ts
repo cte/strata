@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { FakeTerminal, TuiRuntime, stripAnsi } from "@cortex/tui";
+import { FakeTerminal, stripAnsi, TuiRuntime } from "@cortex/tui";
 import { CortexApp } from "@cortex/tui/internal/app";
 
 function pump(ms = 60): Promise<void> {

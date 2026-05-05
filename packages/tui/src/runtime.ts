@@ -1,10 +1,10 @@
 import {
   CLEAR_SCREEN,
   HIDE_CURSOR,
+  padToWidth,
   SHOW_CURSOR,
   SYNC_BEGIN,
   SYNC_END,
-  padToWidth,
   sliceByWidth,
   visibleWidth,
 } from "./ansi.js";
@@ -164,9 +164,7 @@ export class TuiRuntime {
     if (sequence.startsWith(PASTE_START)) {
       const end = sequence.lastIndexOf(PASTE_END);
       const text =
-        end === -1
-          ? sequence.slice(PASTE_START.length)
-          : sequence.slice(PASTE_START.length, end);
+        end === -1 ? sequence.slice(PASTE_START.length) : sequence.slice(PASTE_START.length, end);
       this.routeInput({ type: "paste", text, raw: sequence });
       this.invalidate();
       return;

@@ -1,4 +1,4 @@
-import { SessionStore, getCortexPaths, type MessageRecord } from "@cortex/core";
+import { getCortexPaths, type MessageRecord, SessionStore } from "@cortex/core";
 import type { ModelAdapter } from "./types.js";
 
 // Prompts ported verbatim from pi-mono (`coding-agent/src/core/compaction/{utils,compaction}.ts`).
@@ -127,8 +127,7 @@ export async function compactSession(
       throw new Error("nothing new to compact since the last compaction");
     }
 
-    const messagesToSummarize =
-      detected === undefined ? allMessages : detected.newMessages;
+    const messagesToSummarize = detected === undefined ? allMessages : detected.newMessages;
     const conversationText = messagesToSummarize
       .map((message) => `[${message.role}] ${message.content}`)
       .join("\n\n");

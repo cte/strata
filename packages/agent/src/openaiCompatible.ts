@@ -76,7 +76,8 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
     };
     if (request.reasoningEffort !== undefined && request.reasoningEffort !== "off") {
       // chat/completions accepts minimal|low|medium|high; map xhigh -> high.
-      body.reasoning_effort = request.reasoningEffort === "xhigh" ? "high" : request.reasoningEffort;
+      body.reasoning_effort =
+        request.reasoningEffort === "xhigh" ? "high" : request.reasoningEffort;
     }
     const init: RequestInit = {
       method: "POST",
@@ -192,7 +193,8 @@ async function parseChatCompletionsStream(
     .sort((a, b) => a.order - b.order)
     .map((entry, idx) => ({
       id: entry.id !== "" ? entry.id : `tool_call_${idx + 1}`,
-      name: providerToCanonical.get(entry.name) ?? (entry.name !== "" ? entry.name : "unknown.tool"),
+      name:
+        providerToCanonical.get(entry.name) ?? (entry.name !== "" ? entry.name : "unknown.tool"),
       argumentsText: entry.argumentsText !== "" ? entry.argumentsText : "{}",
     }));
 
@@ -272,4 +274,3 @@ function toProviderTool(tool: ToolMetadata, toolNameMap: Map<string, string>): J
     },
   };
 }
-

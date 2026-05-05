@@ -3,11 +3,11 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  type ChatGptCredentials,
   clearChatGptCredentials,
   getAuthStorePath,
   getChatGptCredentials,
   setChatGptCredentials,
-  type ChatGptCredentials,
 } from "./authStore.js";
 
 describe("auth store", () => {

@@ -1,5 +1,5 @@
-import { listSkills, readSkill } from "@cortex/core";
 import type { JsonObject, JsonValue } from "@cortex/core";
+import { listSkills, readSkill } from "@cortex/core";
 import { optionalInteger, requiredNonEmptyString } from "./args.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolDefinition } from "./types.js";

@@ -1,9 +1,9 @@
 import {
   getChatGptCredentials,
   getValidChatGptCredentials,
+  type ModelAdapter,
   OpenAICodexModelAdapter,
   OpenAICompatibleChatModelAdapter,
-  type ModelAdapter,
 } from "@cortex/agent";
 import type { AuthStatusSummary, ProviderName } from "./state.js";
 
