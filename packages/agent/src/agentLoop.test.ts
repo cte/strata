@@ -200,4 +200,46 @@ describe("runAgentLoop", () => {
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
+
+  test("continueSessionId seeds prior turns into the model context", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    try {
+      const firstModel = new SequenceModelAdapter([
+        { content: "Hi, I'm Cortex.", finishReason: "stop", toolCalls: [] },
+      ]);
+      const first = await runAgentLoop({
+        question: "Who are you?",
+        model: firstModel,
+        repoRoot,
+      });
+      expect(first.status).toBe("completed");
+
+      const secondModel = new SequenceModelAdapter([
+        {
+          content: "I just told you: Cortex.",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+      const second = await runAgentLoop({
+        question: "What did you just say?",
+        model: secondModel,
+        repoRoot,
+        continueSessionId: first.sessionId,
+      });
+
+      expect(second.sessionId).toBe(first.sessionId);
+
+      // The seed for the second run should include both the prior user
+      // question and the prior assistant reply, plus the new user turn.
+      const seeded = secondModel.requests[0]?.messages ?? [];
+      const nonSystem = seeded.filter((m) => m.role !== "system");
+      expect(nonSystem.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+      expect(nonSystem[0]?.content).toBe("Who are you?");
+      expect(nonSystem[1]?.content).toBe("Hi, I'm Cortex.");
+      expect(nonSystem[2]?.content).toBe("What did you just say?");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
 });

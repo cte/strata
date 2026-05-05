@@ -15,8 +15,21 @@ export interface AutocompleteItem {
   description?: string;
 }
 
+export interface AutocompleteSuggestions {
+  items: AutocompleteItem[];
+  /**
+   * Indices in `text` of the range to replace when an item is accepted.
+   * For slash commands this is the whole input (`0` to `text.length`).
+   * For `@file` mentions, `replaceStart` is the position of `@` and
+   * `replaceEnd` is the cursor position (so the user's partial token is
+   * swapped for the chosen completion).
+   */
+  replaceStart: number;
+  replaceEnd: number;
+}
+
 export interface AutocompleteProvider {
-  provide(value: string): AutocompleteItem[];
+  provide(text: string, cursor: number): AutocompleteSuggestions | undefined;
 }
 
 export interface EditorOptions {
@@ -43,6 +56,8 @@ export class Editor implements Component {
   onCancel?: () => void;
   private completions: AutocompleteItem[] = [];
   private completionIndex = 0;
+  private completionReplaceStart = 0;
+  private completionReplaceEnd = 0;
 
   constructor(options: EditorOptions = {}) {
     this.prompt = options.prompt ?? "› ";
@@ -239,10 +254,7 @@ export class Editor implements Component {
         }
         return "passthrough";
       case "tab":
-        if (this.autocomplete !== undefined) {
-          this.completions = this.autocomplete.provide(this.text);
-          this.completionIndex = 0;
-        }
+        this.refreshCompletions();
         return "consumed";
       case "escape":
         this.onCancel?.();
@@ -268,8 +280,10 @@ export class Editor implements Component {
     if (item === undefined) {
       return;
     }
-    this.text = item.value;
-    this.cursor = item.value.length;
+    const before = this.text.slice(0, this.completionReplaceStart);
+    const after = this.text.slice(this.completionReplaceEnd);
+    this.text = before + item.value + after;
+    this.cursor = before.length + item.value.length;
     this.completions = [];
     this.completionIndex = 0;
     this.onChange?.(this.text);
@@ -281,12 +295,16 @@ export class Editor implements Component {
       this.completionIndex = 0;
       return;
     }
-    if (this.text.startsWith("/")) {
-      this.completions = this.autocomplete.provide(this.text);
-      this.completionIndex = 0;
-    } else {
+    const result = this.autocomplete.provide(this.text, this.cursor);
+    if (result === undefined || result.items.length === 0) {
       this.completions = [];
+      this.completionIndex = 0;
+      return;
     }
+    this.completions = result.items;
+    this.completionReplaceStart = result.replaceStart;
+    this.completionReplaceEnd = result.replaceEnd;
+    this.completionIndex = 0;
   }
 
   private recordHistory(value: string): void {

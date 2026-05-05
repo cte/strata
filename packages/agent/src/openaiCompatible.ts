@@ -3,6 +3,7 @@ import type { ToolMetadata } from "@cortex/tools";
 import { ModelAdapterError } from "./model.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
 import type {
+  AgentAttachment,
   AgentMessage,
   AgentToolCall,
   ModelAdapter,
@@ -60,21 +61,26 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const toolNameMap = createProviderToolNameMap(request.tools);
+    const body: JsonObject = {
+      model: this.model,
+      messages: request.messages.map((message) =>
+        toProviderMessage(message, toolNameMap.canonicalToProvider),
+      ),
+      tools: request.tools.map((tool) => toProviderTool(tool, toolNameMap.canonicalToProvider)),
+      tool_choice: request.tools.length > 0 ? "auto" : "none",
+      parallel_tool_calls: false,
+    };
+    if (request.reasoningEffort !== undefined && request.reasoningEffort !== "off") {
+      // chat/completions accepts minimal|low|medium|high; map xhigh -> high.
+      body.reasoning_effort = request.reasoningEffort === "xhigh" ? "high" : request.reasoningEffort;
+    }
     const init: RequestInit = {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.apiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: this.model,
-        messages: request.messages.map((message) =>
-          toProviderMessage(message, toolNameMap.canonicalToProvider),
-        ),
-        tools: request.tools.map((tool) => toProviderTool(tool, toolNameMap.canonicalToProvider)),
-        tool_choice: request.tools.length > 0 ? "auto" : "none",
-        parallel_tool_calls: false,
-      }),
+      body: JSON.stringify(body),
     };
     if (request.signal !== undefined) {
       init.signal = request.signal;
@@ -122,9 +128,14 @@ function toProviderMessage(message: AgentMessage, toolNameMap: Map<string, strin
     };
   }
 
+  // chat/completions accepts content as either a plain string OR an array of
+  // content parts (text + image_url) when multimodal input is needed.
+  const hasAttachments = message.attachments !== undefined && message.attachments.length > 0;
   const providerMessage: JsonObject = {
     role: message.role,
-    content: message.content,
+    content: hasAttachments
+      ? buildChatCompletionsContentParts(message.content, message.attachments ?? [])
+      : message.content,
   };
 
   if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
@@ -139,6 +150,25 @@ function toProviderMessage(message: AgentMessage, toolNameMap: Map<string, strin
   }
 
   return providerMessage;
+}
+
+function buildChatCompletionsContentParts(
+  text: string,
+  attachments: readonly AgentAttachment[],
+): JsonValue[] {
+  const parts: JsonValue[] = [];
+  if (text !== "") {
+    parts.push({ type: "text", text });
+  }
+  for (const attachment of attachments) {
+    if (attachment.kind === "image") {
+      parts.push({
+        type: "image_url",
+        image_url: { url: `data:${attachment.mimeType};base64,${attachment.dataBase64}` },
+      });
+    }
+  }
+  return parts;
 }
 
 function toProviderTool(tool: ToolMetadata, toolNameMap: Map<string, string>): JsonObject {

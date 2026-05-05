@@ -48,6 +48,11 @@ describe("runAgentLoopEvents", () => {
           content: "Needle is documented.",
           finishReason: "stop",
           toolCalls: [],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            total_tokens: 120,
+          },
         },
       ]);
 
@@ -71,6 +76,14 @@ describe("runAgentLoopEvents", () => {
 
       const completion = events.find((e) => e.type === "agent.completed");
       expect(completion?.type === "agent.completed" && completion.result.status).toBe("completed");
+      const finalResponse = events.find(
+        (e) => e.type === "model.response" && e.content === "Needle is documented.",
+      );
+      expect(finalResponse?.type === "model.response" && finalResponse.usage).toEqual({
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 120,
+      });
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

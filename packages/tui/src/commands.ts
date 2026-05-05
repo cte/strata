@@ -1,4 +1,4 @@
-import type { AutocompleteItem, AutocompleteProvider } from "./editor.js";
+import type { AutocompleteProvider, AutocompleteSuggestions } from "./editor.js";
 
 export interface SlashCommand {
   name: string;
@@ -38,17 +38,21 @@ export class SlashCommandRegistry implements AutocompleteProvider {
     return command === undefined ? undefined : { command, args };
   }
 
-  provide(value: string): AutocompleteItem[] {
-    if (!value.startsWith("/")) {
-      return [];
+  provide(text: string, _cursor: number): AutocompleteSuggestions | undefined {
+    if (!text.startsWith("/")) {
+      return undefined;
     }
-    const prefix = value.slice(1).toLowerCase();
-    return this.list()
+    const prefix = text.slice(1).toLowerCase();
+    const items = this.list()
       .filter((cmd) => cmd.name.toLowerCase().startsWith(prefix))
       .map((cmd) => ({
         label: `/${cmd.name}`,
         value: `/${cmd.name}`,
         description: cmd.description,
       }));
+    if (items.length === 0) {
+      return undefined;
+    }
+    return { items, replaceStart: 0, replaceEnd: text.length };
   }
 }

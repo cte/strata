@@ -1,5 +1,19 @@
-import type { AgentRunResult, AgentToolCall } from "@cortex/agent";
+import type {
+  AgentAttachment,
+  AgentRunResult,
+  AgentToolCall,
+  ThinkingLevel,
+} from "@cortex/agent";
+import type { JsonObject } from "@cortex/core";
+import { THINKING_LEVELS } from "@cortex/agent";
 import type { ToolExecutionResult } from "@cortex/tools";
+import {
+  addModelUsage,
+  contextWindowForModel,
+  createTokenUsageTotals,
+  resetTokenUsage,
+  type TokenUsageTotals,
+} from "./usage.js";
 
 export type ProviderName = "openai-codex" | "openai-compatible";
 
@@ -25,11 +39,16 @@ export type TranscriptItem =
 export interface AppState {
   provider: ProviderName;
   model: string;
+  contextWindow: number | undefined;
+  reasoningEffort: ThinkingLevel;
   auth: AuthStatusSummary;
   currentSessionId: string | undefined;
   running: boolean;
   status: string | undefined;
+  usage: TokenUsageTotals;
   transcript: TranscriptItem[];
+  /** Attachments queued for the next user submission (cleared after submit). */
+  pendingAttachments: AgentAttachment[];
 }
 
 export function initialAppState(
@@ -40,12 +59,35 @@ export function initialAppState(
   return {
     provider,
     model,
+    contextWindow: contextWindowForModel(provider, model),
+    reasoningEffort: "off",
     auth,
     currentSessionId: undefined,
     running: false,
     status: undefined,
+    usage: createTokenUsageTotals(),
     transcript: [],
+    pendingAttachments: [],
   };
+}
+
+export function setModelSelection(state: AppState, provider: ProviderName, model: string): void {
+  state.provider = provider;
+  state.model = model;
+  state.contextWindow = contextWindowForModel(provider, model);
+  resetTokenUsage(state.usage);
+}
+
+export function startSession(state: AppState, sessionId: string): void {
+  state.currentSessionId = sessionId;
+  state.contextWindow = contextWindowForModel(state.provider, state.model);
+  resetTokenUsage(state.usage);
+}
+
+export function nextThinkingLevel(level: ThinkingLevel): ThinkingLevel {
+  const idx = THINKING_LEVELS.indexOf(level);
+  const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
+  return next ?? "off";
 }
 
 export function appendTranscript(state: AppState, item: TranscriptItem): void {
@@ -77,6 +119,10 @@ export function recordToolResult(
       return;
     }
   }
+}
+
+export function recordModelUsage(state: AppState, usage: JsonObject | undefined): void {
+  addModelUsage(state.usage, usage);
 }
 
 export function recordCompletion(state: AppState, result: AgentRunResult): void {

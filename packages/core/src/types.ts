@@ -51,4 +51,16 @@ export interface MessageInput {
   content: string;
   toolCallId?: string;
   toolCalls?: JsonValue;
+  attachments?: JsonValue;
+}
+
+export interface MessageRecord {
+  id: number;
+  sessionId: string;
+  role: MessageRole;
+  content: string;
+  toolCallId: string | null;
+  toolCalls: JsonValue | null;
+  attachments: JsonValue | null;
+  ts: string;
 }

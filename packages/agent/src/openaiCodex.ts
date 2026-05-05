@@ -9,6 +9,7 @@ import type {
   ModelAdapter,
   ModelRequest,
   ModelResponse,
+  ThinkingLevel,
 } from "./types.js";
 
 export interface OpenAICodexModelOptions {
@@ -107,7 +108,16 @@ function buildCodexRequestBody(
     body.tools = request.tools.map((tool) => toResponsesTool(tool, canonicalToProvider));
     body.tool_choice = "auto";
   }
+  if (request.reasoningEffort !== undefined && request.reasoningEffort !== "off") {
+    body.reasoning = { effort: mapResponsesEffort(request.reasoningEffort) };
+  }
   return body;
+}
+
+function mapResponsesEffort(level: Exclude<ThinkingLevel, "off">): string {
+  // The OpenAI responses API accepts minimal|low|medium|high. Pi exposes an
+  // additional "xhigh" tier that providers map to their highest setting.
+  return level === "xhigh" ? "high" : level;
 }
 
 function toResponsesInputItems(
@@ -116,12 +126,23 @@ function toResponsesInputItems(
   canonicalToProvider: Map<string, string>,
 ): JsonObject[] {
   if (message.role === "user") {
-    return [
-      {
-        role: "user",
-        content: [{ type: "input_text", text: message.content }],
-      },
-    ];
+    const content: JsonObject[] = [];
+    if (message.content !== "") {
+      content.push({ type: "input_text", text: message.content });
+    }
+    for (const attachment of message.attachments ?? []) {
+      if (attachment.kind === "image") {
+        content.push({
+          type: "input_image",
+          image_url: `data:${attachment.mimeType};base64,${attachment.dataBase64}`,
+          detail: "auto",
+        });
+      }
+    }
+    if (content.length === 0) {
+      content.push({ type: "input_text", text: "" });
+    }
+    return [{ role: "user", content }];
   }
 
   if (message.role === "tool") {

@@ -80,6 +80,89 @@ describe("OpenAICodexModelAdapter", () => {
       ],
     });
   });
+
+  test("includes reasoning effort when set, mapping xhigh to high", async () => {
+    const captured: JsonObject[] = [];
+    const fetchImpl = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        captured.push(JSON.parse(String(args[1]?.body)) as JsonObject);
+        return new Response(
+          sse({ type: "response.completed", response: { id: "resp_x", status: "completed" } }),
+          { status: 200 },
+        );
+      },
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+
+    const adapter = new OpenAICodexModelAdapter({
+      credentials: fakeCredentials(),
+      model: "gpt-5.5",
+      fetchImpl,
+    });
+
+    await adapter.complete({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      reasoningEffort: "high",
+    });
+    await adapter.complete({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      reasoningEffort: "xhigh",
+    });
+    await adapter.complete({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      reasoningEffort: "off",
+    });
+    await adapter.complete({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    });
+
+    expect(captured[0]?.reasoning).toEqual({ effort: "high" });
+    expect(captured[1]?.reasoning).toEqual({ effort: "high" });
+    expect(captured[2]?.reasoning).toBeUndefined();
+    expect(captured[3]?.reasoning).toBeUndefined();
+  });
+
+  test("encodes image attachments as input_image content parts", async () => {
+    let capturedBody: JsonObject | undefined;
+    const fetchImpl = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        capturedBody = JSON.parse(String(args[1]?.body)) as JsonObject;
+        return new Response(
+          sse({ type: "response.completed", response: { id: "r", status: "completed" } }),
+          { status: 200 },
+        );
+      },
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+    const adapter = new OpenAICodexModelAdapter({
+      credentials: fakeCredentials(),
+      model: "gpt-5.5",
+      fetchImpl,
+    });
+    await adapter.complete({
+      messages: [
+        {
+          role: "user",
+          content: "What's in this?",
+          attachments: [
+            { kind: "image", mimeType: "image/png", dataBase64: "AAAA", name: "ss.png" },
+          ],
+        },
+      ],
+      tools: [],
+    });
+    const input = (capturedBody as { input: { role: string; content: unknown[] }[] }).input;
+    const userTurn = input.find((entry) => entry.role === "user");
+    expect(Array.isArray(userTurn?.content)).toBe(true);
+    const parts = userTurn?.content as { type: string; text?: string; image_url?: string }[];
+    expect(parts[0]).toEqual({ type: "input_text", text: "What's in this?" });
+    expect(parts[1]?.type).toBe("input_image");
+    expect(parts[1]?.image_url).toBe("data:image/png;base64,AAAA");
+  });
 });
 
 function sse(value: JsonObject): string {

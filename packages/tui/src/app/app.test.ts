@@ -12,7 +12,7 @@ function pump(ms = 30): Promise<void> {
 }
 
 describe("CortexApp", () => {
-  test("renders header, transcript hint, editor, and footer", async () => {
+  test("renders transcript hint, editor, and footer", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
     try {
       const terminal = new FakeTerminal(60, 12);
@@ -27,10 +27,15 @@ describe("CortexApp", () => {
       await pump();
       runtime.stop();
       const output = stripAnsi(terminal.output);
-      expect(output).toContain("cortex");
+      expect(output).toContain("─".repeat(60));
       expect(output).toContain("gpt-test");
       expect(output).toContain("Type a question or /help");
       expect(output).toContain("/help");
+      expect(output).toContain("no session");
+      expect(output).toContain("thinking off");
+      expect(output).not.toContain("auth✗");
+      expect(output).not.toContain("auth✓");
+      expect(output).not.toContain("api-key✓");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
@@ -89,6 +94,92 @@ describe("CortexApp", () => {
       expect(dismissed).not.toContain("─ help ─");
       expect(dismissed).toContain("›");
       runtime.stop();
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("keeps the status loader animating while an agent run is active", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    try {
+      const terminal = new FakeTerminal(60, 12);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new CortexApp(
+        runtime,
+        { repoRoot, provider: "openai-codex", model: "gpt-test" },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      runtime.start();
+      await pump();
+
+      const internal = app as unknown as {
+        state: { running: boolean };
+        invalidate: () => void;
+      };
+      const before = terminal.frames.length;
+      internal.state.running = true;
+      internal.invalidate();
+      await pump(240);
+      internal.state.running = false;
+      internal.invalidate();
+      runtime.stop();
+
+      expect(terminal.frames.length).toBeGreaterThan(before + 1);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("renders token and context metrics in the footer", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    try {
+      const terminal = new FakeTerminal(80, 12);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new CortexApp(
+        runtime,
+        { repoRoot, provider: "openai-codex", model: "gpt-5.5" },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      runtime.start();
+      await pump();
+
+      const internal = app as unknown as {
+        applyAgentEvent: (event: {
+          type: "model.response";
+          iteration: number;
+          content: string;
+          toolCalls: [];
+          usage: {
+            input_tokens: number;
+            output_tokens: number;
+            total_tokens: number;
+            input_tokens_details: { cached_tokens: number };
+          };
+        }) => void;
+      };
+      internal.applyAgentEvent({
+        type: "model.response",
+        iteration: 1,
+        content: "",
+        toolCalls: [],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          total_tokens: 120,
+          input_tokens_details: { cached_tokens: 20 },
+        },
+      });
+      runtime.invalidate();
+      await pump();
+      runtime.stop();
+
+      const output = stripAnsi(terminal.output);
+      expect(output).toContain("↑80");
+      expect(output).toContain("↓20");
+      expect(output).toContain("R20");
+      expect(output).toContain("0.0%/272k");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

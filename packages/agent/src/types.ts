@@ -9,17 +9,47 @@ export interface AgentToolCall {
   argumentsText: string;
 }
 
+export interface AgentImageAttachment {
+  kind: "image";
+  /** A MIME type like "image/png" or "image/jpeg". */
+  mimeType: string;
+  /** Base64-encoded image bytes (no `data:` prefix). */
+  dataBase64: string;
+  /** Optional original filename, used only for display. */
+  name?: string;
+}
+
+export type AgentAttachment = AgentImageAttachment;
+
 export interface AgentMessage {
   role: AgentMessageRole;
   content: string;
   toolCallId?: string;
   toolCalls?: AgentToolCall[];
+  /**
+   * Multimodal attachments associated with this message. Adapters convert them
+   * into provider-specific content parts; if absent, the message is sent as
+   * plain text exactly as before.
+   */
+  attachments?: AgentAttachment[];
 }
+
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 
 export interface ModelRequest {
   messages: AgentMessage[];
   tools: ToolMetadata[];
   signal?: AbortSignal;
+  reasoningEffort?: ThinkingLevel;
 }
 
 export interface ModelResponse {
@@ -44,6 +74,16 @@ export interface AgentRunConfig {
   maxIterations?: number;
   maxToolCalls?: number;
   signal?: AbortSignal;
+  reasoningEffort?: ThinkingLevel;
+  /** Optional image (and future: audio/file) attachments for this user turn. */
+  attachments?: AgentAttachment[];
+  /**
+   * If set, this run continues an existing session: prior assistant/user/tool
+   * messages are loaded from the session DB and seeded into the model context.
+   * The system prompt and run-context (memory/todos/skills) are rebuilt fresh
+   * each run, so they always reflect current state.
+   */
+  continueSessionId?: string;
 }
 
 export interface AgentRunResult {
@@ -66,6 +106,7 @@ export type AgentRunEvent =
       iteration: number;
       content: string;
       toolCalls: AgentToolCall[];
+      usage?: JsonObject;
     }
   | {
       type: "tool.call.started";

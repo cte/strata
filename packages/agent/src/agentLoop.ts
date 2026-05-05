@@ -47,22 +47,76 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
 
   try {
     const runContext = await buildRunContext({ question: config.question, repoRoot });
-    messages = runContext.messages;
     systemContext = runContext.systemContext;
-    session = await store.createSession({
-      kind: "query",
-      title: config.sessionTitle ?? truncateTitle(config.question),
-      model: config.model.name,
-    });
-    for (const message of messages) {
-      await appendInitialMessage(store, session.id, message);
+
+    // Attach any image/file payloads the user provided to the new user-role
+    // message. We mutate runContext in place since buildRunContext just built
+    // it for us — no other consumer holds the reference.
+    if (config.attachments !== undefined && config.attachments.length > 0) {
+      for (const message of runContext.messages) {
+        if (message.role === "user") {
+          message.attachments = config.attachments;
+        }
+      }
     }
-    await store.appendEvent(session.id, "message.system_context", systemContext);
-    await store.appendEvent(session.id, "agent.loop.started", {
-      maxIterations,
-      maxToolCalls,
-      tools: tools.list().map((tool) => tool.name),
-    });
+
+    const continuingSessionId = config.continueSessionId;
+    const continuingSession =
+      continuingSessionId === undefined ? undefined : store.getSession(continuingSessionId);
+
+    if (continuingSession !== undefined) {
+      // Continue an existing session: rebuild the system messages so the agent
+      // gets fresh memory/todos/skills, but seed the rest of the message log
+      // from history so the model sees the prior turns.
+      session = continuingSession;
+      const systemMessages = runContext.messages.filter((m) => m.role === "system");
+      const priorNonSystem = store
+        .listMessages(session.id)
+        .filter((m) => m.role !== "system")
+        .map(messageRecordToAgentMessage);
+      const userMessage = runContext.messages.find((m) => m.role === "user");
+      messages = [
+        ...systemMessages,
+        ...priorNonSystem,
+        ...(userMessage === undefined ? [] : [userMessage]),
+      ];
+      // Persist the new user turn (the system messages are not re-persisted —
+      // they're regenerated each run).
+      if (userMessage !== undefined) {
+        const messageInput: import("@cortex/core").MessageInput = {
+          sessionId: session.id,
+          role: "user",
+          content: userMessage.content,
+        };
+        if (userMessage.attachments !== undefined && userMessage.attachments.length > 0) {
+          messageInput.attachments = userMessage.attachments as unknown as JsonValue;
+        }
+        await store.appendMessage(messageInput);
+      }
+      await store.appendEvent(session.id, "message.system_context", systemContext);
+      await store.appendEvent(session.id, "agent.loop.resumed", {
+        maxIterations,
+        maxToolCalls,
+        tools: tools.list().map((tool) => tool.name),
+        priorMessages: priorNonSystem.length,
+      });
+    } else {
+      messages = runContext.messages;
+      session = await store.createSession({
+        kind: "query",
+        title: config.sessionTitle ?? truncateTitle(config.question),
+        model: config.model.name,
+      });
+      for (const message of messages) {
+        await appendInitialMessage(store, session.id, message);
+      }
+      await store.appendEvent(session.id, "message.system_context", systemContext);
+      await store.appendEvent(session.id, "agent.loop.started", {
+        maxIterations,
+        maxToolCalls,
+        tools: tools.list().map((tool) => tool.name),
+      });
+    }
 
     yield {
       type: "session.started",
@@ -90,12 +144,16 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
           messages: typeof messages;
           tools: ReturnType<typeof tools.list>;
           signal?: AbortSignal;
+          reasoningEffort?: typeof config.reasoningEffort;
         } = {
           messages,
           tools: tools.list(),
         };
         if (signal !== undefined) {
           modelRequest.signal = signal;
+        }
+        if (config.reasoningEffort !== undefined && config.reasoningEffort !== "off") {
+          modelRequest.reasoningEffort = config.reasoningEffort;
         }
         response = await config.model.complete(modelRequest);
       } catch (error: unknown) {
@@ -118,12 +176,16 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         content: response.content,
         toolCalls: toolCallsToJson(response.toolCalls),
       });
-      yield {
+      const modelResponseEvent: Extract<AgentRunEvent, { type: "model.response" }> = {
         type: "model.response",
         iteration: iterations,
         content: response.content,
         toolCalls: response.toolCalls,
       };
+      if (response.usage !== undefined) {
+        modelResponseEvent.usage = response.usage;
+      }
+      yield modelResponseEvent;
 
       if (response.toolCalls.length === 0) {
         finalAnswer = response.content;
@@ -288,11 +350,15 @@ async function appendInitialMessage(
   sessionId: string,
   message: AgentMessage,
 ): Promise<void> {
-  await store.appendMessage({
+  const input: import("@cortex/core").MessageInput = {
     sessionId,
     role: message.role,
     content: message.content,
-  });
+  };
+  if (message.attachments !== undefined && message.attachments.length > 0) {
+    input.attachments = message.attachments as unknown as JsonValue;
+  }
+  await store.appendMessage(input);
 }
 
 async function executeToolCall(
@@ -358,4 +424,23 @@ function toolResultEventPayload(toolCallId: string, result: ToolExecutionResult)
 function truncateTitle(value: string): string {
   const trimmed = value.trim().replace(/\s+/g, " ");
   return trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 77)}...`;
+}
+
+function messageRecordToAgentMessage(
+  record: import("@cortex/core").MessageRecord,
+): AgentMessage {
+  const message: AgentMessage = {
+    role: record.role,
+    content: record.content,
+  };
+  if (record.toolCallId !== null) {
+    message.toolCallId = record.toolCallId;
+  }
+  if (Array.isArray(record.toolCalls)) {
+    message.toolCalls = record.toolCalls as unknown as AgentToolCall[];
+  }
+  if (Array.isArray(record.attachments)) {
+    message.attachments = record.attachments as unknown as import("./types.js").AgentAttachment[];
+  }
+  return message;
 }

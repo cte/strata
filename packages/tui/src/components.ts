@@ -255,56 +255,5 @@ export class Loader implements Component {
   }
 }
 
-export class Markdown implements Component {
-  text: string;
-
-  constructor(text = "") {
-    this.text = text;
-  }
-
-  render(ctx: RenderContext): Frame {
-    if (ctx.width <= 0) {
-      return { lines: [] };
-    }
-    const out: string[] = [];
-    let inFence = false;
-    for (const raw of this.text.split("\n")) {
-      if (raw.startsWith("```")) {
-        inFence = !inFence;
-        continue;
-      }
-      if (inFence) {
-        out.push(
-          ...wrapText(theme.muted(`  ${raw}`), ctx.width).map((l) => padToWidth(l, ctx.width)),
-        );
-        continue;
-      }
-      const heading = /^(#{1,3})\s+(.*)$/.exec(raw);
-      if (heading) {
-        out.push(
-          ...wrapText(theme.bold(theme.accent(heading[2] ?? "")), ctx.width).map((l) =>
-            padToWidth(l, ctx.width),
-          ),
-        );
-        continue;
-      }
-      const list = /^\s*[-*]\s+(.*)$/.exec(raw);
-      if (list) {
-        out.push(...wrapText(`• ${list[1] ?? ""}`, ctx.width).map((l) => padToWidth(l, ctx.width)));
-        continue;
-      }
-      const styled = applyInlineMarkdown(raw);
-      out.push(...wrapText(styled, ctx.width).map((l) => padToWidth(l, ctx.width)));
-    }
-    return { lines: out };
-  }
-}
-
-function applyInlineMarkdown(line: string): string {
-  return line
-    .replace(/`([^`]+)`/g, (_, code: string) => theme.muted(code))
-    .replace(/\*\*([^*]+)\*\*/g, (_, b: string) => theme.bold(b))
-    .replace(/\*([^*]+)\*/g, (_, i: string) => theme.underline(i));
-}
-
+export { Markdown } from "./markdown.js";
 export { sliceByWidth };

@@ -10,8 +10,11 @@ import {
 } from "./ansi.js";
 import type { Component, Frame } from "./component.js";
 import type { InputEvent } from "./keys.js";
-import { InputBuffer } from "./keys.js";
+import { isKeyRelease, sequenceToInputEvent } from "./keys.js";
 import type { Terminal } from "./terminal.js";
+
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
 
 export interface RuntimeOptions {
   terminal: Terminal;
@@ -36,7 +39,6 @@ const FRAME_INTERVAL_MS = 16;
  */
 export class TuiRuntime {
   private readonly terminal: Terminal;
-  private readonly inputBuffer = new InputBuffer();
   private root: Component;
   private overlay: Component | undefined;
   private prevLines: string[] = [];
@@ -46,7 +48,6 @@ export class TuiRuntime {
   private hardwareCursorRow = 0;
   private renderScheduled = false;
   private renderTimer: ReturnType<typeof setTimeout> | undefined;
-  private escapeTimer: ReturnType<typeof setTimeout> | undefined;
   private lastRenderAt = 0;
   private inputHandler?: (event: InputEvent) => void;
   private exitHandler?: () => void;
@@ -84,10 +85,6 @@ export class TuiRuntime {
     if (this.renderTimer !== undefined) {
       clearTimeout(this.renderTimer);
       this.renderTimer = undefined;
-    }
-    if (this.escapeTimer !== undefined) {
-      clearTimeout(this.escapeTimer);
-      this.escapeTimer = undefined;
     }
     // Move cursor below the rendered content so the next shell prompt
     // starts on a fresh line instead of overwriting our last frame.
@@ -146,10 +143,28 @@ export class TuiRuntime {
     return this.terminal.rows;
   }
 
-  private dispatchInput(data: string): void {
-    const events = this.inputBuffer.push(data);
-    this.scheduleEscapeFlush();
-    for (const event of events) {
+  // The terminal layer hands us already-framed sequences. We filter kitty key
+  // releases (terminal sends both press+release with flag 2 active), unwrap
+  // bracketed paste, and convert each remaining sequence to an InputEvent.
+  private dispatchInput(sequence: string): void {
+    if (sequence.length === 0) {
+      return;
+    }
+    if (isKeyRelease(sequence)) {
+      return;
+    }
+    if (sequence.startsWith(PASTE_START)) {
+      const end = sequence.lastIndexOf(PASTE_END);
+      const text =
+        end === -1
+          ? sequence.slice(PASTE_START.length)
+          : sequence.slice(PASTE_START.length, end);
+      this.routeInput({ type: "paste", text, raw: sequence });
+      this.invalidate();
+      return;
+    }
+    const event = sequenceToInputEvent(sequence);
+    if (event !== undefined) {
       this.routeInput(event);
     }
     this.invalidate();
@@ -166,21 +181,6 @@ export class TuiRuntime {
       return;
     }
     this.inputHandler?.(event);
-  }
-
-  private scheduleEscapeFlush(): void {
-    if (this.escapeTimer !== undefined) {
-      clearTimeout(this.escapeTimer);
-    }
-    this.escapeTimer = setTimeout(() => {
-      this.escapeTimer = undefined;
-      this.guarded(() => {
-        for (const event of this.inputBuffer.flush()) {
-          this.routeInput(event);
-        }
-        this.invalidate();
-      });
-    }, 30);
   }
 
   private scheduleRender(): void {
