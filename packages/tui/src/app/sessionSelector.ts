@@ -1,5 +1,5 @@
 import type { SessionRecord } from "@cortex/core";
-import { theme } from "../ansi.js";
+import { sanitizeTerminalText, theme } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import type { InputEvent } from "../keys.js";
 import { renderInlinePicker } from "./chrome.js";
@@ -39,7 +39,7 @@ export class SessionSelector implements Component {
       renderRow: (session, isSelected) => {
         const status = formatStatus(session);
         const date = theme.muted(session.startedAt.slice(0, 10));
-        const rawTitle = session.title === "" ? session.kind : session.title;
+        const rawTitle = sessionDisplayTitle(session);
         const title = isSelected ? theme.accent(rawTitle) : rawTitle;
         return `${status} ${date}  ${title}`;
       },
@@ -88,6 +88,12 @@ export class SessionSelector implements Component {
     }
     return "consumed";
   }
+}
+
+export function sessionDisplayTitle(session: SessionRecord): string {
+  const source = session.title === "" ? session.kind : session.title;
+  const sanitized = sanitizeTerminalText(source).replace(/\s+/g, " ").trim();
+  return sanitized === "" ? session.kind : sanitized;
 }
 
 function formatStatus(session: SessionRecord): string {

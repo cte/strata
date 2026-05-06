@@ -1,7 +1,5 @@
 import {
-  CLEAR_SCREEN,
   HIDE_CURSOR,
-  padToWidth,
   SHOW_CURSOR,
   SYNC_BEGIN,
   SYNC_END,
@@ -30,10 +28,10 @@ const FRAME_INTERVAL_MS = 16;
  *
  * The runtime renders all components into one logical line array. The terminal's
  * visible viewport is the last `rows` lines of that array; older lines have
- * already scrolled into native scrollback. When the rendered content grows past
- * the previous viewport bottom, the runtime writes `\r\n` at the bottom of the
- * viewport so the terminal scrolls top lines into scrollback. Within the viewport,
- * only changed lines are rewritten.
+ * already scrolled into native scrollback. When rendered content grows past the
+ * previous viewport bottom, the runtime writes `\r\n` at the bottom of the
+ * viewport so the terminal scrolls top lines into scrollback. Within the
+ * viewport, only changed lines are rewritten.
  *
  * No alt-screen, no full-screen takeover. The chat history flows naturally.
  */
@@ -53,6 +51,7 @@ export class TuiRuntime {
   private exitHandler?: () => void;
   private fatalErrorHandler?: (error: unknown) => void;
   private running = false;
+  private pendingClear = false;
 
   constructor(options: RuntimeOptions) {
     this.terminal = options.terminal;
@@ -128,16 +127,14 @@ export class TuiRuntime {
       this.prevViewportTop = 0;
       this.hardwareCursorRow = 0;
       // "clear" mode also wipes the visible buffer + homes the cursor on
-      // the next render, so transitions like opening / closing a picker
-      // can't leave residual content from the previous frame size.
+      // the next render, so transitions that truly need a viewport reset
+      // cannot leave residual content from the previous frame size.
       if (forceFullRedraw === "clear") {
         this.pendingClear = true;
       }
     }
     this.scheduleRender();
   }
-
-  private pendingClear = false;
 
   forceRedraw(): void {
     this.invalidate(true);
@@ -152,8 +149,8 @@ export class TuiRuntime {
   }
 
   // The terminal layer hands us already-framed sequences. We filter kitty key
-  // releases (terminal sends both press+release with flag 2 active), unwrap
-  // bracketed paste, and convert each remaining sequence to an InputEvent.
+  // releases, unwrap bracketed paste, and convert each remaining sequence to
+  // an InputEvent.
   private dispatchInput(sequence: string): void {
     if (sequence.length === 0) {
       return;
@@ -214,17 +211,17 @@ export class TuiRuntime {
     }
 
     const baseFrame = this.root.render({ width, height });
-    const lines = baseFrame.lines.map((line) => clampLineWidth(line, width));
+    const lines = baseFrame.lines.map((line) => fitLineWidth(line, width));
     let cursor = baseFrame.cursor;
 
     if (this.overlay !== undefined) {
       const overlayFrame = this.overlay.render({ width, height });
-      const overlayLines = overlayFrame.lines.map((line) => clampLineWidth(line, width));
+      const overlayLines = overlayFrame.lines.map((line) => fitLineWidth(line, width));
       // Anchor overlay to the visible viewport's bottom so it always covers the
       // editor/footer area, no matter how short the base content is.
       const minTotal = Math.max(lines.length, overlayLines.length, height);
       while (lines.length < minTotal) {
-        lines.push(padToWidth("", width));
+        lines.push("");
       }
       const overlayStart = lines.length - overlayLines.length;
       for (let i = 0; i < overlayLines.length; i += 1) {
@@ -260,17 +257,12 @@ export class TuiRuntime {
     cursor: Frame["cursor"],
     clear: boolean,
   ): void {
-    // Pi-aligned (see `pi-mono/packages/tui/src/tui.ts:920-942`): cursor
-    // hide is emitted as a separate write OUTSIDE the synchronized output
-    // block, and `applyCursor` (which may emit SHOW_CURSOR) likewise.
-    // Pi's `tui.ts` only puts content writes inside `\x1b[?2026h`/`l`.
+    // Pi-aligned: cursor visibility writes stay outside synchronized output.
     this.terminal.write(HIDE_CURSOR);
     let buffer = SYNC_BEGIN;
     if (clear) {
-      // Pi's exact clear sequence (`tui.ts:921`): erase display, home
-      // cursor, erase scrollback. The `\x1b[3J` (erase saved lines) part
-      // is the only one that's specific to pi — `\x1b[2J\x1b[H` alone
-      // leaves previously-scrolled content in the scrollback buffer.
+      // Pi's clear sequence: erase display, home cursor, then erase saved
+      // lines. Use only for explicit full-clear paths, not picker open/close.
       buffer += "\x1b[2J\x1b[H\x1b[3J";
     }
     for (let i = 0; i < lines.length; i += 1) {
@@ -288,7 +280,6 @@ export class TuiRuntime {
     this.prevWidth = width;
     this.prevHeight = height;
     this.prevViewportTop = Math.max(0, lines.length - height);
-    // Cursor positioning happens OUTSIDE the sync block (pi pattern).
     this.terminal.write(this.applyCursor(cursor, lines.length));
     this.lastRenderAt = Date.now();
   }
@@ -299,8 +290,19 @@ export class TuiRuntime {
     height: number,
     cursor: Frame["cursor"],
   ): void {
-    const prevTop = this.prevViewportTop;
-    const prevBottom = prevTop + height - 1;
+    const previousBufferLength =
+      this.prevHeight > 0 ? this.prevViewportTop + this.prevHeight : height;
+    let prevViewportTop =
+      this.prevHeight !== 0 && this.prevHeight !== height
+        ? Math.max(0, previousBufferLength - height)
+        : this.prevViewportTop;
+    let viewportTop = prevViewportTop;
+    let hardwareCursorRow = this.hardwareCursorRow;
+    const computeLineDiff = (targetRow: number): number => {
+      const currentScreenRow = hardwareCursorRow - prevViewportTop;
+      const targetScreenRow = targetRow - viewportTop;
+      return targetScreenRow - currentScreenRow;
+    };
 
     let firstChanged = -1;
     let lastChanged = -1;
@@ -315,97 +317,137 @@ export class TuiRuntime {
         lastChanged = i;
       }
     }
+    const appendedLines = lines.length > this.prevLines.length;
+    if (appendedLines) {
+      if (firstChanged === -1) {
+        firstChanged = this.prevLines.length;
+      }
+      lastChanged = lines.length - 1;
+    }
+    const appendStart = appendedLines && firstChanged === this.prevLines.length && firstChanged > 0;
 
     if (firstChanged === -1) {
-      // No content changes — just reposition the cursor if needed.
       this.terminal.write(this.applyCursor(cursor, lines.length));
+      this.prevViewportTop = prevViewportTop;
+      this.prevHeight = height;
+      this.lastRenderAt = Date.now();
       return;
     }
 
-    // Match pi's render structure: cursor hide outside sync, no
-    // hide/show transitions inside the sync block.
-    this.terminal.write(HIDE_CURSOR);
-    let buffer = SYNC_BEGIN;
+    if (firstChanged >= lines.length) {
+      if (this.prevLines.length > lines.length) {
+        const targetRow = Math.max(0, lines.length - 1);
+        if (targetRow < prevViewportTop) {
+          this.fullRedraw(lines, width, height, cursor, true);
+          return;
+        }
+        const extraLines = this.prevLines.length - lines.length;
+        if (extraLines > height) {
+          this.fullRedraw(lines, width, height, cursor, true);
+          return;
+        }
+
+        this.terminal.write(HIDE_CURSOR);
+        let buffer = SYNC_BEGIN;
+        const lineDiff = computeLineDiff(targetRow);
+        if (lineDiff > 0) {
+          buffer += `\x1b[${lineDiff}B`;
+        } else if (lineDiff < 0) {
+          buffer += `\x1b[${-lineDiff}A`;
+        }
+        buffer += "\r";
+        if (extraLines > 0) {
+          buffer += "\x1b[1B";
+        }
+        for (let i = 0; i < extraLines; i += 1) {
+          buffer += "\r\x1b[2K";
+          if (i < extraLines - 1) {
+            buffer += "\x1b[1B";
+          }
+        }
+        if (extraLines > 0) {
+          buffer += `\x1b[${extraLines}A`;
+        }
+        buffer += SYNC_END;
+        this.terminal.write(buffer);
+        this.hardwareCursorRow = targetRow;
+      }
+      this.terminal.write(this.applyCursor(cursor, lines.length));
+      this.prevLines = lines.slice();
+      this.prevWidth = width;
+      this.prevHeight = height;
+      this.prevViewportTop = prevViewportTop;
+      this.lastRenderAt = Date.now();
+      return;
+    }
 
     // Differential rendering can only touch what was actually visible.
-    // If the first changed line is above the previous viewport, fall back
-    // to a full redraw — otherwise we'd write to a region the terminal
-    // has already scrolled into native scrollback.
-    if (firstChanged < prevTop) {
+    if (firstChanged < prevViewportTop) {
       this.fullRedraw(lines, width, height, cursor, true);
       return;
     }
 
-    let viewportTop = prevTop;
-    let cursorRow = this.hardwareCursorRow;
+    // Match pi's render structure: content writes inside synchronized output,
+    // cursor visibility and final cursor positioning outside it.
+    this.terminal.write(HIDE_CURSOR);
+    let buffer = SYNC_BEGIN;
 
-    // If the new content extends past the previous viewport bottom, scroll the
-    // terminal by writing \r\n at the bottom of the viewport. Each \r\n pushes
-    // one line off the top into native scrollback and advances viewportTop.
-    if (lastChanged > prevBottom) {
-      const scroll = lastChanged - prevBottom;
-      // After scrolling by N, the new viewport top is prevTop + N. If
-      // firstChanged would now be in scrollback, we can't safely patch — the
-      // diff cursor would clamp to the visible top and write at the wrong
-      // row, stranding old content as "phantom" rows in scrollback.
-      if (firstChanged < prevTop + scroll) {
-        this.fullRedraw(lines, width, height, cursor, true);
-        return;
+    const prevViewportBottom = prevViewportTop + height - 1;
+    const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
+    if (moveTargetRow > prevViewportBottom) {
+      const currentScreenRow = Math.max(
+        0,
+        Math.min(height - 1, hardwareCursorRow - prevViewportTop),
+      );
+      const moveToBottom = height - 1 - currentScreenRow;
+      if (moveToBottom > 0) {
+        buffer += `\x1b[${moveToBottom}B`;
       }
-      const toBottom = prevBottom - cursorRow;
-      if (toBottom > 0) {
-        buffer += `\x1b[${toBottom}B`;
-      } else if (toBottom < 0) {
-        buffer += `\x1b[${-toBottom}A`;
-      }
-      cursorRow = prevBottom;
+      const scroll = moveTargetRow - prevViewportBottom;
       buffer += "\r\n".repeat(scroll);
+      prevViewportTop += scroll;
       viewportTop += scroll;
-      cursorRow += scroll;
+      hardwareCursorRow = moveTargetRow;
     }
 
-    // Move cursor to firstChanged.
-    const targetRow = firstChanged;
-    const delta = targetRow - cursorRow;
-    if (delta > 0) {
-      buffer += `\x1b[${delta}B`;
-    } else if (delta < 0) {
-      buffer += `\x1b[${-delta}A`;
+    const lineDiff = computeLineDiff(moveTargetRow);
+    if (lineDiff > 0) {
+      buffer += `\x1b[${lineDiff}B`;
+    } else if (lineDiff < 0) {
+      buffer += `\x1b[${-lineDiff}A`;
     }
-    buffer += "\r";
-    cursorRow = targetRow;
+    buffer += appendStart ? "\r\n" : "\r";
 
-    // Write changed lines.
     const renderEnd = Math.min(lastChanged, lines.length - 1);
     for (let i = firstChanged; i <= renderEnd; i += 1) {
       if (i > firstChanged) {
         buffer += "\r\n";
-        cursorRow += 1;
       }
       buffer += "\x1b[2K";
       buffer += lines[i] ?? "";
     }
 
-    // If old content was longer than new, clear the trailing rows.
+    let finalCursorRow = renderEnd;
     if (this.prevLines.length > lines.length) {
-      const extra = this.prevLines.length - lines.length;
-      for (let i = 0; i < extra; i += 1) {
-        buffer += "\r\n\x1b[2K";
-        cursorRow += 1;
+      if (renderEnd < lines.length - 1) {
+        const moveDown = lines.length - 1 - renderEnd;
+        buffer += `\x1b[${moveDown}B`;
+        finalCursorRow = lines.length - 1;
       }
-      const back = extra;
-      buffer += `\x1b[${back}A`;
-      cursorRow -= back;
+      const extraLines = this.prevLines.length - lines.length;
+      for (let i = lines.length; i < this.prevLines.length; i += 1) {
+        buffer += "\r\n\x1b[2K";
+      }
+      buffer += `\x1b[${extraLines}A`;
     }
 
     buffer += SYNC_END;
     this.terminal.write(buffer);
-    this.hardwareCursorRow = cursorRow;
+    this.hardwareCursorRow = finalCursorRow;
     this.prevLines = lines.slice();
     this.prevWidth = width;
     this.prevHeight = height;
-    this.prevViewportTop = Math.max(viewportTop, lines.length - height);
-    // Cursor positioning happens OUTSIDE the sync block (pi pattern).
+    this.prevViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1);
     this.terminal.write(this.applyCursor(cursor, lines.length));
     this.lastRenderAt = Date.now();
   }
@@ -449,13 +491,10 @@ export class TuiRuntime {
   }
 }
 
-function clampLineWidth(line: string, width: number): string {
+function fitLineWidth(line: string, width: number): string {
   const w = visibleWidth(line);
-  if (w === width) {
-    return line;
-  }
   if (w > width) {
     return sliceByWidth(line, width);
   }
-  return padToWidth(line, width);
+  return line;
 }

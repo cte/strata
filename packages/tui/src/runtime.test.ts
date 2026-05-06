@@ -71,6 +71,20 @@ describe("TuiRuntime", () => {
     expect(terminal.output).not.toContain("\x1b[?1049l");
   });
 
+  test("does not pad short component lines to terminal width", async () => {
+    const terminal = new FakeTerminal(20, 6);
+    const root = {
+      render: () => ({ lines: ["short"] }),
+    };
+    const runtime = new TuiRuntime({ terminal, root });
+    runtime.start();
+    await pump();
+    runtime.stop();
+
+    expect(stripAnsi(terminal.output)).toContain("short");
+    expect(stripAnsi(terminal.output)).not.toContain(`short${" ".repeat(15)}`);
+  });
+
   test("scrolls existing content into scrollback when new lines extend past viewport", async () => {
     const terminal = new FakeTerminal(20, 4);
     const lines = ["line1", "line2"];

@@ -59,7 +59,7 @@ cortex.
 | Persistent prompt history    | `packages/tui/src/app/history.ts` (`<runtimeDir>/history.jsonl`, capped at 100, stop-at-edge cycling) | In-memory only (pi's `editor.history`), with stop-at-edge cycling           | Cortex *exceeds* pi here on persistence (pi's history evaporates between launches); cortex matches pi's stop-at-edge behavior (Up at the oldest entry is a no-op rather than wrapping). |
 | Skills as slash commands    | `/skill:<name>` auto-discovered from `.cortex/skills/` at startup            | `/skill:<name>` auto-discovered from `.cortex/skills/`                      | At parity. Pi additionally re-discovers on `/reload`; we don't have `/reload` yet.                                                                  |
 | Startup header              | `packages/tui/src/app/header.ts` `buildStartupHeader()` pushed as a `header` transcript item at App construction | `interactive-mode.ts:566` logo + compact key-hint line + onboarding pointer in `headerContainer` | Same compact shape (`logo` / ` · `-separated key hints / dim onboarding) and same once-at-launch print. Cortex emits the lines into the transcript so they scroll naturally into native terminal scrollback (pi-style scrollback model). Pi's `Ctrl+O` expanded-header toggle and update-banner are not ported. |
-| `/help` screen              | Pushes a `notice` transcript item via `buildHelpNotice()`; inline, scroll-with-the-terminal | Pi has no `/help` command — same content lives in the expanded startup header (`Ctrl+O`) | Cortex used to render `/help` as a centered modal that silently truncated content past `ctx.height` on short terminals. Switching to inline text matches pi's "no separate help screen" stance and removes the truncation/scrolling problem entirely. The auth/model/session selectors stay as `centerModal` overlays — those are short and benefit from focus. |
+| `/help` screen              | Pushes a `notice` transcript item via `buildHelpNotice()`; inline, scroll-with-the-terminal | Pi has no `/help` command — same content lives in the expanded startup header (`Ctrl+O`) | Cortex used to render `/help` as a centered modal that silently truncated content past `ctx.height` on short terminals. Switching to inline text matches pi's "no separate help screen" stance and removes the truncation/scrolling problem entirely. Auth/model/session selectors replace the editor area while focused, matching Pi's selector pattern. |
 | Streaming assistant text    | `ModelRequest.onAssistantDelta` callback → `assistant.delta` events → `appendAssistantDelta`/`finalizeAssistantStream` | Anthropic-SDK `message_start` / `message_update` / `message_end` events with a `streamingComponent` | Same UX (text grows in the transcript as deltas arrive, finalized once at the end). Cortex bridges callback-based SSE delta parsing into the async-generator agent loop via a queue. Both adapters stream: codex via `response.output_text.delta`; openai-compatible via `chat/completions` with `stream: true` + `stream_options.include_usage` and per-`index` tool-call argument accumulation, matching pi's `openai-completions.ts`. SSE framing lives in the shared `packages/agent/src/sse.ts` helper (`parseSseEvents<T>`). |
 
 ---
@@ -119,15 +119,15 @@ isn't really the right framing for them.
 
 ---
 
-## Open issues
+## Resolved issues
 
-- **Picker duplication on iTerm2 (unresolved)**: the inline session/model
-  pickers render correctly in our test harness but produce visible
-  duplication on the user's real iTerm2 (148×34, no tmux) after enough
-  navigation keystrokes. The slash-command autocomplete picker, rendered
-  through a different path inside `Editor.render()`, does not have the
-  bug. See `docs/picker-rendering-bug.md` for the full investigation,
-  hypotheses, and recommended next steps.
+- **Session picker duplication on a real terminal**: a real-terminal trace
+  showed the picker was emitting raw terminal control sequences stored inside
+  older session titles (`ESC[99;5u`, `ESC[100;5u`, OSC title controls).
+  Cortex now sanitizes session titles before TUI display and strips terminal
+  controls from newly generated session titles. `/sessions` remains on the
+  same editor-slot selector path as model/auth selectors, keeping the code
+  closer to Pi. See `docs/picker-rendering-bug.md`.
 
 ## Cleanup candidates
 

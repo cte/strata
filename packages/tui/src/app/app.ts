@@ -11,6 +11,7 @@ import {
   THINKING_LEVELS,
 } from "@cortex/agent";
 import { getCortexPaths, listSkills, readSkill, SessionStore } from "@cortex/core";
+import { sanitizeTerminalText } from "../ansi.js";
 import { SlashCommandRegistry } from "../commands.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { DynamicBorder } from "../components.js";
@@ -32,7 +33,7 @@ import {
 } from "./modelFactory.js";
 import { ModelSelector } from "./modelSelector.js";
 import { loadPreferences, savePreferences } from "./preferences.js";
-import { SessionSelector } from "./sessionSelector.js";
+import { SessionSelector, sessionDisplayTitle } from "./sessionSelector.js";
 import {
   type AppState,
   appendAssistantDelta,
@@ -129,56 +130,41 @@ export class CortexApp implements Component {
     const transcript = new Transcript(this.state.transcript).render(ctx);
     const status = this.statusLine.render(ctx);
     const editorBorder = new DynamicBorder().render(ctx);
-    const editor = this.editor.render(ctx);
-    // Inline pickers / dialogs render *below* the editor — same position
-    // strategy as the editor's slash-command autocomplete (which renders
-    // inside `editor.render` after the prompt). The intent was to make
-    // picker updates flow *below* the cursor so the diff redraw avoids
-    // big cursor-up moves, mirroring the working slash-completion path.
-    //
-    // NOTE: this layout choice did NOT fully resolve the picker
-    // duplication seen on iTerm2 — see `docs/picker-rendering-bug.md`
-    // for the open issue. Future work may swap this for a modal overlay
-    // (`centerModal`) or render the picker inside `editor.render()`.
-    const overlayFrame = this.activeOverlay()?.render(ctx) ?? { lines: [] };
+    const editorReplacement = this.activeBlockingOverlay();
+    const editorFrame = (editorReplacement ?? this.editor).render(ctx);
     const footer = this.footer.render(ctx);
 
     const lines: string[] = [
       ...transcript.lines,
       ...status.lines,
       ...editorBorder.lines,
-      ...editor.lines,
-      ...overlayFrame.lines,
+      ...editorFrame.lines,
       ...footer.lines,
     ];
 
-    // Cursor stays at the editor prompt even when an overlay is active —
-    // matches the slash-completion flow. The user is interacting with the
-    // picker via arrow keys, so a visible cursor at the editor row is
-    // harmless.
     let cursor: Frame["cursor"] | undefined;
-    if (editor.cursor !== undefined) {
+    if (editorFrame.cursor !== undefined) {
       cursor = {
         row:
           transcript.lines.length +
           status.lines.length +
           editorBorder.lines.length +
-          editor.cursor.row,
-        col: editor.cursor.col,
+          editorFrame.cursor.row,
+        col: editorFrame.cursor.col,
       };
     }
     return cursor === undefined ? { lines } : { lines, cursor };
   }
 
   handleInput(event: import("../keys.js").InputEvent): "consumed" | "passthrough" {
-    const overlay = this.activeOverlay();
+    const overlay = this.activeBlockingOverlay();
     if (overlay !== undefined) {
       return overlay.handleInput?.(event) ?? "consumed";
     }
     return this.editor.handleInput?.(event) ?? "passthrough";
   }
 
-  private activeOverlay(): Component | undefined {
+  private activeBlockingOverlay(): Component | undefined {
     if (this.sessionSelector.active) return this.sessionSelector;
     if (this.modelSelector.active) return this.modelSelector;
     if (this.authDialog.active) return this.authDialog;
@@ -368,10 +354,10 @@ export class CortexApp implements Component {
               this.state.provider = "openai-codex";
               this.persistPreferences();
             }
-            this.runtime.invalidate("clear");
+            this.invalidate();
           });
         });
-        this.runtime.invalidate("clear");
+        this.invalidate();
       },
     });
     this.registry.register({
@@ -399,14 +385,14 @@ export class CortexApp implements Component {
               content: `model set to ${model.id}`,
             });
             this.modelSelector.close();
-            this.runtime.invalidate("clear");
+            this.invalidate();
           },
           () => {
             this.modelSelector.close();
-            this.runtime.invalidate("clear");
+            this.invalidate();
           },
         );
-        this.runtime.invalidate("clear");
+        this.invalidate();
         void listModels(provider).then(
           (results) => {
             this.modelSelector.setModels(results);
@@ -729,7 +715,7 @@ export class CortexApp implements Component {
     switch (event.type) {
       case "session.started":
         startSession(this.state, event.sessionId);
-        this.state.status = `session ${event.sessionId.slice(0, 12)} · ${event.title}`;
+        this.state.status = `session ${event.sessionId.slice(0, 12)} · ${sanitizeDisplayText(event.title)}`;
         return;
       case "model.request":
         this.state.status = `thinking (iter ${event.iteration})`;
@@ -894,20 +880,17 @@ export class CortexApp implements Component {
         sessions,
         (session) => {
           this.sessionSelector.close();
-          this.runtime.invalidate("clear");
+          this.invalidate();
           if (action === "resume") {
             void this.resumeSession(session.id);
           }
         },
         () => {
           this.sessionSelector.close();
-          this.runtime.invalidate("clear");
+          this.invalidate();
         },
       );
-      // Picker open is a frame-size transition (10 → ~22 rows). Force a
-      // clear+rehome so the diff redraw can't leave residual rows from the
-      // previous frame size on screen.
-      this.runtime.invalidate("clear");
+      this.invalidate();
     } finally {
       store.close();
     }
@@ -955,7 +938,7 @@ export class CortexApp implements Component {
       }
       appendTranscript(this.state, {
         kind: "status",
-        content: `resumed ${session.title} (${messages.length} prior messages)`,
+        content: `resumed ${sessionDisplayTitle(session)} (${messages.length} prior messages)`,
       });
     } finally {
       store.close();
@@ -992,7 +975,7 @@ export class CortexApp implements Component {
         const usage = this.state.usage;
         const lines = [
           `session: ${session.id}`,
-          `title:   ${session.title}`,
+          `title:   ${sessionDisplayTitle(session)}`,
           `started: ${session.startedAt}`,
           `model:   ${session.model ?? "(unknown)"}`,
           `messages: total=${messages.length} user=${counts.user ?? 0} assistant=${counts.assistant ?? 0} tool=${counts.tool ?? 0}`,
@@ -1016,7 +999,7 @@ export class CortexApp implements Component {
       this.invalidate();
       return;
     }
-    const title = args.trim();
+    const title = sanitizeDisplayText(args.trim());
     if (title === "") {
       appendTranscript(this.state, {
         kind: "error",
@@ -1031,7 +1014,7 @@ export class CortexApp implements Component {
         store.updateSessionTitle(sessionId, title);
         appendTranscript(this.state, {
           kind: "status",
-          content: `renamed session to ${title}`,
+          content: `renamed session to ${sanitizeDisplayText(title)}`,
         });
       } finally {
         store.close();
@@ -1120,7 +1103,7 @@ export class CortexApp implements Component {
         resetTokenUsage(this.state.usage);
         appendTranscript(this.state, {
           kind: "status",
-          content: `cloned to ${cloned.title} (${cloned.id.slice(0, 12)})`,
+          content: `cloned to ${sessionDisplayTitle(cloned)} (${cloned.id.slice(0, 12)})`,
         });
       } catch (error: unknown) {
         appendTranscript(this.state, {
@@ -1165,6 +1148,10 @@ export class CortexApp implements Component {
       // History is best-effort; silently swallow.
     }
   }
+}
+
+function sanitizeDisplayText(value: string): string {
+  return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
 }
 
 export async function buildAppOptions(repoRoot: string): Promise<{

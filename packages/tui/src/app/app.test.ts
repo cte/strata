@@ -123,7 +123,6 @@ describe("CortexApp", () => {
       const internal = app as unknown as {
         currentRun: AbortController | undefined;
         handleEditorEscape: () => void;
-        sessionSelector: { active: boolean };
       };
       internal.currentRun = fakeAbort;
 
@@ -135,9 +134,9 @@ describe("CortexApp", () => {
       runtime.stop();
 
       expect(aborted.value).toBe(true);
-      expect(internal.sessionSelector.active).toBe(false);
       const output = stripAnsi(terminal.output);
       expect(output).toContain("interrupting agent");
+      expect(output).not.toContain("Resume session");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

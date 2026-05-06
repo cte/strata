@@ -85,8 +85,8 @@ export class AuthDialog implements Component {
     if (!this.active) {
       return { lines: [] };
     }
-    // Inline format — same placement as the session/model picker (just a
-    // few lines above the editor, no centered modal box).
+    // Editor-slot format: replaces the editor while active, matching the
+    // session/model picker without a centered modal box.
     const out: string[] = [];
     const push = (line: string) =>
       out.push(padToWidth(truncateToWidth(line, ctx.width), ctx.width));

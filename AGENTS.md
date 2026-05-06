@@ -41,6 +41,20 @@ You may be working in either of two modes:
 
 For code work, prefer implementation over abstract advice unless the user explicitly asks for planning or analysis. For wiki work, preserve evidence, cite pages, and do not over-capture noise.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `cte/cortex`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The canonical triage labels use the default mattpocock/skills vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo uses a single-context domain-doc layout. See `docs/agents/domain.md`.
+
 ## Environment
 
 This repo runs in an exe.dev VM. Only use documented exe.dev features. The exe.dev HTTPS proxy is documented at <https://exe.dev/docs/proxy.md>, and the general docs are at <https://exe.dev/docs.md>. Undocumented local endpoints are internal infrastructure and should not be used.
