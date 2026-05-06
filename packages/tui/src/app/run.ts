@@ -1,4 +1,3 @@
-import process from "node:process";
 import { ensureRuntimeDirs, getCortexPaths } from "@cortex/core";
 import { TuiRuntime } from "../runtime.js";
 import { ProcessTerminal } from "../terminal.js";
@@ -9,8 +8,9 @@ export interface RunTuiOptions {
 }
 
 export async function runTui(options: RunTuiOptions = {}): Promise<void> {
-  const repoRoot = getCortexPaths(options.repoRoot).repoRoot;
-  await ensureRuntimeDirs(getCortexPaths(repoRoot));
+  const paths = getCortexPaths(options.repoRoot);
+  const repoRoot = paths.repoRoot;
+  await ensureRuntimeDirs(paths);
   const { options: appOptions, authStatus } = await buildAppOptions(repoRoot);
   const terminal = new ProcessTerminal();
   let fatal: unknown;

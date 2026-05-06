@@ -426,8 +426,17 @@ function toolResultEventPayload(toolCallId: string, result: ToolExecutionResult)
 }
 
 function truncateTitle(value: string): string {
-  const trimmed = value.trim().replace(/\s+/g, " ");
+  const trimmed = sanitizeTitleText(value).trim().replace(/\s+/g, " ");
   return trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 77)}...`;
+}
+
+function sanitizeTitleText(value: string): string {
+  return value
+    .replace(
+      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)|[PX^_][\s\S]*?\x1b\\|[@-Z\\-_])/g,
+      "",
+    )
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
 function messageRecordToAgentMessage(record: import("@cortex/core").MessageRecord): AgentMessage {

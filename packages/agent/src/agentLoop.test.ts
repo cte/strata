@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionStore } from "@cortex/core";
 import { createDefaultToolRegistry } from "@cortex/tools";
 import { runAgentLoop } from "./agentLoop.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
@@ -114,6 +115,35 @@ describe("runAgentLoop", () => {
       const toolMessage = model.requests[1]?.messages.at(-1);
       expect(toolMessage?.role).toBe("tool");
       expect(toolMessage?.content).toContain("unknown_tool");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("sanitizes terminal controls from generated session titles", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    try {
+      const model = new SequenceModelAdapter([
+        {
+          content: "Done.",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+
+      const result = await runAgentLoop({
+        question: "bad \x1b[99;5u title \x1b]2;owned\x07 ok",
+        model,
+        repoRoot,
+      });
+
+      const store = await SessionStore.open(repoRoot);
+      try {
+        const session = store.getSession(result.sessionId);
+        expect(session?.title).toBe("bad title ok");
+      } finally {
+        store.close();
+      }
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

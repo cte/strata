@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   padToWidth,
+  sanitizeTerminalText,
   sliceByWidth,
   stripAnsi,
   truncateToWidth,
@@ -11,6 +12,14 @@ import {
 describe("ansi", () => {
   test("stripAnsi removes escape sequences", () => {
     expect(stripAnsi("\x1b[31mhi\x1b[0m")).toBe("hi");
+  });
+
+  test("stripAnsi removes CSI-u and modified cursor sequences", () => {
+    expect(stripAnsi("\x1b[99;5uhello\x1b[1;1:2B")).toBe("hello");
+  });
+
+  test("sanitizeTerminalText removes terminal controls from untrusted text", () => {
+    expect(sanitizeTerminalText("bad \x1b[99;5u title \x1b]2;owned\x07 ok")).toBe("bad  title  ok");
   });
 
   test("visibleWidth ignores ANSI", () => {

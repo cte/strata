@@ -1,5 +1,8 @@
 const ESC = "\x1b";
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[A-Za-z]/g;
+const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+const TERMINAL_CONTROL_PATTERN =
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)|[PX^_][\s\S]*?\x1b\\|[@-Z\\-_])/g;
+const C0_CONTROL_PATTERN = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
 
 export const CSI = `${ESC}[`;
 export const CLEAR_SCREEN = `${CSI}2J${CSI}H`;
@@ -17,6 +20,10 @@ export function moveCursor(row: number, col: number): string {
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
+}
+
+export function sanitizeTerminalText(text: string): string {
+  return text.replace(TERMINAL_CONTROL_PATTERN, "").replace(C0_CONTROL_PATTERN, "");
 }
 
 export function visibleWidth(text: string): number {

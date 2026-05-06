@@ -157,8 +157,8 @@ export class Footer implements Component {
 }
 
 /**
- * Shared inline picker shape used by every list-style selector (sessions,
- * models, etc.). The picker renders as a few rows above the editor — same
+ * Shared picker shape used by every list-style selector (sessions,
+ * models, etc.). The picker renders in the editor slot — same
  * `→ ` selection arrow, accent-on-selected, `(i/total)` overflow indicator
  * as the editor's slash-command autocomplete. No modal box, no full-viewport
  * blanking.
@@ -191,9 +191,10 @@ export function renderInlinePicker<T>(ctx: RenderContext, opts: InlinePickerOpti
     return { lines: [] };
   }
   const lines: string[] = [];
-  lines.push(padToWidth(truncateToWidth(theme.muted(opts.header), ctx.width), ctx.width));
+  const textWidth = Math.max(0, ctx.width - 2);
+  lines.push(theme.muted(truncateToWidth(opts.header, textWidth, "")));
   if (opts.items.length === 0) {
-    lines.push(padToWidth(truncateToWidth(theme.muted(opts.emptyHint), ctx.width), ctx.width));
+    lines.push(theme.muted(truncateToWidth(opts.emptyHint, textWidth, "")));
     return { lines };
   }
   const total = opts.items.length;
@@ -205,14 +206,11 @@ export function renderInlinePicker<T>(ctx: RenderContext, opts: InlinePickerOpti
     const isSelected = i === opts.selectedIndex;
     const prefix = isSelected ? "→ " : "  ";
     const body = opts.renderRow(item, isSelected);
-    lines.push(padToWidth(truncateToWidth(`${prefix}${body}`, ctx.width), ctx.width));
+    lines.push(truncateToWidth(`${prefix}${body}`, textWidth, ""));
   }
   if (startIndex > 0 || endIndex < total) {
     lines.push(
-      padToWidth(
-        theme.muted(truncateToWidth(`  (${opts.selectedIndex + 1}/${total})`, ctx.width)),
-        ctx.width,
-      ),
+      theme.muted(truncateToWidth(`  (${opts.selectedIndex + 1}/${total})`, textWidth, "")),
     );
   }
   return { lines };

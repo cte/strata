@@ -36,13 +36,8 @@ describe("SessionSelector", () => {
       return lines.some((line) => line.includes(`session ${idx}`));
     };
 
-    // Initially the selection sits at index 0, so the first entries are visible.
     expect(seenAt(0)).toBe(true);
 
-    // Walk the selection past the visible window. With a 24-row terminal the
-    // session list gets ~17 rows; before this fix, advancing past 11 silently
-    // dropped the cursor "off-screen". Now the window slides with us, so the
-    // selected entry must always render — including the very last item.
     for (let i = 0; i < sessions.length - 1; i += 1) {
       selector.handleInput({ type: "key", key: "down", raw: "" });
     }
@@ -102,5 +97,19 @@ describe("SessionSelector", () => {
     );
     const manyLines = renderSelector(big, 80, 24).join("\n");
     expect(manyLines).toMatch(/\(1\/50\)/);
+  });
+
+  test("sanitizes terminal controls from session titles before rendering", () => {
+    const selector = new SessionSelector();
+    selector.open(
+      [makeSession("s1", "bad \x1b[99;5u title \x1b]2;owned\x07 ok")],
+      () => {},
+      () => {},
+    );
+
+    const rendered = selector.render({ width: 100, height: 24 }).lines.join("\n");
+    expect(rendered).not.toContain("\x1b[99;5u");
+    expect(rendered).not.toContain("\x1b]2;owned\x07");
+    expect(stripAnsi(rendered)).toContain("bad title ok");
   });
 });
