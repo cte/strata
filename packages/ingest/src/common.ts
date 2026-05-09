@@ -14,6 +14,7 @@ export type YamlValue = null | boolean | number | string | string[];
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 export const wikiRoot = path.join(repoRoot, "wiki");
+const DOTENVX_ENCRYPTED_PREFIX = "encrypted:";
 
 export function utcNow(): Date {
   return new Date();
@@ -59,7 +60,11 @@ export async function loadDotenv(envPath = path.join(repoRoot, ".env")): Promise
       continue;
     }
     const rawValue = valueParts.join("=").trim();
-    process.env[key] = rawValue.replace(/^["']|["']$/g, "");
+    const value = rawValue.replace(/^["']|["']$/g, "");
+    if (value.startsWith(DOTENVX_ENCRYPTED_PREFIX)) {
+      continue;
+    }
+    process.env[key] = value;
   }
 }
 
@@ -158,7 +163,7 @@ export async function appendLog(op: string, title: string): Promise<void> {
   const entry = `\n\n## [${timestamp}] ${op} | ${title}\n`;
   const existing = (await exists(logPath))
     ? await readFile(logPath, "utf8")
-    : "# Cortex — Activity Log\n";
+    : "# Strata — Activity Log\n";
   await writeFile(logPath, `${existing.trimEnd()}${entry}`, "utf8");
 }
 

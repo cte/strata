@@ -4,7 +4,7 @@ import {
   type ModelAdapter,
   OpenAICodexModelAdapter,
   OpenAICompatibleChatModelAdapter,
-} from "@cortex/agent";
+} from "@strata/agent";
 import type { AuthStatusSummary, ProviderName } from "./state.js";
 
 export interface ModelChoice {
@@ -16,7 +16,7 @@ export async function inferDefaultProvider(): Promise<ProviderName> {
   if ((await getChatGptCredentials()) !== undefined) {
     return "openai-codex";
   }
-  if (Bun.env.CORTEX_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined) {
+  if (Bun.env.STRATA_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined) {
     return "openai-compatible";
   }
   return "openai-codex";
@@ -24,16 +24,16 @@ export async function inferDefaultProvider(): Promise<ProviderName> {
 
 export function defaultModel(provider: ProviderName): string {
   if (provider === "openai-codex") {
-    return Bun.env.CORTEX_MODEL ?? "gpt-5.5";
+    return Bun.env.STRATA_MODEL ?? "gpt-5.5";
   }
-  return Bun.env.CORTEX_MODEL ?? Bun.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  return Bun.env.STRATA_MODEL ?? Bun.env.OPENAI_MODEL ?? "gpt-4o-mini";
 }
 
 export async function loadAuthStatus(): Promise<AuthStatusSummary> {
   const credentials = await getChatGptCredentials();
   const summary: AuthStatusSummary = {
     codexLoggedIn: credentials !== undefined,
-    apiKeyConfigured: Bun.env.CORTEX_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined,
+    apiKeyConfigured: Bun.env.STRATA_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined,
   };
   if (credentials?.expiresAt !== undefined) {
     summary.codexExpiresAt = credentials.expiresAt;
@@ -58,7 +58,7 @@ export async function listModels(
 
 async function listCodexModels(signal?: AbortSignal): Promise<ModelInfo[]> {
   const credentials = await getValidChatGptCredentials();
-  const baseUrl = (Bun.env.CORTEX_CODEX_BASE_URL ?? "https://chatgpt.com/backend-api").replace(
+  const baseUrl = (Bun.env.STRATA_CODEX_BASE_URL ?? "https://chatgpt.com/backend-api").replace(
     /\/+$/,
     "",
   );
@@ -95,12 +95,12 @@ async function listCodexModels(signal?: AbortSignal): Promise<ModelInfo[]> {
 }
 
 async function listCompatibleModels(signal?: AbortSignal): Promise<ModelInfo[]> {
-  const apiKey = Bun.env.CORTEX_API_KEY ?? Bun.env.OPENAI_API_KEY;
+  const apiKey = Bun.env.STRATA_API_KEY ?? Bun.env.OPENAI_API_KEY;
   if (apiKey === undefined) {
-    throw new Error("Set CORTEX_API_KEY or OPENAI_API_KEY to list OpenAI models.");
+    throw new Error("Set STRATA_API_KEY or OPENAI_API_KEY to list OpenAI models.");
   }
   const baseUrl = (
-    Bun.env.CORTEX_BASE_URL ??
+    Bun.env.STRATA_BASE_URL ??
     Bun.env.OPENAI_BASE_URL ??
     "https://api.openai.com/v1"
   ).replace(/\/+$/, "");
@@ -166,16 +166,16 @@ export async function createModelAdapter(choice: ModelChoice): Promise<ModelAdap
       credentials,
       model: choice.model,
     };
-    if (Bun.env.CORTEX_CODEX_BASE_URL !== undefined) {
-      opts.baseUrl = Bun.env.CORTEX_CODEX_BASE_URL;
+    if (Bun.env.STRATA_CODEX_BASE_URL !== undefined) {
+      opts.baseUrl = Bun.env.STRATA_CODEX_BASE_URL;
     }
     return new OpenAICodexModelAdapter(opts);
   }
-  const apiKey = Bun.env.CORTEX_API_KEY ?? Bun.env.OPENAI_API_KEY;
+  const apiKey = Bun.env.STRATA_API_KEY ?? Bun.env.OPENAI_API_KEY;
   if (apiKey === undefined) {
-    throw new Error("Missing model API key. Set CORTEX_API_KEY or OPENAI_API_KEY.");
+    throw new Error("Missing model API key. Set STRATA_API_KEY or OPENAI_API_KEY.");
   }
-  const baseUrl = Bun.env.CORTEX_BASE_URL ?? Bun.env.OPENAI_BASE_URL;
+  const baseUrl = Bun.env.STRATA_BASE_URL ?? Bun.env.OPENAI_BASE_URL;
   const opts: { apiKey: string; model: string; baseUrl?: string } = {
     apiKey,
     model: choice.model,

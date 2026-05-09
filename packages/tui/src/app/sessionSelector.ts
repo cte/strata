@@ -1,4 +1,4 @@
-import type { SessionRecord } from "@cortex/core";
+import type { SessionRecord } from "@strata/core";
 import { sanitizeTerminalText, theme } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import type { InputEvent } from "../keys.js";

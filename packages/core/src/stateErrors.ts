@@ -1,9 +1,9 @@
-export class CortexStateError extends Error {
+export class StrataStateError extends Error {
   readonly code: string;
 
   constructor(code: string, message: string) {
     super(message);
-    this.name = "CortexStateError";
+    this.name = "StrataStateError";
     this.code = code;
   }
 }

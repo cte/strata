@@ -3,7 +3,7 @@ import path from "node:path";
 import { theme } from "../ansi.js";
 
 /**
- * Read the @cortex/tui package version at module load time. Pi reads its own
+ * Read the @strata/tui package version at module load time. Pi reads its own
  * package.json the same way (`config.ts:370`); we mirror that. If the file
  * isn't readable for some reason (e.g. a packaged binary that doesn't ship
  * package.json next to the source), fall back to "0.0.0" so launch never
@@ -24,7 +24,7 @@ export const VERSION = readVersion();
 /**
  * Build the pi-shaped startup header lines.
  *
- *   cortex v0.1.0
+ *   strata v0.1.0
  *   escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · @ files · /help more
  *   Type /help for the full keymap and command list.
  *
@@ -32,7 +32,7 @@ export const VERSION = readVersion();
  * single leading space, no further styling applied.
  */
 export function buildStartupHeader(): string[] {
-  const logo = `${theme.bold(theme.accent("cortex"))}${theme.dim(` v${VERSION}`)}`;
+  const logo = `${theme.bold(theme.accent("strata"))}${theme.dim(` v${VERSION}`)}`;
   const sep = theme.muted(" · ");
   const hints = [
     `${theme.muted("escape")} interrupt`,
@@ -57,7 +57,7 @@ export function buildHelpNotice(commands: { name: string; description: string }[
   const section = (title: string) => theme.bold(theme.accent(title));
   const key = (label: string) => theme.muted(label);
   const lines: string[] = [];
-  lines.push(`${theme.bold(theme.accent("cortex"))}${theme.dim(` v${VERSION}`)}`);
+  lines.push(`${theme.bold(theme.accent("strata"))}${theme.dim(` v${VERSION}`)}`);
   lines.push("");
   lines.push(section("Editor"));
   lines.push(`  ${key("Enter".padEnd(14))}submit`);

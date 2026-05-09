@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  getCortexPaths,
+  getStrataPaths,
   type JsonObject,
   type LearningProposalRecord,
   listSkills,
@@ -12,7 +12,7 @@ import {
   type SkillMetadata,
   type TodoItem,
   writeLearningProposal,
-} from "@cortex/core";
+} from "@strata/core";
 
 export type MaintenanceJobStatus = "ok" | "needs_attention";
 export type MaintenanceFindingSeverity = "info" | "warning" | "error";
@@ -118,7 +118,7 @@ export function listMaintenanceJobs(): MaintenanceJobMetadata[] {
 export async function runMaintenanceJob(
   config: MaintenanceRunConfig,
 ): Promise<MaintenanceRunResult> {
-  const repoRoot = getCortexPaths(config.repoRoot).repoRoot;
+  const repoRoot = getStrataPaths(config.repoRoot).repoRoot;
   const job = JOBS.find((candidate) => candidate.metadata.name === config.jobName);
   if (job === undefined) {
     throw new Error(`Unknown maintenance job: ${config.jobName}`);
@@ -363,7 +363,7 @@ async function runSkillsInventoryJob(
       finding(
         "info",
         "No skills installed",
-        "No local Cortex skills were found under .cortex/skills.",
+        "No local Strata skills were found under .strata/skills.",
       ),
     );
   }
@@ -477,7 +477,7 @@ async function writeMaintenanceReport(
   metadata: MaintenanceJobMetadata,
   output: MaintenanceJobOutput,
 ): Promise<string> {
-  const reportDir = path.join(getCortexPaths(repoRoot).reportsDir, "maintenance");
+  const reportDir = path.join(getStrataPaths(repoRoot).reportsDir, "maintenance");
   const file = path.join(reportDir, `${sessionId}-${metadata.name.replace(/\./g, "-")}.json`);
   await mkdir(reportDir, { recursive: true });
   await writeFile(

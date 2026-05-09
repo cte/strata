@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { getCortexPaths } from "./paths.js";
-import { CortexStateError } from "./stateErrors.js";
+import { getStrataPaths } from "./paths.js";
+import { StrataStateError } from "./stateErrors.js";
 import type { JsonObject } from "./types.js";
 
 export interface SkillMetadata extends JsonObject {
@@ -23,7 +23,7 @@ export interface SkillDocument extends JsonObject {
 const SKILL_FILE = "SKILL.md";
 
 export async function listSkills(repoRoot: string): Promise<SkillMetadata[]> {
-  const skillsDir = getCortexPaths(repoRoot).skillsDir;
+  const skillsDir = getStrataPaths(repoRoot).skillsDir;
   let entries;
   try {
     entries = await readdir(skillsDir, { withFileTypes: true });
@@ -76,12 +76,12 @@ export async function readSkill(
 
 export function skillDocumentPath(repoRoot: string, name: string): string {
   assertSkillName(name);
-  return path.join(getCortexPaths(repoRoot).skillsDir, name, SKILL_FILE);
+  return path.join(getStrataPaths(repoRoot).skillsDir, name, SKILL_FILE);
 }
 
 export function assertSkillName(name: string): void {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name) || name.includes("..")) {
-    throw new CortexStateError(
+    throw new StrataStateError(
       "invalid_skill_name",
       "Skill name must be a lowercase directory name without path separators",
     );

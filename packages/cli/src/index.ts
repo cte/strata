@@ -13,29 +13,36 @@ import {
   runMaintenanceJob,
   runReflection,
   setChatGptCredentials,
-} from "@cortex/agent";
-import { ensureRuntimeDirs, getCortexPaths, type SessionRecord, SessionStore } from "@cortex/core";
-import { loadDotenv } from "@cortex/ingest/common";
-import { pullNotionPage } from "@cortex/ingest/notion";
-import { createDefaultToolRegistry, type ToolProfile } from "@cortex/tools";
-import { runTui } from "@cortex/tui";
+} from "@strata/agent";
+import { ensureRuntimeDirs, getStrataPaths, type SessionRecord, SessionStore } from "@strata/core";
+import { loadDotenv } from "@strata/ingest/common";
+import {
+  type ConnectorConfig,
+  type ConnectorSessionResult,
+  runConnectorOperation,
+} from "@strata/ingest/connectors";
+import { runSlackSocketModeListener } from "@strata/ingest/slack-socket-mode";
+import { createDefaultToolRegistry, type ToolProfile } from "@strata/tools";
+import { runTui } from "@strata/tui";
 
 type CommandResult = number;
 
 function usage(): string {
-  return `usage: cortex <command>
+  return `usage: strata <command>
 
 commands:
   auth status                  show configured model auth without exposing tokens
   auth login openai-codex      sign in with ChatGPT for Codex model access
   auth logout openai-codex     remove stored ChatGPT credentials
-  init                         initialize .cortex runtime directories
+  init                         initialize .strata runtime directories
   ingest notion --page-id ID    snapshot a Notion page or URL into wiki/raw/notion
+  ingest granola [options]      snapshot Granola meetings into wiki/raw/granola
+  ingest slack [options]        snapshot an explicit Slack thread into wiki/raw/slack
   query [options] <question>   run an agent query using the default dangerous tool profile
   learn reflect [options] <id>  reflect on a completed session trace
   maintain list                list maintenance jobs
   maintain run <job>           run one maintenance job and persist a trace
-  tui                          launch the interactive Cortex TUI
+  tui                          launch the interactive Strata TUI
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions
   sessions search <query>      search sessions using the current simple index
@@ -64,7 +71,48 @@ interface NotionIngestOptions {
   dryRun: boolean;
 }
 
-const NOTION_INGEST_USAGE = "usage: cortex ingest notion --page-id PAGE_ID_OR_URL [--dry-run]";
+interface GranolaIngestOptions {
+  dryRun: boolean;
+  fixture?: string;
+  meetingsUrl?: string;
+  since?: string;
+  transcriptUrlTemplate?: string;
+}
+
+interface SlackIngestOptions {
+  dryRun: boolean;
+  allHistory?: boolean;
+  appToken?: string;
+  botToken?: string;
+  channel?: string;
+  channelRegex?: string;
+  channels?: string;
+  fromJson?: string;
+  includeBotMessages?: boolean;
+  includeDms?: boolean;
+  includePrivateChannels?: boolean;
+  lookbackMinutes?: number;
+  maxChannels?: number;
+  maxMessagesPerChannel?: number;
+  maxThreads?: number;
+  mode: "listen" | "sync" | "thread";
+  since?: string;
+  threadTs?: string;
+  title?: string;
+  userToken?: string;
+  workspaceUrl?: string;
+}
+
+const INGEST_USAGE = `usage:
+  strata ingest notion --page-id PAGE_ID_OR_URL [--dry-run]
+  strata ingest granola [--since ISO] [--fixture FILE] [--meetings-url URL] [--transcript-url-template URL] [--dry-run]
+  strata ingest slack thread [--channel CHANNEL --thread-ts TS | --from-json FILE] [--title TITLE] [--dry-run]
+  strata ingest slack sync [--since ISO | --all-history] [--channels LIST | --channel-regex REGEX]
+                           [--include-private | --no-private] [--include-dms]
+                           [--include-bot-messages] [--lookback-minutes N]
+                           [--max-channels N] [--max-messages-per-channel N] [--max-threads N]
+                           [--dry-run]
+  strata ingest slack listen [--include-bot-messages]`;
 
 function parseLimit(args: string[], fallback = 20): number {
   const index = args.indexOf("--limit");
@@ -104,7 +152,7 @@ async function withStore<T>(fn: (store: SessionStore) => Promise<T> | T): Promis
 }
 
 async function cmdInit(): Promise<CommandResult> {
-  const paths = getCortexPaths();
+  const paths = getStrataPaths();
   await ensureRuntimeDirs(paths);
   console.log(`initialized ${paths.runtimeDir}`);
   return 0;
@@ -135,7 +183,7 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
   const result = await runAgentLoop({
     question: options.question,
     model: await createModelAdapter(options),
-    repoRoot: getCortexPaths().repoRoot,
+    repoRoot: getStrataPaths().repoRoot,
   });
 
   if (result.finalAnswer.trim() !== "") {
@@ -152,13 +200,13 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
 async function cmdIngest(args: string[]): Promise<CommandResult> {
   const source = args.shift();
   if (!source || source === "--help" || source === "-h") {
-    console.log(NOTION_INGEST_USAGE);
+    console.log(INGEST_USAGE);
     return 0;
   }
 
   if (source === "notion") {
     if (args.includes("--help") || args.includes("-h")) {
-      console.log(NOTION_INGEST_USAGE);
+      console.log(INGEST_USAGE);
       return 0;
     }
     const options = parseNotionIngestOptions(args);
@@ -167,52 +215,97 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
     if (token === "") {
       throw new Error("Set NOTION_TOKEN in .env or the environment.");
     }
-    const repoRoot = getCortexPaths().repoRoot;
-    return withStore(async (store) => {
-      const session = await store.createSession({
-        kind: "ingest",
-        title: `Ingest Notion page ${options.pageId}`,
-      });
-      try {
-        await store.appendMessage({
-          sessionId: session.id,
-          role: "user",
-          content: `Ingest Notion page ${options.pageId}`,
-        });
-        await store.appendEvent(session.id, "ingest.notion.started", {
-          pageId: options.pageId,
-          dryRun: options.dryRun,
-        });
-        const version = Bun.env.NOTION_VERSION;
-        const result = await pullNotionPage({
-          pageId: options.pageId,
-          repoRoot,
-          token,
-          dryRun: options.dryRun,
-          ...(version === undefined ? {} : { version }),
-        });
-        await store.appendEvent(session.id, "ingest.notion.completed", {
-          ...result,
-        });
-        await store.endSession(session.id, "completed");
-        if (result.dryRun) {
-          console.log(`would write ${result.path}`);
-        } else if (result.written) {
-          console.log(`wrote ${result.path}`);
-        } else {
-          console.log(`skipped existing ${result.path}`);
-        }
-        console.log(`session: ${session.id}`);
-        return 0;
-      } catch (error: unknown) {
-        await store.appendEvent(session.id, "ingest.notion.failed", {
-          pageId: options.pageId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        await store.endSession(session.id, "failed");
-        throw error;
-      }
+    const repoRoot = getStrataPaths().repoRoot;
+    const result = await runConnectorOperation({
+      name: "notion",
+      operation: options.dryRun ? "dry_run" : "pull",
+      config: { pageId: options.pageId },
+      repoRoot,
+      env: Bun.env,
+      title: `Ingest Notion page ${options.pageId}`,
     });
+    printConnectorResult(result);
+    return 0;
+  }
+
+  if (source === "granola") {
+    if (args.includes("--help") || args.includes("-h")) {
+      console.log(INGEST_USAGE);
+      return 0;
+    }
+    const options = parseGranolaIngestOptions(args);
+    await loadDotenv();
+    const result = await runConnectorOperation({
+      name: "granola",
+      operation: options.dryRun ? "dry_run" : "pull",
+      config: compactConfig({
+        fixture: options.fixture,
+        meetingsUrl: options.meetingsUrl,
+        since: options.since,
+        transcriptUrlTemplate: options.transcriptUrlTemplate,
+      }),
+      repoRoot: getStrataPaths().repoRoot,
+      env: Bun.env,
+      title: "Ingest Granola meetings",
+    });
+    printConnectorResult(result);
+    return 0;
+  }
+
+  if (source === "slack") {
+    if (args.includes("--help") || args.includes("-h")) {
+      console.log(INGEST_USAGE);
+      return 0;
+    }
+    const options = parseSlackIngestOptions(args);
+    await loadDotenv();
+    const config = compactConfig({
+      allHistory: options.allHistory,
+      appToken: options.appToken,
+      botToken: options.botToken,
+      channel: options.channel,
+      channelRegex: options.channelRegex,
+      channels: options.channels,
+      fromJson: options.fromJson,
+      includeBotMessages: options.includeBotMessages,
+      includeDms: options.includeDms,
+      includePrivateChannels: options.includePrivateChannels,
+      lookbackMinutes: options.lookbackMinutes,
+      maxChannels: options.maxChannels,
+      maxMessagesPerChannel: options.maxMessagesPerChannel,
+      maxThreads: options.maxThreads,
+      mode: options.mode === "listen" ? "thread" : options.mode,
+      since: options.since,
+      threadTs: options.threadTs,
+      title: options.title,
+      userToken: options.userToken,
+      workspaceUrl: options.workspaceUrl,
+    });
+    if (options.mode === "listen") {
+      await runSlackSocketModeListener({
+        config,
+        runtime: {
+          repoRoot: getStrataPaths().repoRoot,
+          env: Bun.env,
+        },
+        onEvent: (event) => {
+          const state = event.written ? "wrote" : event.skipped ? "skipped" : "processed";
+          console.log(`${state} ${event.rawPath ?? `${event.channel}:${event.threadTs}`}`);
+        },
+        onStatus: (message) => console.log(message),
+      });
+      return 0;
+    }
+    const result = await runConnectorOperation({
+      name: "slack",
+      operation: options.dryRun ? "dry_run" : "pull",
+      config,
+      repoRoot: getStrataPaths().repoRoot,
+      env: Bun.env,
+      title: options.mode === "sync" ? "Sync Slack conversations" : "Ingest Slack thread",
+    });
+    printConnectorResult(result);
+    return 0;
   }
 
   throw new Error(`Unknown ingest source: ${source}`);
@@ -221,7 +314,7 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
 async function cmdAuth(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: cortex auth <status|login|logout> [openai-codex]`);
+    console.log(`usage: strata auth <status|login|logout> [openai-codex]`);
     return 0;
   }
 
@@ -234,7 +327,7 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
         `openai-codex: logged in, token expires ${new Date(credentials.expiresAt).toISOString()}`,
       );
     }
-    const apiKeyConfigured = Boolean(Bun.env.CORTEX_API_KEY ?? Bun.env.OPENAI_API_KEY);
+    const apiKeyConfigured = Boolean(Bun.env.STRATA_API_KEY ?? Bun.env.OPENAI_API_KEY);
     console.log(`openai-compatible: ${apiKeyConfigured ? "API key configured" : "not configured"}`);
     return 0;
   }
@@ -286,7 +379,7 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
 async function cmdSessions(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: cortex sessions <list|search>`);
+    console.log(`usage: strata sessions <list|search>`);
     return 0;
   }
 
@@ -319,7 +412,7 @@ async function cmdSessions(args: string[]): Promise<CommandResult> {
 async function cmdLearn(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: cortex learn reflect [--provider P] [--model M] <session-id>`);
+    console.log(`usage: strata learn reflect [--provider P] [--model M] <session-id>`);
     return 0;
   }
 
@@ -327,7 +420,7 @@ async function cmdLearn(args: string[]): Promise<CommandResult> {
     const options = parseReflectOptions(args);
     const result = await runReflection({
       sessionId: options.sessionId,
-      repoRoot: getCortexPaths().repoRoot,
+      repoRoot: getStrataPaths().repoRoot,
       model: await createModelAdapter(options),
     });
     console.log(`reflection report: ${result.reportPath}`);
@@ -349,7 +442,7 @@ async function cmdLearn(args: string[]): Promise<CommandResult> {
 async function cmdMaintain(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: cortex maintain <list|run> [job]`);
+    console.log(`usage: strata maintain <list|run> [job]`);
     return 0;
   }
 
@@ -373,7 +466,7 @@ async function cmdMaintain(args: string[]): Promise<CommandResult> {
     }
     const result = await runMaintenanceJob({
       jobName,
-      repoRoot: getCortexPaths().repoRoot,
+      repoRoot: getStrataPaths().repoRoot,
     });
     console.log(`${result.job}: ${result.status}`);
     console.log(result.summary);
@@ -395,7 +488,7 @@ async function cmdTools(args: string[]): Promise<CommandResult> {
 
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
     console.log(
-      `usage: cortex tools <list|call> [--profile read-only|maintenance|learning|dangerous]`,
+      `usage: strata tools <list|call> [--profile read-only|maintenance|learning|dangerous]`,
     );
     return 0;
   }
@@ -422,7 +515,7 @@ async function cmdTools(args: string[]): Promise<CommandResult> {
       throw new Error("tools call accepts at most one JSON argument object");
     }
     const result = await registry.safeExecuteText(name, args[0] ?? "{}", {
-      repoRoot: getCortexPaths().repoRoot,
+      repoRoot: getStrataPaths().repoRoot,
     });
     console.log(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
@@ -457,7 +550,7 @@ async function main(argv: string[]): Promise<CommandResult> {
     return cmdMaintain(argv);
   }
   if (command === "tui") {
-    await runTui({ repoRoot: getCortexPaths().repoRoot });
+    await runTui({ repoRoot: getStrataPaths().repoRoot });
     return 0;
   }
   if (command === "trace") {
@@ -562,6 +655,177 @@ function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
   };
 }
 
+function parseGranolaIngestOptions(args: string[]): GranolaIngestOptions {
+  const parsed: GranolaIngestOptions = { dryRun: false };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--since") {
+      parsed.since = requireArgValue(args[++index], "--since requires a value");
+    } else if (arg === "--fixture") {
+      parsed.fixture = requireArgValue(args[++index], "--fixture requires a value");
+    } else if (arg === "--meetings-url") {
+      parsed.meetingsUrl = requireArgValue(args[++index], "--meetings-url requires a value");
+    } else if (arg === "--transcript-url-template") {
+      parsed.transcriptUrlTemplate = requireArgValue(
+        args[++index],
+        "--transcript-url-template requires a value",
+      );
+    } else if (arg === "--dry-run") {
+      parsed.dryRun = true;
+    } else {
+      throw new Error(`Unknown ingest granola argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+function parseSlackIngestOptions(args: string[]): SlackIngestOptions {
+  const first = args[0];
+  let mode: SlackIngestOptions["mode"] = "thread";
+  if (first === "listen") {
+    mode = "listen";
+  } else if (first === "sync" || args.some((arg) => SLACK_SYNC_FLAGS.has(arg))) {
+    mode = "sync";
+  }
+  if (first === "listen" || first === "sync" || first === "thread") {
+    args.shift();
+    mode = first;
+  }
+  const parsed: SlackIngestOptions = { dryRun: false, mode };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--channel") {
+      parsed.channel = requireArgValue(args[++index], "--channel requires a value");
+    } else if (arg === "--thread-ts") {
+      parsed.threadTs = requireArgValue(args[++index], "--thread-ts requires a value");
+    } else if (arg === "--from-json") {
+      parsed.fromJson = requireArgValue(args[++index], "--from-json requires a value");
+    } else if (arg === "--title") {
+      parsed.title = requireArgValue(args[++index], "--title requires a value");
+    } else if (arg === "--channels") {
+      parsed.channels = requireArgValue(args[++index], "--channels requires a value");
+    } else if (arg === "--channel-regex") {
+      parsed.channelRegex = requireArgValue(args[++index], "--channel-regex requires a value");
+    } else if (arg === "--since") {
+      parsed.since = requireArgValue(args[++index], "--since requires a value");
+    } else if (arg === "--all-history") {
+      parsed.allHistory = true;
+    } else if (arg === "--include-private") {
+      parsed.includePrivateChannels = true;
+    } else if (arg === "--no-private") {
+      parsed.includePrivateChannels = false;
+    } else if (arg === "--include-dms") {
+      parsed.includeDms = true;
+    } else if (arg === "--include-bot-messages") {
+      parsed.includeBotMessages = true;
+    } else if (arg === "--lookback-minutes") {
+      parsed.lookbackMinutes = parsePositiveIntegerArg(
+        args[++index],
+        "--lookback-minutes requires a positive integer",
+      );
+    } else if (arg === "--max-channels") {
+      parsed.maxChannels = parsePositiveIntegerArg(
+        args[++index],
+        "--max-channels requires a positive integer",
+      );
+    } else if (arg === "--max-messages-per-channel") {
+      parsed.maxMessagesPerChannel = parsePositiveIntegerArg(
+        args[++index],
+        "--max-messages-per-channel requires a positive integer",
+      );
+    } else if (arg === "--max-threads") {
+      parsed.maxThreads = parsePositiveIntegerArg(
+        args[++index],
+        "--max-threads requires a positive integer",
+      );
+    } else if (arg === "--bot-token") {
+      parsed.botToken = requireArgValue(args[++index], "--bot-token requires a value");
+    } else if (arg === "--user-token") {
+      parsed.userToken = requireArgValue(args[++index], "--user-token requires a value");
+    } else if (arg === "--app-token") {
+      parsed.appToken = requireArgValue(args[++index], "--app-token requires a value");
+    } else if (arg === "--workspace-url") {
+      parsed.workspaceUrl = requireArgValue(args[++index], "--workspace-url requires a value");
+    } else if (arg === "--dry-run") {
+      parsed.dryRun = true;
+    } else {
+      throw new Error(`Unknown ingest slack argument: ${arg}`);
+    }
+  }
+  if (parsed.mode === "thread" && !parsed.fromJson && (!parsed.channel || !parsed.threadTs)) {
+    throw new Error("ingest slack thread requires --from-json or both --channel and --thread-ts");
+  }
+  return parsed;
+}
+
+const SLACK_SYNC_FLAGS = new Set([
+  "--all-history",
+  "--channel-regex",
+  "--channels",
+  "--include-bot-messages",
+  "--include-dms",
+  "--include-private",
+  "--lookback-minutes",
+  "--max-channels",
+  "--max-messages-per-channel",
+  "--max-threads",
+  "--no-private",
+  "--since",
+]);
+
+function requireArgValue(value: string | undefined, message: string): string {
+  if (value === undefined || value.trim() === "") {
+    throw new Error(message);
+  }
+  return value;
+}
+
+function parsePositiveIntegerArg(value: string | undefined, message: string): number {
+  const raw = requireArgValue(value, message);
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(message);
+  }
+  return parsed;
+}
+
+function compactConfig(input: Record<string, ConnectorConfig[string]>): ConnectorConfig {
+  const config: ConnectorConfig = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === "string" && value.trim() !== "") {
+      config[key] = value;
+    } else if (typeof value === "number" || typeof value === "boolean" || value === null) {
+      config[key] = value;
+    }
+  }
+  return config;
+}
+
+function printConnectorResult(result: ConnectorSessionResult): void {
+  const itemCount = result.items?.length ?? 0;
+  if (itemCount > 1) {
+    const written = result.items?.filter((item) => item.written).length ?? 0;
+    const skipped = result.items?.filter((item) => item.skipped).length ?? 0;
+    if (result.dryRun) {
+      console.log(`would write ${itemCount} items`);
+    } else {
+      console.log(`processed ${itemCount} items (${written} written, ${skipped} skipped)`);
+    }
+    for (const item of result.items ?? []) {
+      console.log(
+        `${result.dryRun ? "would write" : item.written ? "wrote" : "skipped"} ${item.rawPath}`,
+      );
+    }
+  } else if (result.dryRun) {
+    console.log(`would write ${result.rawPath}`);
+  } else if (result.written) {
+    console.log(`wrote ${result.rawPath}`);
+  } else {
+    console.log(`skipped existing ${result.rawPath}`);
+  }
+  console.log(`session: ${result.sessionId}`);
+}
+
 function parseModelOptions(args: string[]): ModelOptions & { rest: string[] } {
   const rest: string[] = [];
   let provider: ProviderName | undefined;
@@ -603,18 +867,18 @@ async function createModelAdapter(
 ): Promise<OpenAICodexModelAdapter | OpenAICompatibleChatModelAdapter> {
   const provider =
     options.provider ??
-    parseProviderName(Bun.env.CORTEX_PROVIDER) ??
+    parseProviderName(Bun.env.STRATA_PROVIDER) ??
     (await inferDefaultProvider());
   if (provider === "openai-codex") {
     const credentials = await getValidChatGptCredentials();
     const codexOptions = {
       credentials,
-      model: options.model ?? Bun.env.CORTEX_MODEL ?? "gpt-5.5",
+      model: options.model ?? Bun.env.STRATA_MODEL ?? "gpt-5.5",
     };
-    if (Bun.env.CORTEX_CODEX_BASE_URL !== undefined) {
+    if (Bun.env.STRATA_CODEX_BASE_URL !== undefined) {
       return new OpenAICodexModelAdapter({
         ...codexOptions,
-        baseUrl: Bun.env.CORTEX_CODEX_BASE_URL,
+        baseUrl: Bun.env.STRATA_CODEX_BASE_URL,
       });
     }
     return new OpenAICodexModelAdapter(codexOptions);
@@ -626,7 +890,7 @@ async function inferDefaultProvider(): Promise<ProviderName> {
   if ((await getChatGptCredentials()) !== undefined) {
     return "openai-codex";
   }
-  if (Bun.env.CORTEX_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined) {
+  if (Bun.env.STRATA_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined) {
     return "openai-compatible";
   }
   return "openai-codex";
@@ -639,19 +903,19 @@ function parseProviderName(value: string | undefined): ProviderName | undefined 
   if (value === "openai-codex" || value === "openai-compatible") {
     return value;
   }
-  throw new Error("CORTEX_PROVIDER must be openai-codex or openai-compatible");
+  throw new Error("STRATA_PROVIDER must be openai-codex or openai-compatible");
 }
 
 function createOpenAICompatibleAdapter(options: ModelOptions): OpenAICompatibleChatModelAdapter {
-  const apiKey = Bun.env.CORTEX_API_KEY ?? Bun.env.OPENAI_API_KEY;
-  const model = options.model ?? Bun.env.CORTEX_MODEL ?? Bun.env.OPENAI_MODEL;
-  const baseUrl = Bun.env.CORTEX_BASE_URL ?? Bun.env.OPENAI_BASE_URL;
+  const apiKey = Bun.env.STRATA_API_KEY ?? Bun.env.OPENAI_API_KEY;
+  const model = options.model ?? Bun.env.STRATA_MODEL ?? Bun.env.OPENAI_MODEL;
+  const baseUrl = Bun.env.STRATA_BASE_URL ?? Bun.env.OPENAI_BASE_URL;
 
   if (!apiKey) {
-    throw new Error("Missing model API key. Set CORTEX_API_KEY or OPENAI_API_KEY.");
+    throw new Error("Missing model API key. Set STRATA_API_KEY or OPENAI_API_KEY.");
   }
   if (!model) {
-    throw new Error("Missing model name. Set CORTEX_MODEL or OPENAI_MODEL.");
+    throw new Error("Missing model name. Set STRATA_MODEL or OPENAI_MODEL.");
   }
 
   const adapterOptions = {

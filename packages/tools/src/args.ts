@@ -1,4 +1,4 @@
-import type { JsonValue } from "@cortex/core";
+import type { JsonValue } from "@strata/core";
 import { PolicyViolationError } from "./policy.js";
 
 export function requiredString(value: JsonValue | undefined, name: string): string {

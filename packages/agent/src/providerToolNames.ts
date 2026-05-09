@@ -1,4 +1,4 @@
-import type { ToolMetadata } from "@cortex/tools";
+import type { ToolMetadata } from "@strata/tools";
 import { ModelAdapterError } from "./model.js";
 
 export interface ProviderToolNameMap {

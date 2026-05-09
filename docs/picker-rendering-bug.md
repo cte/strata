@@ -9,7 +9,7 @@ header. The fake terminal and VT-style tests did not reproduce it.
 The root cause was not picker layout. Older stored session titles contained
 raw terminal control/input sequences such as CSI-u keyboard bytes
 (`ESC[99;5u`, `ESC[100;5u`) and OSC title-control bytes. When those sessions
-entered the visible picker window, Cortex wrote the stored bytes back to
+entered the visible picker window, Strata wrote the stored bytes back to
 stdout as display text. A real terminal interpreted them as controls; the fake
 terminal treated them as inert bytes.
 
@@ -38,7 +38,7 @@ Keep:
 
 Removed after diagnosis:
 
-- Temporary JSONL TUI trace recorder and `CORTEX_TUI_TRACE` runtime plumbing.
+- Temporary JSONL TUI trace recorder and `STRATA_TUI_TRACE` runtime plumbing.
 - Editor-attached `/sessions` picker workaround.
 - Autowrap toggling and absolute-row patch experiments.
 - Tests that asserted those temporary implementation details.
@@ -57,7 +57,7 @@ artifact appeared.
 
 Compare against Pi, but keep the comparison specific. Pi helped identify
 renderer and selector patterns worth preserving, but the root cause was
-untrusted terminal bytes in Cortex data, not a broad layout mismatch.
+untrusted terminal bytes in Strata data, not a broad layout mismatch.
 
 Remove diagnostic scaffolding after the root cause is fixed. Keeping trace
 recorders or defensive renderer hacks in the product path makes future

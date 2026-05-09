@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 import type {
   ToolContext,
   ToolDefinition,

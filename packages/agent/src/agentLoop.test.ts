@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionStore } from "@cortex/core";
-import { createDefaultToolRegistry } from "@cortex/tools";
+import { SessionStore } from "@strata/core";
+import { createDefaultToolRegistry } from "@strata/tools";
 import { runAgentLoop } from "./agentLoop.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
@@ -30,7 +30,7 @@ class SequenceModelAdapter implements ModelAdapter {
 
 describe("runAgentLoop", () => {
   test("runs a sequential tool loop and persists traces", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {
       await mkdir(path.join(repoRoot, "projects"), { recursive: true });
       await writeFile(
@@ -71,7 +71,7 @@ describe("runAgentLoop", () => {
       expect(model.requests[1]?.messages.at(-1)).toMatchObject({ role: "tool" });
 
       const trace = await readFile(
-        path.join(repoRoot, ".cortex", "traces", `${result.sessionId}.jsonl`),
+        path.join(repoRoot, ".strata", "traces", `${result.sessionId}.jsonl`),
         "utf8",
       );
       expect(trace).toContain("message.system_context");
@@ -84,7 +84,7 @@ describe("runAgentLoop", () => {
   });
 
   test("returns tool errors to the model", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {
       const model = new SequenceModelAdapter([
         {
@@ -121,7 +121,7 @@ describe("runAgentLoop", () => {
   });
 
   test("sanitizes terminal controls from generated session titles", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {
       const model = new SequenceModelAdapter([
         {
@@ -150,7 +150,7 @@ describe("runAgentLoop", () => {
   });
 
   test("returns invalid tool argument errors to the model", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {
       const model = new SequenceModelAdapter([
         {
@@ -187,7 +187,7 @@ describe("runAgentLoop", () => {
   });
 
   test("records file-change events for write tools", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {
       const model = new SequenceModelAdapter([
         {
@@ -223,7 +223,7 @@ describe("runAgentLoop", () => {
       expect(await readFile(path.join(repoRoot, "notes", "alpha.md"), "utf8")).toBe("# Alpha\n");
 
       const trace = await readFile(
-        path.join(repoRoot, ".cortex", "traces", `${result.sessionId}.jsonl`),
+        path.join(repoRoot, ".strata", "traces", `${result.sessionId}.jsonl`),
         "utf8",
       );
       expect(trace).toContain("file.changed");
@@ -235,10 +235,10 @@ describe("runAgentLoop", () => {
   });
 
   test("continueSessionId seeds prior turns into the model context", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {
       const firstModel = new SequenceModelAdapter([
-        { content: "Hi, I'm Cortex.", finishReason: "stop", toolCalls: [] },
+        { content: "Hi, I'm Strata.", finishReason: "stop", toolCalls: [] },
       ]);
       const first = await runAgentLoop({
         question: "Who are you?",
@@ -249,7 +249,7 @@ describe("runAgentLoop", () => {
 
       const secondModel = new SequenceModelAdapter([
         {
-          content: "I just told you: Cortex.",
+          content: "I just told you: Strata.",
           finishReason: "stop",
           toolCalls: [],
         },
@@ -269,7 +269,7 @@ describe("runAgentLoop", () => {
       const nonSystem = seeded.filter((m) => m.role !== "system");
       expect(nonSystem.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
       expect(nonSystem[0]?.content).toBe("Who are you?");
-      expect(nonSystem[1]?.content).toBe("Hi, I'm Cortex.");
+      expect(nonSystem[1]?.content).toBe("Hi, I'm Strata.");
       expect(nonSystem[2]?.content).toBe("What did you just say?");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Continue Development"
+  short_description: "Resume Strata development from roadmap status"
+  default_prompt: "Use $continue-development to understand Strata and continue the next milestone."

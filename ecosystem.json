@@ -1,0 +1,44 @@
+{
+  "apps": [
+    {
+      "name": "strata-web-api",
+      "script": "bun",
+      "args": "run web:api",
+      "interpreter": "none",
+      "cwd": ".",
+      "autorestart": true,
+      "watch": false,
+      "restart_delay": 1000,
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "strata-web",
+      "script": "bun",
+      "args": "run web:dev",
+      "interpreter": "none",
+      "cwd": ".",
+      "autorestart": true,
+      "watch": false,
+      "restart_delay": 1000,
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "strata-slack-listener",
+      "script": "bun",
+      "args": "run strata ingest slack listen",
+      "interpreter": "none",
+      "cwd": ".",
+      "autorestart": true,
+      "watch": false,
+      "restart_delay": 2000,
+      "env": {
+        "NODE_ENV": "development",
+        "SLACK_SOCKET_DEBUG": "1"
+      }
+    }
+  ]
+}

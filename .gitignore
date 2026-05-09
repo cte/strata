@@ -12,5 +12,6 @@ skills-lock.json
 .DS_Store
 __pycache__/
 *.py[cod]
-wiki/meta/lint/*.tmp
+wiki/
+.strata/
 .cortex/

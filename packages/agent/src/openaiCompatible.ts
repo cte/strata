@@ -1,5 +1,5 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
-import type { ToolMetadata } from "@cortex/tools";
+import type { JsonObject, JsonValue } from "@strata/core";
+import type { ToolMetadata } from "@strata/tools";
 import { ModelAdapterError } from "./model.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
 import { parseSseEvents } from "./sse.js";

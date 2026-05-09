@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { JsonObject } from "@cortex/core";
-import { createDefaultToolRegistry } from "@cortex/tools";
+import type { JsonObject } from "@strata/core";
+import { createDefaultToolRegistry } from "@strata/tools";
 import { OpenAICompatibleChatModelAdapter } from "./openaiCompatible.js";
 
 /**

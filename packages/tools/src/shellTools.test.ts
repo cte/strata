@@ -6,7 +6,7 @@ import { createDefaultToolRegistry } from "./index.js";
 
 describe("shell tools", () => {
   test("runs arbitrary shell commands in dangerous profile", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-shell-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
     try {
       const registry = createDefaultToolRegistry({ profile: "dangerous" });
       const result = await registry.execute(
@@ -29,7 +29,7 @@ describe("shell tools", () => {
   });
 
   test("returns non-zero exits without treating them as tool failures", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-shell-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
     try {
       const registry = createDefaultToolRegistry({ profile: "dangerous" });
       const result = await registry.safeExecute(
@@ -51,7 +51,7 @@ describe("shell tools", () => {
   });
 
   test("truncates stdout and stderr previews independently", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-shell-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
     try {
       const registry = createDefaultToolRegistry({ profile: "dangerous" });
       await expect(
@@ -73,7 +73,7 @@ describe("shell tools", () => {
   });
 
   test("marks timed-out commands", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-shell-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
     try {
       const registry = createDefaultToolRegistry({ profile: "dangerous" });
       await expect(
@@ -87,7 +87,7 @@ describe("shell tools", () => {
   });
 
   test("is unavailable outside dangerous profile", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-shell-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
     try {
       const registry = createDefaultToolRegistry({ profile: "maintenance" });
       const result = await registry.safeExecute(

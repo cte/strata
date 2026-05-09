@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { nowIso } from "./events.js";
-import { getCortexPaths } from "./paths.js";
+import { getStrataPaths } from "./paths.js";
 import type { JsonObject } from "./types.js";
 
 export type LearningProposalKind = "memory" | "skill" | "schema" | "wiki";
@@ -53,7 +53,7 @@ export function learningProposalPath(
   title: string,
 ): string {
   return path.join(
-    getCortexPaths(repoRoot).proposalsDir,
+    getStrataPaths(repoRoot).proposalsDir,
     `${sessionId}-${kind}-${slugify(title)}.md`,
   );
 }

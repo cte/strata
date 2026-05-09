@@ -31,7 +31,7 @@ TBD by the user.
 | Decision | Status | Current value | Notes |
 |---|---|---|---|
 | Granola access path | Resolved for scaffold | Sync path | No API token or documented API base URL is configured in this repo. Use `docs/granola-sync-setup.md` until the user provides API details. |
-| Wiki location | Resolved | Sandbox repo at `/home/exedev/Documents/cortex` | User can clone or pull this repo on macOS for Obsidian browsing. |
+| Wiki location | Resolved | Sandbox repo at `/home/exedev/Documents/strata` | User can clone or pull this repo on macOS for Obsidian browsing. |
 | Bootstrap depth | Resolved for scaffold | Start fresh from 2026-04-28 | Backfill should be explicitly opted into before ingesting historical sources. |
 | Slack scope | Pending | TBD | Confirm workspaces, channels, DMs, and exclusions before enabling Slack pulls. |
 | Notion scope | Pending | TBD | Confirm full workspace vs. specific pages/databases before enabling Notion pulls. |

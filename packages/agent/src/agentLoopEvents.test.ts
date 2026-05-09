@@ -23,7 +23,7 @@ class SequenceModelAdapter implements ModelAdapter {
 
 describe("runAgentLoopEvents", () => {
   test("emits session, model, and tool lifecycle events", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-events-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-events-"));
     try {
       await mkdir(path.join(repoRoot, "projects"), { recursive: true });
       await writeFile(
@@ -90,7 +90,7 @@ describe("runAgentLoopEvents", () => {
   });
 
   test("emits assistant.delta events while the adapter streams text", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-stream-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-stream-"));
     try {
       const streamingModel: ModelAdapter = {
         name: "streaming-test",
@@ -138,7 +138,7 @@ describe("runAgentLoopEvents", () => {
   });
 
   test("aborts mid-run when the signal fires and ends the session interrupted", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-agent-cancel-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-cancel-"));
     try {
       const controller = new AbortController();
       const model: ModelAdapter = {

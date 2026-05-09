@@ -1,1 +1,1 @@
-# Cortex — Activity Log
+# Strata — Activity Log

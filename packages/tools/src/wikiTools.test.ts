@@ -7,12 +7,12 @@ import type { ToolFileChange } from "./types.js";
 
 describe("wiki tools", () => {
   test("lists, reads, and searches markdown pages", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       const wikiRoot = path.join(repoRoot, "wiki");
       await mkdir(path.join(wikiRoot, "projects"), { recursive: true });
       await mkdir(path.join(wikiRoot, "raw", "granola"), { recursive: true });
-      await writeFile(path.join(wikiRoot, "index.md"), "# Index\n\nCortex root\n", "utf8");
+      await writeFile(path.join(wikiRoot, "index.md"), "# Index\n\nStrata root\n", "utf8");
       await writeFile(
         path.join(wikiRoot, "projects", "alpha.md"),
         "# Alpha\n\nNeedle appears here.\n",
@@ -84,7 +84,7 @@ describe("wiki tools", () => {
 
       const blocked = await registry.safeExecute(
         "wiki.readPage",
-        { path: ".cortex/secret.md" },
+        { path: ".strata/secret.md" },
         context,
       );
       expect(blocked.ok).toBe(false);
@@ -97,7 +97,7 @@ describe("wiki tools", () => {
   });
 
   test("writes, patches, logs, and updates the wiki index", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       const changes: ToolFileChange[] = [];
       const wikiRoot = path.join(repoRoot, "wiki");
@@ -110,7 +110,7 @@ describe("wiki tools", () => {
           "last_updated: null",
           "---",
           "",
-          "# Cortex Index",
+          "# Strata Index",
           "",
           "## Projects",
           "",
@@ -118,7 +118,7 @@ describe("wiki tools", () => {
         ].join("\n"),
         "utf8",
       );
-      await writeFile(path.join(wikiRoot, "log.md"), "# Cortex - Activity Log\n", "utf8");
+      await writeFile(path.join(wikiRoot, "log.md"), "# Strata - Activity Log\n", "utf8");
 
       const registry = createDefaultToolRegistry({ profile: "maintenance" });
       const context = {
@@ -209,7 +209,7 @@ describe("wiki tools", () => {
   });
 
   test("blocks wiki writes outside markdown pages and raw sources", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       await mkdir(path.join(repoRoot, "wiki", "raw"), { recursive: true });
       const registry = createDefaultToolRegistry({ profile: "maintenance" });

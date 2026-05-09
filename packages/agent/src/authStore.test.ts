@@ -12,7 +12,7 @@ import {
 
 describe("auth store", () => {
   test("stores ChatGPT credentials in a 0600 repo-local auth file", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-auth-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-auth-"));
     try {
       const credentials: ChatGptCredentials = {
         type: "chatgpt_oauth",

@@ -1,5 +1,5 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
-import { listSkills, readSkill } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
+import { listSkills, readSkill } from "@strata/core";
 import { optionalInteger, requiredNonEmptyString } from "./args.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolDefinition } from "./types.js";
@@ -31,7 +31,7 @@ export function createSkillTools(): ToolDefinition[] {
 
 const skillsListTool: ToolDefinition<SkillsListArgs> = {
   name: "skills.list",
-  description: "List Cortex procedural skills stored under .cortex/skills.",
+  description: "List Strata procedural skills stored under .strata/skills.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -50,7 +50,7 @@ const skillsListTool: ToolDefinition<SkillsListArgs> = {
 
 const skillsReadTool: ToolDefinition<SkillsReadArgs> = {
   name: "skills.read",
-  description: "Read one Cortex procedural skill by name.",
+  description: "Read one Strata procedural skill by name.",
   mode: "read",
   inputSchema: {
     type: "object",

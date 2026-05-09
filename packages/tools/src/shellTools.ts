@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 import { PolicyViolationError } from "./policy.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolDefinition } from "./types.js";

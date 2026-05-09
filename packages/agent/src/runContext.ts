@@ -6,7 +6,7 @@ import {
   readMemoryDocuments,
   type SkillMetadata,
   type TodoItem,
-} from "@cortex/core";
+} from "@strata/core";
 import type { AgentMessage } from "./types.js";
 
 export interface BuildRunContextOptions {
@@ -60,8 +60,8 @@ export async function buildRunContext(options: BuildRunContextOptions): Promise<
 
 function createBaseSystemPrompt(): string {
   return [
-    "You are Cortex, a local wiki and learning agent.",
-    "Answer using the Cortex wiki and cite wiki-relative Markdown paths when possible.",
+    "You are Strata, a local wiki and learning agent.",
+    "Answer using the Strata wiki and cite wiki-relative Markdown paths when possible.",
     "Use wiki.search to find candidate pages and wiki.readPage to inspect specific pages.",
     "Use fs.list, fs.find, fs.grep, and fs.read when broader repo inspection is needed.",
     "Use sessions.search or sessions.recent when the user refers to prior work or previous context.",
@@ -79,7 +79,7 @@ function formatSystemContext(
   skills: SkillMetadata[],
 ): string {
   return [
-    "Cortex durable context for this run.",
+    "Strata durable context for this run.",
     "",
     "## Memory",
     formatMemory(memory),

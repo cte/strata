@@ -2,7 +2,7 @@
 
 Status: review document, dated 2026-05-02. Not a plan of record.
 
-This document records four architectural deepening opportunities in the Cortex
+This document records four architectural deepening opportunities in the Strata
 harness. The aim is to surface places where the current code is shallow — where
 the interface is nearly as complex as the implementation, where complexity has
 spread across callers that should have been able to ignore it, or where the seam
@@ -44,7 +44,7 @@ follow-up grilling sessions on whichever candidates the team chooses to pursue.
 
 `policy.ts` already concentrates path safety: `resolveRepoPath`,
 `assertReadAllowed`, `assertWriteAllowed`, `isRawPath`, blocked-segment
-rejection (`.git`, `.cortex`, `node_modules`, `dist`), raw-write forbidden,
+rejection (`.git`, `.strata`, `node_modules`, `dist`), raw-write forbidden,
 raw-read gated on `includeRaw`. These are the load-bearing invariants for the
 "local-first, raw sources immutable" design commitment in `roadmap.md`.
 
@@ -134,7 +134,7 @@ duplicated.
 
 Two adapters in production means the seam is real, not hypothetical. But the
 interface today does not absorb the duplication, and the third adapter (a new
-provider, a Codex schema bump, an Anthropic adapter once Cortex grows beyond
+provider, a Codex schema bump, an Anthropic adapter once Strata grows beyond
 OpenAI-compatible models) will copy the same plumbing a third time.
 
 ### Solution

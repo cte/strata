@@ -93,7 +93,7 @@ describe("sequenceToInputEvent", () => {
     });
   });
 
-  test("ignores keys cortex doesn't model that aren't printable", () => {
+  test("ignores keys strata doesn't model that aren't printable", () => {
     expect(sequenceToInputEvent("\x1b[127;3u")).toBeUndefined();
   });
 });

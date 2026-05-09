@@ -1,11 +1,21 @@
 {
-  "name": "@cortex/ingest",
+  "name": "@strata/ingest",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
+    "./connector-types": "./src/connectors/types.ts",
     "./common": "./src/common.ts",
-    "./notion": "./src/notion.ts"
+    "./connectors": "./src/connectors.ts",
+    "./granola-connector": "./src/granolaConnector.ts",
+    "./notion": "./src/notion.ts",
+    "./notion-connector": "./src/notionConnector.ts",
+    "./slack-client": "./src/slackClient.ts",
+    "./slack-connector": "./src/slackConnector.ts",
+    "./slack-socket-mode": "./src/slackSocketMode.ts"
+  },
+  "dependencies": {
+    "@strata/core": "workspace:*"
   },
   "scripts": {
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json"

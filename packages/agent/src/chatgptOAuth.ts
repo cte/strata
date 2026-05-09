@@ -5,7 +5,7 @@ import {
   setChatGptCredentials,
 } from "./authStore.js";
 
-const CALLBACK_HOST = Bun.env.CORTEX_OAUTH_CALLBACK_HOST ?? "127.0.0.1";
+const CALLBACK_HOST = Bun.env.STRATA_OAUTH_CALLBACK_HOST ?? "127.0.0.1";
 const CALLBACK_PORT = 1455;
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
@@ -131,7 +131,7 @@ export async function refreshChatGptCredentials(
 export async function getValidChatGptCredentials(repoRoot?: string): Promise<ChatGptCredentials> {
   const credentials = await getChatGptCredentials(repoRoot);
   if (credentials === undefined) {
-    throw new Error("Not logged in with ChatGPT. Run `bun run cortex auth login openai-codex`.");
+    throw new Error("Not logged in with ChatGPT. Run `bun run strata auth login openai-codex`.");
   }
 
   if (Date.now() + REFRESH_SKEW_MS < credentials.expiresAt) {
@@ -208,7 +208,7 @@ function createAuthUrl(state: string, challenge: string): string {
   url.searchParams.set("state", state);
   url.searchParams.set("id_token_add_organizations", "true");
   url.searchParams.set("codex_cli_simplified_flow", "true");
-  url.searchParams.set("originator", "cortex");
+  url.searchParams.set("originator", "strata");
   return url.toString();
 }
 
@@ -380,11 +380,11 @@ function base64UrlDecode(value: string): Uint8Array {
 }
 
 function successHtml(): string {
-  return "<!doctype html><title>Cortex login complete</title><p>ChatGPT login complete. You can close this window.</p>";
+  return "<!doctype html><title>Strata login complete</title><p>ChatGPT login complete. You can close this window.</p>";
 }
 
 function errorHtml(message: string): string {
-  return `<!doctype html><title>Cortex login failed</title><p>${escapeHtml(message)}</p>`;
+  return `<!doctype html><title>Strata login failed</title><p>${escapeHtml(message)}</p>`;
 }
 
 function escapeHtml(value: string): string {

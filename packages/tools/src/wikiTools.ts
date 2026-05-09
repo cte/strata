@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 import { editTextFile, writeTextFile } from "./fsTools.js";
 import {
   assertReadAllowed,
@@ -114,7 +114,7 @@ export function createWikiTools(): ToolDefinition[] {
 
 const wikiListPagesTool: ToolDefinition<WikiListPagesArgs> = {
   name: "wiki.listPages",
-  description: "List Markdown pages in the Cortex wiki.",
+  description: "List Markdown pages in the Strata wiki.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -189,7 +189,7 @@ const wikiReadPageTool: ToolDefinition<WikiReadPageArgs, WikiPageResult> = {
 
 const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
   name: "wiki.search",
-  description: "Search Markdown pages in the Cortex wiki by case-insensitive substring.",
+  description: "Search Markdown pages in the Strata wiki by case-insensitive substring.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -230,7 +230,7 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
 
 const wikiWritePageTool: ToolDefinition<WikiWritePageArgs> = {
   name: "wiki.writePage",
-  description: "Create or explicitly overwrite a Markdown page inside the Cortex wiki.",
+  description: "Create or explicitly overwrite a Markdown page inside the Strata wiki.",
   mode: "write",
   inputSchema: {
     type: "object",
@@ -338,7 +338,7 @@ const wikiAppendLogTool: ToolDefinition<WikiAppendLogArgs> = {
     const timestamp = optionalString(args.timestamp, new Date().toISOString(), "timestamp");
     const maxChars = optionalPositiveInteger(args.maxChars, DEFAULT_MAX_WRITE_CHARS, "maxChars");
     const existing = await readOptionalWikiText(context.repoRoot, LOG_PATH);
-    const base = existing ?? "# Cortex - Activity Log\n";
+    const base = existing ?? "# Strata - Activity Log\n";
     const separator = base.endsWith("\n") ? "" : "\n";
     const content = `${base}${separator}\n- ${timestamp} - ${entry.trim()}\n`;
     const writeInput = {
@@ -679,7 +679,7 @@ function upsertIndexEntry(
 }
 
 function defaultIndexContent(): string {
-  return ["---", "type: index", "last_updated: null", "---", "", "# Cortex Index", ""].join("\n");
+  return ["---", "type: index", "last_updated: null", "---", "", "# Strata Index", ""].join("\n");
 }
 
 function isNotFoundError(error: unknown): boolean {

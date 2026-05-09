@@ -6,7 +6,7 @@ export type SessionKind = "chat" | "query" | "ingest" | "lint" | "learn" | "main
 export type SessionStatus = "running" | "completed" | "failed" | "interrupted";
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 
-export interface CortexPaths {
+export interface StrataPaths {
   repoRoot: string;
   runtimeDir: string;
   traceDir: string;

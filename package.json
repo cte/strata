@@ -1,11 +1,12 @@
 {
-  "name": "cortex",
+  "name": "strata",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.13",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "engines": {
     "bun": ">=1.3.13"
@@ -17,16 +18,28 @@
     "format:check": "biome format .",
     "biome:check": "biome check .",
     "test": "bun test",
-    "build": "bun build ./packages/ingest/src/lintWiki.ts ./packages/ingest/src/pullGranola.ts ./packages/ingest/src/pullSlack.ts ./packages/ingest/src/pullNotion.ts ./packages/cli/src/index.ts --outdir=dist --target=bun",
-    "cortex": "bun packages/cli/src/index.ts",
+    "build": "bun build ./packages/ingest/src/lintWiki.ts ./packages/ingest/src/pullGranola.ts ./packages/ingest/src/pullSlack.ts ./packages/ingest/src/pullNotion.ts ./packages/cli/src/index.ts ./packages/web-api/src/server.ts --outdir=dist --target=bun",
+    "dev": "pm2 start ecosystem.json",
+    "dev:delete": "pm2 delete ecosystem.json",
+    "dev:logs": "pm2 logs",
+    "dev:restart": "pm2 restart ecosystem.json",
+    "dev:status": "pm2 status",
+    "dev:stop": "pm2 stop ecosystem.json",
+    "strata": "dotenvx --quiet run --overload -- bun packages/cli/src/index.ts",
+    "web:api": "dotenvx --quiet run --overload -- bun packages/web-api/src/server.ts",
+    "web:dev": "dotenvx --quiet run --overload -e STRATA_WEB_HOST=0.0.0.0 -- bun run --cwd apps/web dev",
+    "web:dev:local": "dotenvx --quiet run --overload -- bun run --cwd apps/web dev",
+    "web:build": "dotenvx --quiet run --overload -- bun run --cwd apps/web build",
     "lint:wiki": "bun packages/ingest/src/lintWiki.ts",
-    "pull:granola": "bun packages/ingest/src/pullGranola.ts",
-    "pull:slack": "bun packages/ingest/src/pullSlack.ts",
-    "pull:notion": "bun packages/ingest/src/pullNotion.ts"
+    "pull:granola": "dotenvx --quiet run --overload -- bun packages/ingest/src/pullGranola.ts",
+    "pull:slack": "dotenvx --quiet run --overload -- bun packages/ingest/src/pullSlack.ts",
+    "pull:notion": "dotenvx --quiet run --overload -- bun packages/ingest/src/pullNotion.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.14",
+    "@dotenvx/dotenvx": "^1.65.0",
     "@types/bun": "^1.3.13",
-    "@typescript/native-preview": "beta"
+    "@typescript/native-preview": "beta",
+    "pm2": "^7.0.1"
   }
 }

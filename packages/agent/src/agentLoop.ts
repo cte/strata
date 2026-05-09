@@ -1,12 +1,12 @@
 import {
-  getCortexPaths,
+  getStrataPaths,
   type JsonObject,
   type JsonValue,
   type SessionRecord,
   SessionStore,
-} from "@cortex/core";
-import type { ToolExecutionResult } from "@cortex/tools";
-import { createDefaultToolRegistry, type ToolRegistry } from "@cortex/tools";
+} from "@strata/core";
+import type { ToolExecutionResult } from "@strata/tools";
+import { createDefaultToolRegistry, type ToolRegistry } from "@strata/tools";
 import { buildRunContext } from "./runContext.js";
 import type {
   AgentMessage,
@@ -22,7 +22,7 @@ import type {
 // cancels via Ctrl+C (signal abort).
 
 export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerator<AgentRunEvent> {
-  const repoRoot = getCortexPaths(config.repoRoot).repoRoot;
+  const repoRoot = getStrataPaths(config.repoRoot).repoRoot;
   const store = await SessionStore.open(repoRoot);
   const tools = config.tools ?? createDefaultToolRegistry();
   const signal = config.signal;
@@ -82,7 +82,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       // Persist the new user turn (the system messages are not re-persisted —
       // they're regenerated each run).
       if (userMessage !== undefined) {
-        const messageInput: import("@cortex/core").MessageInput = {
+        const messageInput: import("@strata/core").MessageInput = {
           sessionId: session.id,
           role: "user",
           content: userMessage.content,
@@ -354,7 +354,7 @@ async function appendInitialMessage(
   sessionId: string,
   message: AgentMessage,
 ): Promise<void> {
-  const input: import("@cortex/core").MessageInput = {
+  const input: import("@strata/core").MessageInput = {
     sessionId,
     role: message.role,
     content: message.content,
@@ -439,7 +439,7 @@ function sanitizeTitleText(value: string): string {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
-function messageRecordToAgentMessage(record: import("@cortex/core").MessageRecord): AgentMessage {
+function messageRecordToAgentMessage(record: import("@strata/core").MessageRecord): AgentMessage {
   const message: AgentMessage = {
     role: record.role,
     content: record.content,

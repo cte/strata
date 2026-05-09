@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues in `cte/cortex`. Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues for the current repository remote. Use the `gh` CLI for all operations.
 
 ## Conventions
 

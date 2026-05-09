@@ -52,7 +52,7 @@ describe("Editor", () => {
     feed(editor, "beta");
     editor.handleInput({ type: "key", key: "enter", raw: "\r" });
     // Up to the most-recent ("beta"), then to "alpha", then up again should
-    // stay at "alpha" — pi's behavior. Previously cortex wrapped: it cleared
+    // stay at "alpha" — pi's behavior. Previously strata wrapped: it cleared
     // the editor on the third Up and then went back to "beta" on the fourth.
     editor.handleInput({ type: "key", key: "up", raw: "" });
     expect(editor.text).toBe("beta");

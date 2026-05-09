@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 import {
   assertReadAllowed,
   assertWriteAllowed,
@@ -153,7 +153,7 @@ export function createFileSystemTools(): ToolDefinition[] {
 const fsListTool: ToolDefinition<FsListArgs> = {
   name: "fs.list",
   description:
-    "List files and directories inside the Cortex repo without following symlinks. Raw sources require includeRaw.",
+    "List files and directories inside the Strata repo without following symlinks. Raw sources require includeRaw.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -199,7 +199,7 @@ const fsListTool: ToolDefinition<FsListArgs> = {
 const fsReadTool: ToolDefinition<FsReadArgs> = {
   name: "fs.read",
   description:
-    "Read a UTF-8 text file inside the Cortex repo without following symlinks. Use offset/limit to read a slice of large files. Raw sources require includeRaw.",
+    "Read a UTF-8 text file inside the Strata repo without following symlinks. Use offset/limit to read a slice of large files. Raw sources require includeRaw.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -347,7 +347,7 @@ const fsFindTool: ToolDefinition<FsFindArgs> = {
 const fsGrepTool: ToolDefinition<FsGrepArgs> = {
   name: "fs.grep",
   description:
-    "Search UTF-8 text files in the Cortex repo. Pattern is a JavaScript regex by default; pass `literal: true` for substring search. Skips blocked directories and binary files.",
+    "Search UTF-8 text files in the Strata repo. Pattern is a JavaScript regex by default; pass `literal: true` for substring search. Skips blocked directories and binary files.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -388,7 +388,7 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
   },
   maxResultChars: 96_000,
   async handler(args, context) {
-    // Pi calls it `pattern`; cortex used to require `query`. Accept either,
+    // Pi calls it `pattern`; strata used to require `query`. Accept either,
     // preferring `pattern` when both are passed.
     const rawPattern =
       typeof args.pattern === "string" && args.pattern.length > 0
@@ -445,7 +445,7 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
 const fsWriteTool: ToolDefinition<FsWriteArgs> = {
   name: "fs.write",
   description:
-    "Create or overwrite a UTF-8 text file inside the Cortex repo. Missing parent directories are created automatically. Writes under raw sources are forbidden.",
+    "Create or overwrite a UTF-8 text file inside the Strata repo. Missing parent directories are created automatically. Writes under raw sources are forbidden.",
   mode: "write",
   inputSchema: {
     type: "object",
@@ -888,7 +888,7 @@ async function findPaths(
 // Pi-style: shell out to ripgrep for fast, gitignore-aware search. Honors
 // ignoreCase, literal, glob (pathPattern), and context flags. Requires `rg`
 // on PATH — fails with a clear message otherwise. Returns structured matches
-// shaped to cortex's existing `FsGrepMatch` type.
+// shaped to strata's existing `FsGrepMatch` type.
 async function ripgrepSearch(
   options: RipgrepSearchOptions,
 ): Promise<{ matches: FsGrepMatch[]; truncated: boolean }> {

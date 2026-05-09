@@ -1,12 +1,14 @@
-# Cortex Web Control Plane Plan
+# Strata Web Control Plane Plan
 
-Status: planned, not yet implemented.
+Status: initial skeleton present.
 
-This plan covers a future local web app for configuring and operating Cortex connectors. It is subordinate to [roadmap.md](./roadmap.md), [agent-harness-plan.md](./agent-harness-plan.md), and [wiki-plan.md](./wiki-plan.md). The web app should not be started until connector contracts and at least one raw-to-wiki ingestion workflow are stable.
+This plan covers a local web app for configuring and operating Strata connectors. It is subordinate to [roadmap.md](./roadmap.md), [agent-harness-plan.md](./agent-harness-plan.md), and [wiki-plan.md](./wiki-plan.md).
+
+The first skeleton exists under `apps/web` with a thin Hono + tRPC local API in `packages/web-api`. The current UI is intentionally narrow: connector list, Notion validate/dry-run/pull, Granola API key configuration, Slack status, and an experimental Notion MCP OAuth/tool-discovery path. Granola raw pulls and Slack thread pulls exist in the shared connector runner and CLI. Slack also has checkpointed sync and a basic Socket Mode listener in the CLI. Web pull controls, schedules, proposal review, and persisted non-secret connector config remain planned.
 
 ## Objective
 
-Build a local browser UI that makes Cortex easier to set up and operate without turning Cortex into a cloud service.
+Build a local browser UI that makes Strata easier to set up and operate without turning Strata into a cloud service.
 
 The web control plane should help the user:
 
@@ -40,15 +42,27 @@ Connector logic belongs in shared packages:
 
 ```text
 packages/
-  ingest/      Connector contracts and source-specific pullers
+  ingest/      Connector contracts, registry, runner, secret store, and source-specific pullers
   core/        Paths, session store, runtime state, shared types
   agent/       Maintenance, reflection, proposal workflows
-  web-api/     Future local HTTP API over shared packages
+  web-api/     Hono + tRPC local HTTP API over shared packages
 apps/
-  web/         Future browser UI
+  web/         Browser UI
 ```
 
 The CLI, TUI, scheduler, and web app should all call the same connector APIs. Do not fork connector behavior into HTTP route handlers or React components.
+
+The current connector runtime foundation lives under `packages/ingest/src/connectors/`:
+
+- `types.ts`: connector definitions, capabilities, statuses, normalized source document/checkpoint/failure types, and redaction helpers.
+- `registry.ts`: source connector registry for Notion, Granola, and Slack.
+- `runner.ts`: trace-backed dry-run/pull execution that owns ingest sessions and redacts secret config before writing events.
+- `store.ts`: local gitignored connector secret records under `.strata/secrets/<connector>.json`.
+- `checkpointStore.ts`: local connector checkpoints under `.strata/connectors/<connector>/checkpoint.json`.
+
+The browser should consume typed tRPC procedures from `packages/web-api/src/trpc.ts`. Keep that router module browser-safe for type imports: router shape and shared DTO types belong there, while Bun, SQLite, filesystem, connector runtime, and session-writing implementation belong in server-side service modules.
+
+The Notion MCP experiment lives alongside the deterministic Notion API connector. Use the hosted MCP server first to validate user-based OAuth and agent-friendly tool discovery. Do not replace raw snapshot ingestion until we confirm MCP can produce stable source IDs, durable content, and traceable raw artifacts that are at least as reliable as the direct Notion API path.
 
 Target connector contract:
 
@@ -56,10 +70,13 @@ Target connector contract:
 export interface ConnectorDefinition<TConfig> {
   name: "notion" | "granola" | "slack";
   displayName: string;
-  configSchema: JsonSchema;
+  mode: "page" | "api" | "sync" | "thread";
+  capabilities: ConnectorCapability[];
+  configSchema: ConnectorConfigSchema;
+  getStatus?(): Promise<ConnectorStatus> | ConnectorStatus;
   validate(config: TConfig): Promise<ConnectorStatus>;
-  dryRun(config: TConfig): Promise<ConnectorPullPreview>;
-  pull(config: TConfig): Promise<ConnectorPullResult>;
+  dryRun?(config: TConfig): Promise<ConnectorPullResult>;
+  pull?(config: TConfig): Promise<ConnectorPullResult>;
 }
 ```
 
@@ -82,7 +99,7 @@ Requirements:
 - Do not render secrets into client-side pages.
 - Do not write connector tokens to traces, wiki pages, proposals, or logs.
 - Store secrets separately from non-secret connector config.
-- Prefer OS keychain or encrypted-at-rest storage later; until then, `.env` or a gitignored `.cortex/secrets` path is acceptable.
+- Prefer OS keychain or encrypted-at-rest storage later; until then, `.env` or a gitignored `.strata/secrets` path is acceptable.
 - Redact bearer tokens, OAuth codes, API keys, and private URLs from errors before returning them to the browser.
 
 ## Connector UX
@@ -91,18 +108,21 @@ Requirements:
 
 Initial UI:
 
-- Explain how to create a Notion internal connection.
-- Accept `NOTION_TOKEN` through the chosen secret storage path.
+- Offer a Notion MCP connect button for user-based OAuth against `https://mcp.notion.com/mcp`.
+- Store MCP refresh credentials server-side only under a gitignored local secret path.
+- Keep `NOTION_TOKEN` as a fallback for deterministic direct-API snapshots.
 - Accept a page ID or pasted Notion URL.
 - Validate that the connection can read the page.
 - Run a dry-run that shows the target raw snapshot path.
 - Run a pull that writes `wiki/raw/notion/YYYY-MM-DD-<slug>.md` through the shared connector.
+- List hosted MCP tools to confirm the OAuth connection is usable.
 
 Later UI:
 
 - Search accessible pages.
 - Select top-level pages or databases for recurring pulls.
 - Show recent edits eligible for ingestion.
+- Decide whether Notion MCP should power agent-only browsing/search, ingestion snapshots, or both.
 
 ### Granola
 
@@ -122,10 +142,12 @@ Later UI:
 
 Initial UI:
 
-- Configure workspace metadata and bot token/OAuth state.
-- Select allowed channels and default filter rules.
-- Validate that the bot can read configured channels.
+- Configure workspace metadata and Slack token state.
+- Show whether Strata is using user-token access or bot-token access.
+- Select allowed channels, private-channel inclusion, DM inclusion, and default filter rules.
+- Validate that the selected token can read configured channels.
 - Pull an explicitly selected thread or fixture into `wiki/raw/slack/`.
+- Run checkpointed sync dry-runs with `since`, `all-history`, and channel filters.
 
 Later UI:
 
@@ -133,19 +155,20 @@ Later UI:
 - Channel picker.
 - Saved materiality filters.
 - Backfill controls scoped by channel and time range.
+- Socket Mode listener status and event-tail controls.
 
 ## Sequencing
 
 Do not build the web app first. The implementation order should be:
 
-1. Stabilize a shared connector result contract in `packages/ingest`.
-2. Convert Notion to that contract.
+1. Stabilize a shared connector result contract in `packages/ingest`. Status: connector types, registry, runner, and secret store exist.
+2. Convert Notion to that contract. Status: Notion validation, dry-run, and pull use the shared connector definition; CLI and web pull paths now use the shared runner.
 3. Add Notion raw-to-wiki ingestion and proposal staging for ambiguous changes.
-4. Convert Granola and Slack to the same connector contract.
+4. Convert Granola and Slack to the same connector contract. Status: Granola credential configuration/status and raw pulls are registered; Slack explicit-thread pulls, checkpointed sync, and basic Socket Mode tailing are registered in the CLI. Web controls for those pulls remain to be added.
 5. Add proposal review/apply/reject commands.
 6. Add recurring scheduler execution for stable connector and maintenance jobs.
-7. Add `packages/web-api` as a thin local HTTP layer over shared packages.
-8. Add `apps/web` as the local browser UI.
+7. Add `packages/web-api` as a thin Hono + tRPC local HTTP layer over shared packages. Status: initial Notion-focused slice present.
+8. Add `apps/web` as the local browser UI. Status: initial Notion-focused slice present.
 
 The web app becomes useful once there are multiple connector states, schedules, traces, and proposals to inspect. Before that, it risks becoming UI around unstable backend concepts.
 
@@ -156,7 +179,7 @@ The first useful web milestone is complete when:
 - The web server starts locally and binds to loopback.
 - The Notion connector setup page can validate a token/page configuration.
 - The Notion page can run a dry-run and display the exact raw snapshot path that would be written.
-- The Notion page can trigger the same trace-backed pull as `cortex ingest notion`.
+- The Notion page can trigger the same trace-backed pull as `strata ingest notion`.
 - Recent ingest sessions are visible with status, source, raw path, and trace link.
 - Secrets are redacted from browser responses, traces, reports, and logs.
 
@@ -165,4 +188,3 @@ The second useful milestone is complete when:
 - Granola and Slack appear in the same connector framework.
 - The UI can configure recurring pull schedules.
 - The UI can show pending proposals and apply/reject/defer them through the same proposal APIs as the CLI.
-

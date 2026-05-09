@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listTodos, readMemoryDocument, SessionStore } from "@cortex/core";
+import { listTodos, readMemoryDocument, SessionStore } from "@strata/core";
 import { ReflectionError, runReflection } from "./reflection.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
@@ -25,14 +25,14 @@ class JsonReflectionModel implements ModelAdapter {
 
 describe("runReflection", () => {
   test("applies low-risk memory and todo updates and stages proposals", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-reflection-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-reflection-"));
     try {
       const sessionId = await createCompletedSession(repoRoot);
       const model = new JsonReflectionModel({
         memory_updates: [
           {
             target: "operations",
-            entry: "Cortex reflection tests use deterministic fake model output.",
+            entry: "Strata reflection tests use deterministic fake model output.",
             reason: "The session established a reusable test convention.",
             evidence: ["message.user"],
             risk: "low",
@@ -72,7 +72,7 @@ describe("runReflection", () => {
       expect(model.requests[0]?.messages.at(-1)?.content).toContain("Session trace JSONL");
       expect(first.applied).toHaveLength(2);
       expect(first.proposals).toHaveLength(1);
-      expect(first.reportPath).toBe(`.cortex/reports/reflections/${sessionId}.json`);
+      expect(first.reportPath).toBe(`.strata/reports/reflections/${sessionId}.json`);
 
       const memory = await readMemoryDocument(repoRoot, "operations", Number.POSITIVE_INFINITY);
       expect(memory.content).toContain("deterministic fake model output");
@@ -85,7 +85,7 @@ describe("runReflection", () => {
       expect(proposal).toContain("Add a pitfall about duplicate memory entries.");
 
       const trace = await readFile(
-        path.join(repoRoot, ".cortex", "traces", `${sessionId}.jsonl`),
+        path.join(repoRoot, ".strata", "traces", `${sessionId}.jsonl`),
         "utf8",
       );
       expect(trace).toContain("reflection.started");
@@ -108,7 +108,7 @@ describe("runReflection", () => {
   });
 
   test("rejects running sessions", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-reflection-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-reflection-"));
     try {
       const store = await SessionStore.open(repoRoot);
       let sessionId = "";

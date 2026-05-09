@@ -6,7 +6,7 @@ import { normalizeNotionPageId, pullNotionPage } from "./notion.js";
 
 describe("pullNotionPage", () => {
   test("snapshots a Notion page into wiki raw Notion sources", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-notion-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-notion-"));
     try {
       const result = await pullNotionPage({
         pageId: "page_123",
@@ -40,7 +40,7 @@ describe("pullNotionPage", () => {
   });
 
   test("dry run returns the target path without writing", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-notion-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-notion-"));
     try {
       const result = await pullNotionPage({
         pageId: "page_123",
@@ -67,7 +67,7 @@ describe("pullNotionPage", () => {
   });
 
   test("retries rate-limited Notion requests", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-notion-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-notion-"));
     try {
       let pageRequests = 0;
       const result = await pullNotionPage({

@@ -1,10 +1,10 @@
-# Cortex TUI Plan
+# Strata TUI Plan
 
 Status: planned.
 
-This plan updates the previous TUI direction: Cortex should implement the TUI stack end-to-end in this repo. Pi remains the reference implementation for architecture and behavior, but Cortex should not depend on `@mariozechner/pi-tui` for the first-party learning path.
+This plan updates the previous TUI direction: Strata should implement the TUI stack end-to-end in this repo. Pi remains the reference implementation for architecture and behavior, but Strata should not depend on `@mariozechner/pi-tui` for the first-party learning path.
 
-The target is a clean, small, auditable TUI that starts with the pieces Cortex actually needs: chat transcript, prompt editor, tool-call visualization, auth/login UI, model/provider status, sessions, and slash commands.
+The target is a clean, small, auditable TUI that starts with the pieces Strata actually needs: chat transcript, prompt editor, tool-call visualization, auth/login UI, model/provider status, sessions, and slash commands.
 
 ## 1. Reference Findings From Pi
 
@@ -25,9 +25,9 @@ Patterns worth adapting:
 
 Patterns to avoid or defer:
 
-- Do not create a single giant interactive-mode class. Pi's controller is powerful, but Cortex should split controller, state reducer, command registry, components, and runtime bindings.
+- Do not create a single giant interactive-mode class. Pi's controller is powerful, but Strata should split controller, state reducer, command registry, components, and runtime bindings.
 - Do not implement extensions, custom UI plugin APIs, terminal image protocols, theme hot reload, full settings UI, keybinding customization, session tree/fork flows, or compaction UI in the first pass.
-- Do not copy pi code wholesale. Reimplement the core ideas in smaller Cortex-specific modules.
+- Do not copy pi code wholesale. Reimplement the core ideas in smaller Strata-specific modules.
 
 Useful local reference points:
 
@@ -39,11 +39,11 @@ Useful local reference points:
 - `/home/exedev/Documents/pi-mono/packages/coding-agent/src/modes/interactive/components/login-dialog.ts`: OAuth dialog flow.
 - `/home/exedev/Documents/pi-mono/packages/coding-agent/src/modes/interactive/components/oauth-selector.ts`: provider selector structure.
 
-## 2. Cortex Design Goals
+## 2. Strata Design Goals
 
 - First-party implementation: all low-level terminal, input, renderer, editor, and app code lives under `packages/tui`.
-- Small surface area: implement only the terminal features needed for Cortex's agent harness first.
-- Separable layers: low-level TUI primitives should not import `@cortex/agent`; Cortex app components can import agent/core/tools packages.
+- Small surface area: implement only the terminal features needed for Strata's agent harness first.
+- Separable layers: low-level TUI primitives should not import `@strata/agent`; Strata app components can import agent/core/tools packages.
 - Render purity: components render from state; controller code mutates state and requests renders.
 - Strict width discipline: every rendered line must fit terminal width after ANSI escape codes are ignored.
 - Graceful terminal cleanup: raw mode, cursor visibility, bracketed paste, resize handlers, and pending timers must always restore on exit.
@@ -90,7 +90,7 @@ packages/tui/
       truncatedText.ts
     app/
       runTui.ts
-      cortexApp.ts
+      strataApp.ts
       appState.ts
       appReducer.ts
       appEvents.ts
@@ -109,7 +109,7 @@ packages/tui/
         userMessage.ts
 ```
 
-Keep `terminal/`, `render/`, and generic `components/` independent of Cortex domain packages. Only `app/` should depend on `@cortex/agent`, `@cortex/core`, and `@cortex/tools`.
+Keep `terminal/`, `render/`, and generic `components/` independent of Strata domain packages. Only `app/` should depend on `@strata/agent`, `@strata/core`, and `@strata/tools`.
 
 ## 4. Low-Level TUI Architecture
 
@@ -213,7 +213,7 @@ Start with a deliberately simple reconciler:
 4. If changed lines are contiguous and visible, redraw the changed range.
 5. If deletion or viewport math gets complicated, fall back to full redraw.
 
-Pi's renderer is highly optimized. Cortex should first be correct and debuggable, then optimize.
+Pi's renderer is highly optimized. Strata should first be correct and debuggable, then optimize.
 
 ### 4.5 Width And ANSI Utilities
 
@@ -282,9 +282,9 @@ Editor v1 requirements:
 - Slash-command autocomplete.
 - File/path autocomplete can be deferred until after slash commands.
 
-## 6. Cortex App TUI
+## 6. Strata App TUI
 
-Add `cortex tui` as a CLI command and root script.
+Add `strata tui` as a CLI command and root script.
 
 Initial layout:
 
@@ -298,7 +298,7 @@ Footer
 
 Header:
 
-- Show `cortex`, version, active provider/model, and short key hints.
+- Show `strata`, version, active provider/model, and short key hints.
 - Keep it collapsible later, but static for v1.
 
 Chat transcript:
@@ -327,7 +327,7 @@ Footer:
 
 The current `runAgentLoop()` returns only a final result. A TUI needs lifecycle events.
 
-Add an event-producing API in `@cortex/agent`:
+Add an event-producing API in `@strata/agent`:
 
 ```ts
 export type AgentRunEvent =
@@ -377,7 +377,7 @@ Keep keybindings hardcoded in v1. Add config only after behavior stabilizes.
 
 ## 9. Auth UI
 
-Use the existing ChatGPT OAuth implementation from `@cortex/agent`.
+Use the existing ChatGPT OAuth implementation from `@strata/agent`.
 
 TUI-specific components:
 
@@ -462,7 +462,7 @@ Use `bun test`. Do not require a real terminal in CI-style tests.
 
 Acceptance:
 
-- `cortex tui` can start, render a static header/body/footer, react to resize, and exit cleanly.
+- `strata tui` can start, render a static header/body/footer, react to resize, and exit cleanly.
 - Terminal state is restored after normal exit and thrown errors.
 
 ### Phase 2: Prompt Editor And Commands
@@ -497,7 +497,7 @@ Acceptance:
 
 Acceptance:
 
-- `cortex tui` can ask a wiki query through the existing ChatGPT auth/model adapter and show tool calls/results in the transcript.
+- `strata tui` can ask a wiki query through the existing ChatGPT auth/model adapter and show tool calls/results in the transcript.
 
 ### Phase 5: Auth And Sessions
 
@@ -530,6 +530,6 @@ Implement Phase 1 with the smallest useful vertical slice:
 2. Add `Terminal`, `FakeTerminal`, and `ProcessTerminal`.
 3. Add `Component`, `Container`, `Text`, `Spacer`, `DynamicBorder`.
 4. Add `TuiRuntime` with full-frame rendering and clean shutdown.
-5. Add `cortex tui` that renders a static shell and exits on `Ctrl+D` or `/quit` once the editor exists in Phase 2.
+5. Add `strata tui` that renders a static shell and exits on `Ctrl+D` or `/quit` once the editor exists in Phase 2.
 
 This establishes the low-level foundation without mixing it with agent complexity too early.

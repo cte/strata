@@ -6,15 +6,15 @@
  * nested), blockquote, hr, table, space, html, plus inline bold/italic/
  * codespan/link/strikethrough/text.
  *
- * Styling adapts pi's MarkdownTheme to cortex's smaller `theme` set:
+ * Styling adapts pi's MarkdownTheme to strata's smaller `theme` set:
  *   heading           → bold + accent
  *   bold              → bold
- *   italic            → underline (cortex theme has no italic)
+ *   italic            → underline (strata theme has no italic)
  *   strikethrough     → muted, wrapped in tildes for visibility
  *   codeBlockBorder   → muted backticks
  *   codeBlock         → muted (when no highlight available)
  *   highlightCode     → cli-highlight when a known language is set
- *   quote             → muted (cortex doesn't ship italic)
+ *   quote             → muted (strata doesn't ship italic)
  *   quoteBorder       → muted │
  *   listBullet        → accent
  *   hr                → muted ─

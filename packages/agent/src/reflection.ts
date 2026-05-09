@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   addTodo,
   appendMemoryEntry,
-  getCortexPaths,
+  getStrataPaths,
   type JsonObject,
   type JsonValue,
   type LearningProposalKind,
@@ -18,7 +18,7 @@ import {
   type SkillMetadata,
   type TodoPriority,
   writeLearningProposal,
-} from "@cortex/core";
+} from "@strata/core";
 import type { AgentMessage, ModelAdapter, ModelResponse } from "./types.js";
 
 export interface ReflectionRunConfig {
@@ -99,7 +99,7 @@ export class ReflectionError extends Error {
 }
 
 export async function runReflection(config: ReflectionRunConfig): Promise<ReflectionRunResult> {
-  const repoRoot = getCortexPaths(config.repoRoot).repoRoot;
+  const repoRoot = getStrataPaths(config.repoRoot).repoRoot;
   const store = await SessionStore.open(repoRoot);
   try {
     const session = store.getSession(config.sessionId);
@@ -230,7 +230,7 @@ async function requestReflectionPlan(
     {
       role: "system",
       content: [
-        "You are Cortex's post-run reflection classifier.",
+        "You are Strata's post-run reflection classifier.",
         "Convert a completed session trace into durable learning updates.",
         "Return only one JSON object. Do not include Markdown fences or explanatory text.",
         "Do not propose storing secrets. Do not store one-off task progress as memory.",
@@ -449,7 +449,7 @@ async function writeReflectionReport(
   sessionId: string,
   content: JsonObject,
 ): Promise<string> {
-  const paths = getCortexPaths(repoRoot);
+  const paths = getStrataPaths(repoRoot);
   const file = path.join(paths.reflectionsDir, `${sessionId}.json`);
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, `${JSON.stringify(content, null, 2)}\n`, "utf8");

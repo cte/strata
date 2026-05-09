@@ -1,11 +1,11 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 import {
   appendMemoryEntry,
   type MemoryReadTarget,
   type MemoryTarget,
   readMemoryDocuments,
   writeMemoryDocument,
-} from "@cortex/core";
+} from "@strata/core";
 import {
   optionalEnum,
   optionalInteger,
@@ -57,7 +57,7 @@ export function createMemoryTools(): ToolDefinition[] {
 
 const memoryReadTool: ToolDefinition<MemoryReadArgs> = {
   name: "memory.read",
-  description: "Read bounded Cortex user and operations memory from .cortex/memory.",
+  description: "Read bounded Strata user and operations memory from .strata/memory.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -84,7 +84,7 @@ const memoryReadTool: ToolDefinition<MemoryReadArgs> = {
 
 const memoryWriteTool: ToolDefinition<MemoryWriteArgs> = {
   name: "memory.write",
-  description: "Replace one Cortex memory document. Use compact declarative facts, not secrets.",
+  description: "Replace one Strata memory document. Use compact declarative facts, not secrets.",
   mode: "learning",
   inputSchema: {
     type: "object",
@@ -114,7 +114,7 @@ const memoryWriteTool: ToolDefinition<MemoryWriteArgs> = {
 
 const memoryAppendTool: ToolDefinition<MemoryAppendArgs> = {
   name: "memory.append",
-  description: "Append one compact declarative fact to Cortex memory.",
+  description: "Append one compact declarative fact to Strata memory.",
   mode: "learning",
   inputSchema: {
     type: "object",

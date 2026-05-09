@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runAgentLoopEvents } from "@cortex/agent/agent-loop";
-import type { AgentRunEvent, ModelAdapter, ModelRequest, ModelResponse } from "@cortex/agent/types";
-import { FakeTerminal, stripAnsi, TuiRuntime } from "@cortex/tui";
-import { CortexApp } from "@cortex/tui/internal/app";
+import { runAgentLoopEvents } from "@strata/agent/agent-loop";
+import type { AgentRunEvent, ModelAdapter, ModelRequest, ModelResponse } from "@strata/agent/types";
+import { FakeTerminal, stripAnsi, TuiRuntime } from "@strata/tui";
+import { StrataApp } from "@strata/tui/internal/app";
 
 class ScriptedModel implements ModelAdapter {
   readonly name = "scripted";
@@ -27,13 +27,13 @@ function pump(ms = 30): Promise<void> {
 
 describe("tui ↔ agent loop integration", () => {
   test("agent events render tool call and assistant response in transcript", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-agentrun-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-agentrun-"));
     await mkdir(path.join(repoRoot, "projects"), { recursive: true });
     await writeFile(path.join(repoRoot, "projects", "alpha.md"), "# Alpha\n\nNeedle.\n", "utf8");
 
     const terminal = new FakeTerminal(80, 24);
     const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-    const app = new CortexApp(
+    const app = new StrataApp(
       runtime,
       { repoRoot, provider: "openai-compatible", model: "fake-model" },
       { codexLoggedIn: false, apiKeyConfigured: true },
@@ -77,7 +77,7 @@ describe("tui ↔ agent loop integration", () => {
       const output = stripAnsi(terminal.output);
       expect(output).toContain("wiki.search");
       expect(output).toContain("Found Needle");
-      expect(output).toContain("cortex");
+      expect(output).toContain("strata");
     } finally {
       runtime.stop();
       await rm(repoRoot, { force: true, recursive: true });

@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 
 export type ToolMode = "read" | "write" | "learning" | "dangerous";
 export type ToolProfile = "read-only" | "maintenance" | "learning" | "dangerous";

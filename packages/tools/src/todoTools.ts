@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 import {
   addTodo,
   listTodos,
@@ -8,7 +8,7 @@ import {
   type TodoStatus,
   type TodoUpdateInput,
   updateTodo,
-} from "@cortex/core";
+} from "@strata/core";
 import {
   optionalBoolean,
   optionalEnum,
@@ -69,7 +69,7 @@ export function createTodoTools(): ToolDefinition[] {
 
 const todoListTool: ToolDefinition<TodoListArgs> = {
   name: "todo.list",
-  description: "List Cortex runtime todos.",
+  description: "List Strata runtime todos.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -88,7 +88,7 @@ const todoListTool: ToolDefinition<TodoListArgs> = {
 
 const todoAddTool: ToolDefinition<TodoAddArgs> = {
   name: "todo.add",
-  description: "Add a Cortex runtime todo.",
+  description: "Add a Strata runtime todo.",
   mode: "learning",
   inputSchema: {
     type: "object",
@@ -118,7 +118,7 @@ const todoAddTool: ToolDefinition<TodoAddArgs> = {
 
 const todoUpdateTool: ToolDefinition<TodoUpdateArgs> = {
   name: "todo.update",
-  description: "Update a Cortex runtime todo.",
+  description: "Update a Strata runtime todo.",
   mode: "learning",
   inputSchema: {
     type: "object",
@@ -163,7 +163,7 @@ const todoUpdateTool: ToolDefinition<TodoUpdateArgs> = {
 
 const todoRemoveTool: ToolDefinition<TodoRemoveArgs> = {
   name: "todo.remove",
-  description: "Remove a Cortex runtime todo.",
+  description: "Remove a Strata runtime todo.",
   mode: "learning",
   inputSchema: {
     type: "object",
