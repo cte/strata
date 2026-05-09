@@ -10,7 +10,7 @@ Use this path when Granola API access is unavailable. The goal is to move export
 
 ## launchd job
 
-Create `~/Library/LaunchAgents/dev.exe.cortex.granola-sync.plist` on the Mac:
+Create `~/Library/LaunchAgents/dev.exe.strata.granola-sync.plist` on the Mac:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,7 +19,7 @@ Create `~/Library/LaunchAgents/dev.exe.cortex.granola-sync.plist` on the Mac:
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.exe.cortex.granola-sync</string>
+  <string>dev.exe.strata.granola-sync</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
@@ -39,7 +39,7 @@ Create `~/Library/LaunchAgents/dev.exe.cortex.granola-sync.plist` on the Mac:
 Load it:
 
 ```sh
-launchctl load ~/Library/LaunchAgents/dev.exe.cortex.granola-sync.plist
+launchctl load ~/Library/LaunchAgents/dev.exe.strata.granola-sync.plist
 ```
 
 ## Git remote option
@@ -51,12 +51,12 @@ Create `~/bin/granola-sync-to-wiki.sh`:
 set -euo pipefail
 
 EXPORT_DIR="$HOME/Documents/Granola Exports"
-CORTEX_DIR="$HOME/Documents/cortex"
+STRATA_DIR="$HOME/Documents/strata"
 
-mkdir -p "$CORTEX_DIR/wiki/raw/granola"
-rsync -a --ignore-existing "$EXPORT_DIR/" "$CORTEX_DIR/wiki/raw/granola/"
+mkdir -p "$STRATA_DIR/wiki/raw/granola"
+rsync -a --ignore-existing "$EXPORT_DIR/" "$STRATA_DIR/wiki/raw/granola/"
 
-cd "$CORTEX_DIR"
+cd "$STRATA_DIR"
 if ! git diff --quiet -- wiki/raw/granola; then
   git add wiki/raw/granola
   git commit -m "ingest: granola | mac sync"

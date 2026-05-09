@@ -1,7 +1,7 @@
-import type { AgentAttachment, AgentRunResult, AgentToolCall, ThinkingLevel } from "@cortex/agent";
-import { THINKING_LEVELS } from "@cortex/agent";
-import type { JsonObject } from "@cortex/core";
-import type { ToolExecutionResult } from "@cortex/tools";
+import type { AgentAttachment, AgentRunResult, AgentToolCall, ThinkingLevel } from "@strata/agent";
+import { THINKING_LEVELS } from "@strata/agent";
+import type { JsonObject } from "@strata/core";
+import type { ToolExecutionResult } from "@strata/tools";
 import {
   addModelUsage,
   contextWindowForModel,

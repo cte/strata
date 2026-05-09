@@ -1,14 +1,14 @@
-import { ensureRuntimeDirs, getCortexPaths } from "@cortex/core";
+import { ensureRuntimeDirs, getStrataPaths } from "@strata/core";
 import { TuiRuntime } from "../runtime.js";
 import { ProcessTerminal } from "../terminal.js";
-import { buildAppOptions, CortexApp, shutdownOnExit } from "./app.js";
+import { buildAppOptions, StrataApp, shutdownOnExit } from "./app.js";
 
 export interface RunTuiOptions {
   repoRoot?: string;
 }
 
 export async function runTui(options: RunTuiOptions = {}): Promise<void> {
-  const paths = getCortexPaths(options.repoRoot);
+  const paths = getStrataPaths(options.repoRoot);
   const repoRoot = paths.repoRoot;
   await ensureRuntimeDirs(paths);
   const { options: appOptions, authStatus } = await buildAppOptions(repoRoot);
@@ -21,7 +21,7 @@ export async function runTui(options: RunTuiOptions = {}): Promise<void> {
       fatal = error;
     },
   });
-  const app = new CortexApp(runtime, appOptions, authStatus);
+  const app = new StrataApp(runtime, appOptions, authStatus);
   runtime.setRoot(app);
   shutdownOnExit(runtime);
   runtime.start();

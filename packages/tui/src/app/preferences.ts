@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { THINKING_LEVELS, type ThinkingLevel } from "@cortex/agent";
+import { THINKING_LEVELS, type ThinkingLevel } from "@strata/agent";
 import type { ProviderName } from "./state.js";
 
 export interface Preferences {

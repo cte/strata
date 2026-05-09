@@ -1,5 +1,5 @@
-import type { AgentAttachment } from "@cortex/agent";
-import type { ToolExecutionResult } from "@cortex/tools";
+import type { AgentAttachment } from "@strata/agent";
+import type { ToolExecutionResult } from "@strata/tools";
 import { padToWidth, theme, truncateToWidth, visibleWidth, wrapText } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { Markdown } from "../components.js";
@@ -230,7 +230,7 @@ function extractDiff(value: unknown): string | undefined {
   return typeof candidate === "string" && candidate !== "" ? candidate : undefined;
 }
 
-// Render a textual preview tailored to common cortex tool result shapes.
+// Render a textual preview tailored to common strata tool result shapes.
 // Falls back to pretty-printed JSON for anything we don't recognize.
 function formatResultPreview(value: unknown): string {
   if (value === null || value === undefined) return "";

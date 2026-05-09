@@ -6,7 +6,7 @@ import { assertReadAllowed, assertWriteAllowed, PolicyViolationError } from "./p
 
 describe("policy", () => {
   test("rejects paths outside the repo", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-policy-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-policy-"));
     try {
       expect(() => assertReadAllowed(repoRoot, "../outside.md")).toThrow(PolicyViolationError);
       expect(() => assertWriteAllowed(repoRoot, "/tmp/outside.md")).toThrow(PolicyViolationError);
@@ -16,7 +16,7 @@ describe("policy", () => {
   });
 
   test("rejects writes under wiki/raw", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-policy-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-policy-"));
     try {
       expect(() => assertWriteAllowed(repoRoot, "wiki/raw/granola/meeting.md")).toThrow(
         /Writes under raw\/ are forbidden/,
@@ -27,7 +27,7 @@ describe("policy", () => {
   });
 
   test("allows explicit raw reads but rejects implicit raw reads", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-policy-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-policy-"));
     try {
       expect(() => assertReadAllowed(repoRoot, "wiki/raw/granola/meeting.md")).toThrow(
         /requires includeRaw/,

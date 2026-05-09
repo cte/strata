@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getCortexPaths } from "@cortex/core";
+import { getStrataPaths } from "@strata/core";
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
@@ -23,7 +23,7 @@ export interface AuthStoreData {
 }
 
 export function getAuthStorePath(repoRoot?: string): string {
-  return path.join(getCortexPaths(repoRoot).runtimeDir, "auth.json");
+  return path.join(getStrataPaths(repoRoot).runtimeDir, "auth.json");
 }
 
 export async function getChatGptCredentials(

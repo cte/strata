@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionStore } from "@cortex/core";
+import { SessionStore } from "@strata/core";
 import { runAgentLoop } from "./agentLoop.js";
 import { compactSession, shouldAutoCompact } from "./compaction.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
@@ -28,10 +28,10 @@ class SequenceModelAdapter implements ModelAdapter {
 
 describe("compactSession", () => {
   test("replaces the session message log with a single user-role summary", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-compact-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-compact-"));
     try {
       const initial = new SequenceModelAdapter([
-        { content: "Cortex here.", finishReason: "stop", toolCalls: [] },
+        { content: "Strata here.", finishReason: "stop", toolCalls: [] },
       ]);
       const first = await runAgentLoop({
         question: "hi",
@@ -75,7 +75,7 @@ describe("compactSession", () => {
   });
 
   test("a second compaction uses the update prompt and merges", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-compact-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-compact-"));
     try {
       // First turn
       const m1 = new SequenceModelAdapter([{ content: "hi", finishReason: "stop", toolCalls: [] }]);
@@ -126,7 +126,7 @@ describe("compactSession", () => {
   });
 
   test("compacting twice with no new turns errors clearly", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-compact-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-compact-"));
     try {
       const m = new SequenceModelAdapter([{ content: "x", finishReason: "stop", toolCalls: [] }]);
       const session = await runAgentLoop({ question: "q", model: m, repoRoot });
@@ -154,7 +154,7 @@ describe("compactSession", () => {
   });
 
   test("a continuation after compaction sees the summary as prior context", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-compact-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-compact-"));
     try {
       const initial = new SequenceModelAdapter([
         { content: "Reply 1", finishReason: "stop", toolCalls: [] },

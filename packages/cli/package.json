@@ -1,17 +1,17 @@
 {
-  "name": "@cortex/cli",
+  "name": "@strata/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "cortex": "./src/index.ts"
+    "strata": "./src/index.ts"
   },
   "dependencies": {
-    "@cortex/agent": "workspace:*",
-    "@cortex/core": "workspace:*",
-    "@cortex/ingest": "workspace:*",
-    "@cortex/tools": "workspace:*",
-    "@cortex/tui": "workspace:*"
+    "@strata/agent": "workspace:*",
+    "@strata/core": "workspace:*",
+    "@strata/ingest": "workspace:*",
+    "@strata/tools": "workspace:*",
+    "@strata/tui": "workspace:*"
   },
   "scripts": {
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json"

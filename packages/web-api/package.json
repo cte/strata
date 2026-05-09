@@ -1,0 +1,29 @@
+{
+  "name": "@strata/web-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./notion-mcp": "./src/notionMcp.ts",
+    "./services": "./src/services.ts",
+    "./server": "./src/server.ts",
+    "./trpc": "./src/trpc.ts"
+  },
+  "dependencies": {
+    "@strata/core": "workspace:*",
+    "@strata/ingest": "workspace:*",
+    "@hono/trpc-server": "^0.4.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@trpc/server": "^11.17.0",
+    "hono": "^4.12.18",
+    "zod": "^4.4.3"
+  },
+  "scripts": {
+    "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@trpc/client": "^11.17.0"
+  }
+}

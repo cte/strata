@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { getCortexPaths } from "./paths.js";
-import { CortexStateError } from "./stateErrors.js";
+import { getStrataPaths } from "./paths.js";
+import { StrataStateError } from "./stateErrors.js";
 import type { JsonObject } from "./types.js";
 
 export interface TraceEntry extends JsonObject {
@@ -39,7 +39,7 @@ export async function readSessionTrace(
 }
 
 export function sessionTracePath(repoRoot: string, sessionId: string): string {
-  return path.join(getCortexPaths(repoRoot).traceDir, `${sessionId}.jsonl`);
+  return path.join(getStrataPaths(repoRoot).traceDir, `${sessionId}.jsonl`);
 }
 
 function trimToCompleteJsonlLines(text: string): string {
@@ -58,7 +58,7 @@ function parseTraceEntries(text: string, file: string): TraceEntry[] {
     }
     const parsed = JSON.parse(line) as Partial<TraceEntry>;
     if (!isTraceEntry(parsed)) {
-      throw new CortexStateError(
+      throw new StrataStateError(
         "trace_invalid",
         `Invalid trace entry in ${file} at line ${index + 1}`,
       );

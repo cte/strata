@@ -2,19 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionStore } from "@cortex/core";
-import { FakeTerminal, stripAnsi, TuiRuntime, visibleWidth } from "@cortex/tui";
-import { CortexApp } from "@cortex/tui/internal/app";
+import { SessionStore } from "@strata/core";
+import { FakeTerminal, stripAnsi, TuiRuntime, visibleWidth } from "@strata/tui";
+import { StrataApp } from "@strata/tui/internal/app";
 
 function pump(ms = 60): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function setupApp(width = 80, height = 20) {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-e2e-"));
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-e2e-"));
   const terminal = new FakeTerminal(width, height);
   const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-  const app = new CortexApp(
+  const app = new StrataApp(
     runtime,
     { repoRoot, provider: "openai-codex", model: "gpt-test" },
     { codexLoggedIn: false, apiKeyConfigured: false },

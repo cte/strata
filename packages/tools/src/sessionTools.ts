@@ -1,5 +1,5 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
-import { type SessionRecord, SessionStore } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
+import { type SessionRecord, SessionStore } from "@strata/core";
 import { optionalBoolean, optionalInteger, requiredNonEmptyString } from "./args.js";
 import { ToolRegistry } from "./registry.js";
 import type { ToolDefinition } from "./types.js";
@@ -31,7 +31,7 @@ export function createSessionTools(): ToolDefinition[] {
 
 const sessionsRecentTool: ToolDefinition<SessionsRecentArgs> = {
   name: "sessions.recent",
-  description: "List recent Cortex sessions for recall.",
+  description: "List recent Strata sessions for recall.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -61,7 +61,7 @@ const sessionsRecentTool: ToolDefinition<SessionsRecentArgs> = {
 
 const sessionsSearchTool: ToolDefinition<SessionsSearchArgs> = {
   name: "sessions.search",
-  description: "Search prior Cortex sessions by title, messages, and trace events.",
+  description: "Search prior Strata sessions by title, messages, and trace events.",
   mode: "read",
   inputSchema: {
     type: "object",

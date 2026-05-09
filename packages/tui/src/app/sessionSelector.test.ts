@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SessionRecord } from "@cortex/core";
+import type { SessionRecord } from "@strata/core";
 import { stripAnsi } from "../ansi.js";
 import { SessionSelector } from "./sessionSelector.js";
 

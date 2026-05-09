@@ -1,5 +1,5 @@
-import type { JsonObject, JsonValue, SessionStatus } from "@cortex/core";
-import type { ToolExecutionResult, ToolMetadata, ToolRegistry } from "@cortex/tools";
+import type { JsonObject, JsonValue, SessionStatus } from "@strata/core";
+import type { ToolExecutionResult, ToolMetadata, ToolRegistry } from "@strata/tools";
 
 export type AgentMessageRole = "system" | "user" | "assistant" | "tool";
 

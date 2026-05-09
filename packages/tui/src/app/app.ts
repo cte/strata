@@ -1,5 +1,5 @@
 import process from "node:process";
-import type { ThinkingLevel } from "@cortex/agent";
+import type { ThinkingLevel } from "@strata/agent";
 import {
   type AgentAttachment,
   type AgentRunEvent,
@@ -9,8 +9,8 @@ import {
   runAgentLoopEvents,
   shouldAutoCompact,
   THINKING_LEVELS,
-} from "@cortex/agent";
-import { getCortexPaths, listSkills, readSkill, SessionStore } from "@cortex/core";
+} from "@strata/agent";
+import { getStrataPaths, listSkills, readSkill, SessionStore } from "@strata/core";
 import { sanitizeTerminalText } from "../ansi.js";
 import { SlashCommandRegistry } from "../commands.js";
 import type { Component, Frame, RenderContext } from "../component.js";
@@ -53,14 +53,14 @@ import {
 import { Transcript } from "./transcript.js";
 import { resetTokenUsage } from "./usage.js";
 
-export interface CortexAppOptions {
+export interface StrataAppOptions {
   repoRoot: string;
   provider: ProviderName;
   model: string;
   reasoningEffort?: ThinkingLevel;
 }
 
-export class CortexApp implements Component {
+export class StrataApp implements Component {
   private readonly state: AppState;
   private readonly runtime: TuiRuntime;
   private readonly editor: Editor;
@@ -78,7 +78,7 @@ export class CortexApp implements Component {
 
   constructor(
     runtime: TuiRuntime,
-    options: CortexAppOptions,
+    options: StrataAppOptions,
     authStatus: Awaited<ReturnType<typeof loadAuthStatus>>,
   ) {
     this.runtime = runtime;
@@ -91,7 +91,7 @@ export class CortexApp implements Component {
     const fileMentions = new FileMentionProvider(this.repoRoot);
     const autocomplete = new CombinedAutocompleteProvider([this.registry, fileMentions]);
     this.editor = new Editor({
-      placeholder: "Ask Cortex about your wiki, or type /help",
+      placeholder: "Ask Strata about your wiki, or type /help",
       autocomplete,
       onSubmit: (text) => void this.onSubmit(text),
       onCancel: () => this.handleEditorEscape(),
@@ -290,7 +290,7 @@ export class CortexApp implements Component {
     });
     this.registry.register({
       name: "quit",
-      description: "exit cortex tui",
+      description: "exit strata tui",
       run: () => this.requestExit(),
     });
     this.registry.register({
@@ -479,7 +479,7 @@ export class CortexApp implements Component {
       name: "tools",
       description: "show registered tool names",
       run: async () => {
-        const { createDefaultToolRegistry } = await import("@cortex/tools");
+        const { createDefaultToolRegistry } = await import("@strata/tools");
         const tools = createDefaultToolRegistry().list();
         appendTranscript(this.state, {
           kind: "status",
@@ -490,7 +490,7 @@ export class CortexApp implements Component {
     });
   }
 
-  // Pi-style: each user-defined skill in `.cortex/skills/` is exposed as a
+  // Pi-style: each user-defined skill in `.strata/skills/` is exposed as a
   // `/skill:<name>` slash command. Invoking it reads the skill's SKILL.md and
   // sends its content as a user message. Args after the name are appended.
   private async registerSkillCommands(): Promise<void> {
@@ -815,7 +815,7 @@ export class CortexApp implements Component {
   private static readonly DOUBLE_ESCAPE_MS = 500;
 
   private handleEditorEscape(): void {
-    // Pi's first branch: streaming → abort the run. Cortex's equivalent is
+    // Pi's first branch: streaming → abort the run. Strata's equivalent is
     // an in-flight `currentRun`. Resetting `lastEscapeAt` here ensures the
     // user can't accidentally chain Esc-Esc-Esc into "abort + open picker"
     // — which is what made double-Esc look "screwed up" when a run was
@@ -832,7 +832,7 @@ export class CortexApp implements Component {
       return;
     }
     const now = Date.now();
-    if (now - this.lastEscapeAt < CortexApp.DOUBLE_ESCAPE_MS) {
+    if (now - this.lastEscapeAt < StrataApp.DOUBLE_ESCAPE_MS) {
       this.lastEscapeAt = 0;
       void this.openSessionPicker("resume");
       return;
@@ -862,7 +862,7 @@ export class CortexApp implements Component {
   }
 
   private persistPreferences(): void {
-    const runtimeDir = getCortexPaths(this.repoRoot).runtimeDir;
+    const runtimeDir = getStrataPaths(this.repoRoot).runtimeDir;
     void savePreferences(runtimeDir, {
       provider: this.state.provider,
       model: this.state.model,
@@ -1129,7 +1129,7 @@ export class CortexApp implements Component {
 
   private async loadEditorHistory(): Promise<void> {
     try {
-      const runtimeDir = getCortexPaths(this.repoRoot).runtimeDir;
+      const runtimeDir = getStrataPaths(this.repoRoot).runtimeDir;
       const history = await loadHistory(runtimeDir);
       if (history.length > 0) {
         // Replace in place so the editor's reference stays valid.
@@ -1142,7 +1142,7 @@ export class CortexApp implements Component {
 
   private async persistEditorHistory(prompt: string): Promise<void> {
     try {
-      const runtimeDir = getCortexPaths(this.repoRoot).runtimeDir;
+      const runtimeDir = getStrataPaths(this.repoRoot).runtimeDir;
       await appendHistory(runtimeDir, prompt);
     } catch {
       // History is best-effort; silently swallow.
@@ -1155,16 +1155,16 @@ function sanitizeDisplayText(value: string): string {
 }
 
 export async function buildAppOptions(repoRoot: string): Promise<{
-  options: CortexAppOptions;
+  options: StrataAppOptions;
   authStatus: Awaited<ReturnType<typeof loadAuthStatus>>;
 }> {
-  const runtimeDir = getCortexPaths(repoRoot).runtimeDir;
+  const runtimeDir = getStrataPaths(repoRoot).runtimeDir;
   const prefs = await loadPreferences(runtimeDir);
   const provider = parseProviderEnv() ?? prefs.provider ?? (await inferDefaultProvider());
   const model =
-    Bun.env.CORTEX_MODEL ?? Bun.env.OPENAI_MODEL ?? prefs.model ?? defaultModel(provider);
+    Bun.env.STRATA_MODEL ?? Bun.env.OPENAI_MODEL ?? prefs.model ?? defaultModel(provider);
   const authStatus = await loadAuthStatus();
-  const options: CortexAppOptions = { repoRoot, provider, model };
+  const options: StrataAppOptions = { repoRoot, provider, model };
   if (prefs.reasoningEffort !== undefined) {
     options.reasoningEffort = prefs.reasoningEffort;
   }
@@ -1172,7 +1172,7 @@ export async function buildAppOptions(repoRoot: string): Promise<{
 }
 
 function parseProviderEnv(): ProviderName | undefined {
-  const value = Bun.env.CORTEX_PROVIDER;
+  const value = Bun.env.STRATA_PROVIDER;
   if (value === undefined || value === "") {
     return undefined;
   }

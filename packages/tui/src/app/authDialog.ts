@@ -3,7 +3,7 @@ import {
   clearChatGptCredentials,
   loginChatGpt,
   setChatGptCredentials,
-} from "@cortex/agent";
+} from "@strata/agent";
 import { padToWidth, theme, truncateToWidth } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import type { InputEvent } from "../keys.js";

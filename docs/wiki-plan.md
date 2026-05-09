@@ -1,4 +1,4 @@
-# Cortex — Personal Work Wiki Build Plan
+# Strata — Personal Work Wiki Build Plan
 
 Current prerequisite: build the agentic harness before continuing deeper wiki automation. See [agent-harness-plan.md](./agent-harness-plan.md) for the detailed Bun/TypeScript implementation plan, especially the learning loops for trace persistence, memory, skills, session search, reflection, and curator passes.
 
@@ -56,7 +56,7 @@ Do not begin Phase 1 until at least decisions 1, 2, and 5 are settled. Decisions
 ## 4. Directory Structure
 
 ```text
-cortex/
+strata/
 ├── AGENTS.md                   # Agent instructions and schema — CLAUDE.md symlinks here
 ├── docs/                       # Roadmap, status, and implementation plans
 ├── packages/                   # Bun workspace packages
@@ -100,7 +100,7 @@ Create the directory structure in §4. Materialize:
 - `wiki/priorities.md` — start as a placeholder; the user will populate or dictate.
 - `wiki/me.md` — populated from the Phase 0 conversation.
 - `wiki/index.md` — empty catalog with section headers (People, Projects, Teams, Meetings, Decisions, Threads).
-- `wiki/log.md` — empty, with header `# Cortex — Activity Log`.
+- `wiki/log.md` — empty, with header `# Strata — Activity Log`.
 - `wiki/actions/mine.md`, `wiki/actions/theirs.md` — empty checklists.
 - `.gitignore` — exclude `wiki/raw/.cache/`, `.env`, anything secret.
 
@@ -126,16 +126,19 @@ If no API access, document the Mac-side setup in [granola-sync-setup.md](./grano
 - `git push`es into the wiki repo, or rsyncs into the synced folder.
 
 #### 2c. Slack
-Use the official Slack MCP server (or a community one with read access). Configure in the agent's MCP config:
-- Read access to the channels in scope.
-- A `tools/pull_slack.py` script that, given filter rules from `me.md`, pulls matching threads and writes them to `raw/slack/`.
-- Each thread written as a single file with all messages, threaded, including reactions.
+Use the first-party Bun/TypeScript Slack connector in `packages/ingest`:
+- `strata ingest slack thread` snapshots a selected thread into `raw/slack/`.
+- `strata ingest slack sync` discovers in-scope conversations, pulls message history, expands threads, writes raw immutable snapshots, and stores a checkpoint in `.strata/connectors/slack/checkpoint.json`.
+- `strata ingest slack listen` uses Socket Mode to tail Slack message events and materialize the affected thread.
+- Each snapshot is written as a single Markdown file with all messages in the captured thread. Later raw-to-wiki processing decides whether the snapshot is material.
+
+MCP can still be useful for ad hoc agent querying, but it should not be the source ingestion path unless it produces stable source IDs, durable content, retries, and traceable raw artifacts.
 
 #### 2d. Notion
-Use the official Notion API with a workspace integration token. `packages/ingest/src/notion.ts` is the shared Bun/TypeScript connector; `cortex ingest notion --page-id <id-or-url>` snapshots a page into `raw/notion/` and records an ingest trace. Keep recent-edits and database/query pulls as later extensions after page snapshots are stable.
+Use the official Notion API with a workspace integration token for deterministic raw snapshots. `packages/ingest/src/notion.ts` is the shared Bun/TypeScript connector; `strata ingest notion --page-id <id-or-url>` snapshots a page into `raw/notion/` and records an ingest trace. The web control plane also has an experimental hosted Notion MCP OAuth path for user-friendly auth and agent-oriented tool discovery, but MCP should not replace raw snapshot ingestion until it proves equally stable for source IDs, durable content, retries, and traces. Keep recent-edits and database/query pulls as later extensions after page snapshots are stable.
 
 #### 2e. Connector setup control plane
-After connector contracts and at least one raw-to-wiki ingest path are stable, add a local web UI for configuring sources. The web app should support connector setup/status, token/OAuth guidance, page/channel selection, dry-runs, last-pull history, scheduling, and proposal review. It must not own connector logic; it should call the same shared connector APIs as `cortex ingest`.
+After connector contracts and at least one raw-to-wiki ingest path are stable, add a local web UI for configuring sources. The web app should support connector setup/status, token/OAuth guidance, page/channel selection, dry-runs, last-pull history, scheduling, and proposal review. It must not own connector logic; it should call the same shared connector APIs as `strata ingest`.
 
 ### Phase 3 — Ingest workflows
 
@@ -284,7 +287,7 @@ Most matched threads will produce **no wiki update**. The agent reads, decides n
 - Never delete a decision page. Mark superseded; link forward.
 - Never auto-ingest Slack threads that don't match the filter rules without asking the user first.
 - Never silently overwrite a wiki page when ingesting — always diff-and-merge. If a fact contradicts an existing claim, surface the contradiction in the page (and in `log.md`) rather than overwriting.
-- Never write secrets, tokens, or PII into the wiki. They go in `.env`, gitignored.
+- Never write secrets, tokens, or sensitive PII into the wiki. Secrets go in `.env` or a gitignored `.strata/secrets/` record.
 - Never skip the `index.md` and `log.md` updates. They are the navigation backbone.
 
 ---
@@ -292,7 +295,7 @@ Most matched threads will produce **no wiki update**. The agent reads, decides n
 ## 10. AGENTS.md Wiki Operating Excerpt
 
 ````markdown
-# Cortex — Schema and Operating Manual
+# Strata — Schema and Operating Manual
 
 This wiki exists so the user never loses track of priorities and can quickly recall past work, decisions, and commitments.
 
@@ -336,7 +339,7 @@ All pages have YAML frontmatter (see project plan §6).
 Same shape. But: many threads add nothing — that's correct, skip them. Surface only material content (decisions, commitments, new threads, factual updates).
 
 ### Ingest — Notion doc
-First snapshot the page into `raw/notion/` with `cortex ingest notion --page-id <id-or-url>`. Then apply the same raw-to-wiki shape as Granola: link from relevant project pages, extract decisions and commitments, update actions/threads, update `index.md`, and append `log.md`. Notion is already curated, so broad rewrites should usually be staged as proposals rather than applied silently.
+First snapshot the page into `raw/notion/` with `strata ingest notion --page-id <id-or-url>`. Then apply the same raw-to-wiki shape as Granola: link from relevant project pages, extract decisions and commitments, update actions/threads, update `index.md`, and append `log.md`. Notion is already curated, so broad rewrites should usually be staged as proposals rather than applied silently.
 
 ### Query
 1. Read `priorities.md`, `me.md`, `index.md`.

@@ -5,19 +5,19 @@ import path from "node:path";
 import { stripAnsi } from "../ansi.js";
 import { TuiRuntime } from "../runtime.js";
 import { FakeTerminal } from "../terminal.js";
-import { CortexApp } from "./app.js";
+import { StrataApp } from "./app.js";
 
 function pump(ms = 30): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe("CortexApp", () => {
+describe("StrataApp", () => {
   test("renders transcript hint, editor, and footer", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {
       const terminal = new FakeTerminal(60, 12);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-      const app = new CortexApp(
+      const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
         { codexLoggedIn: false, apiKeyConfigured: false },
@@ -30,7 +30,7 @@ describe("CortexApp", () => {
       expect(output).toContain("─".repeat(60));
       expect(output).toContain("gpt-test");
       // Pi-style startup header: logo, key-hint summary, onboarding pointer.
-      expect(output).toContain("cortex v");
+      expect(output).toContain("strata v");
       expect(output).toContain("escape interrupt");
       expect(output).toContain("ctrl+c/ctrl+d clear/exit");
       expect(output).toContain("/ commands");
@@ -46,11 +46,11 @@ describe("CortexApp", () => {
   });
 
   test("/clear empties the transcript", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {
       const terminal = new FakeTerminal(60, 12);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-      const app = new CortexApp(
+      const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
         { codexLoggedIn: false, apiKeyConfigured: false },
@@ -70,11 +70,11 @@ describe("CortexApp", () => {
   });
 
   test("/help prints inline into the transcript so it inherits terminal scrollback", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {
       const terminal = new FakeTerminal(80, 24);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-      const app = new CortexApp(
+      const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
         { codexLoggedIn: false, apiKeyConfigured: false },
@@ -101,11 +101,11 @@ describe("CortexApp", () => {
   });
 
   test("escape during an active run aborts instead of opening the session picker", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {
       const terminal = new FakeTerminal(80, 24);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-      const app = new CortexApp(
+      const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
         { codexLoggedIn: false, apiKeyConfigured: false },
@@ -143,11 +143,11 @@ describe("CortexApp", () => {
   });
 
   test("keeps the status loader animating while an agent run is active", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {
       const terminal = new FakeTerminal(60, 12);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-      const app = new CortexApp(
+      const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
         { codexLoggedIn: false, apiKeyConfigured: false },
@@ -175,11 +175,11 @@ describe("CortexApp", () => {
   });
 
   test("renders token and context metrics in the footer", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {
       const terminal = new FakeTerminal(80, 12);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-      const app = new CortexApp(
+      const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-5.5" },
         { codexLoggedIn: false, apiKeyConfigured: false },
@@ -229,11 +229,11 @@ describe("CortexApp", () => {
   });
 
   test("/quit shuts down the app", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tui-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {
       const terminal = new FakeTerminal(60, 12);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
-      const app = new CortexApp(
+      const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
         { codexLoggedIn: false, apiKeyConfigured: false },

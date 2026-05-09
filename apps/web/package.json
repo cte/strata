@@ -1,0 +1,39 @@
+{
+  "name": "@strata/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",
+    "dev": "bun --bun node_modules/.bin/vite",
+    "build": "bun --bun node_modules/.bin/vite build",
+    "preview": "bun --bun node_modules/.bin/vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.4.1",
+    "@strata/web-api": "workspace:*",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@tailwindcss/vite": "^4.0.0",
+    "@tanstack/react-router": "^1.0.0",
+    "@trpc/client": "^11.17.0",
+    "@trpc/server": "^11.17.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.0",
+    "lucide-react": "^1.14.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.0.0",
+    "tailwindcss": "^4.0.0",
+    "vite": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tw-animate-css": "^1.4.0"
+  }
+}

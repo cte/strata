@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
+import type { JsonObject, JsonValue } from "@strata/core";
 
 export interface TokenUsageTotals {
   input: number;
@@ -76,7 +76,7 @@ export function formatTokens(count: number): string {
 
 export function contextWindowForModel(provider: string, model: string): number | undefined {
   const override = parsePositiveInteger(
-    Bun.env.CORTEX_CONTEXT_WINDOW ?? Bun.env.CORTEX_MODEL_CONTEXT_WINDOW,
+    Bun.env.STRATA_CONTEXT_WINDOW ?? Bun.env.STRATA_MODEL_CONTEXT_WINDOW,
   );
   if (override !== undefined) {
     return override;

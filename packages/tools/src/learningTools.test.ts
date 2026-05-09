@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionStore } from "@cortex/core";
+import { SessionStore } from "@strata/core";
 import { createDefaultToolRegistry } from "./index.js";
 
 describe("learning-state tools", () => {
   test("manages runtime todos with read and learning profiles", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-learning-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-learning-tools-"));
     try {
       const readOnly = createDefaultToolRegistry({ profile: "read-only" });
       const addDenied = await readOnly.safeExecute(
@@ -63,7 +63,7 @@ describe("learning-state tools", () => {
   });
 
   test("reads, writes, and appends bounded memory documents", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-learning-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-learning-tools-"));
     try {
       const registry = createDefaultToolRegistry({ profile: "learning" });
 
@@ -92,7 +92,7 @@ describe("learning-state tools", () => {
         { repoRoot },
       );
       expect(
-        await readFile(path.join(repoRoot, ".cortex", "memory", "OPERATIONS.md"), "utf8"),
+        await readFile(path.join(repoRoot, ".strata", "memory", "OPERATIONS.md"), "utf8"),
       ).toBe("# Operations Memory\n\n## Repo\n\n- Use Bun workspace commands.\n");
 
       const tooLarge = await registry.safeExecute(
@@ -110,7 +110,7 @@ describe("learning-state tools", () => {
   });
 
   test("exposes session recall tools", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-learning-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-learning-tools-"));
     try {
       const store = await SessionStore.open(repoRoot);
       let currentSessionId = "";
@@ -161,9 +161,9 @@ describe("learning-state tools", () => {
   });
 
   test("lists and reads procedural skills", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-learning-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-learning-tools-"));
     try {
-      const skillDir = path.join(repoRoot, ".cortex", "skills", "query-wiki");
+      const skillDir = path.join(repoRoot, ".strata", "skills", "query-wiki");
       await mkdir(skillDir, { recursive: true });
       await writeFile(
         path.join(skillDir, "SKILL.md"),

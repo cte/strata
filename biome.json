@@ -13,11 +13,16 @@
       "tsconfig.json",
       "src/**/*.ts",
       "scripts/**/*.ts",
+      "apps/**/*.ts",
+      "apps/**/*.tsx",
+      "apps/**/package.json",
+      "apps/**/tsconfig*.json",
       "packages/**/*.ts",
       "packages/**/package.json",
       "packages/**/tsconfig.json",
       "!dist",
       "!node_modules",
+      "!.strata",
       "!.cortex",
       "!raw"
     ]

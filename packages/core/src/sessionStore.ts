@@ -2,9 +2,8 @@ import { Database } from "bun:sqlite";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createSessionId, nowIso, safeJsonStringify } from "./events.js";
-import { getCortexPaths } from "./paths.js";
+import { getStrataPaths } from "./paths.js";
 import type {
-  CortexPaths,
   CreateSessionInput,
   JsonObject,
   JsonValue,
@@ -13,6 +12,7 @@ import type {
   MessageRole,
   SessionRecord,
   SessionStatus,
+  StrataPaths,
 } from "./types.js";
 
 type SessionRow = {
@@ -27,10 +27,10 @@ type SessionRow = {
 };
 
 export class SessionStore {
-  readonly paths: CortexPaths;
+  readonly paths: StrataPaths;
   readonly db: Database;
 
-  constructor(paths: CortexPaths = getCortexPaths()) {
+  constructor(paths: StrataPaths = getStrataPaths()) {
     this.paths = paths;
     this.db = new Database(paths.stateDbPath, { create: true });
     this.db.run("PRAGMA journal_mode = WAL");
@@ -39,7 +39,7 @@ export class SessionStore {
   }
 
   static async open(repoRoot?: string): Promise<SessionStore> {
-    const paths = getCortexPaths(repoRoot);
+    const paths = getStrataPaths(repoRoot);
     await ensureRuntimeDirs(paths);
     return new SessionStore(paths);
   }
@@ -309,7 +309,7 @@ export class SessionStore {
   }
 }
 
-export async function ensureRuntimeDirs(paths: CortexPaths = getCortexPaths()): Promise<void> {
+export async function ensureRuntimeDirs(paths: StrataPaths = getStrataPaths()): Promise<void> {
   await mkdir(paths.traceDir, { recursive: true });
   await mkdir(paths.reflectionsDir, { recursive: true });
   await mkdir(paths.curatorReportsDir, { recursive: true });

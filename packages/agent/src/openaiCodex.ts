@@ -1,5 +1,5 @@
-import type { JsonObject, JsonValue } from "@cortex/core";
-import type { ToolMetadata } from "@cortex/tools";
+import type { JsonObject, JsonValue } from "@strata/core";
+import type { ToolMetadata } from "@strata/tools";
 import type { ChatGptCredentials } from "./authStore.js";
 import { ModelAdapterError } from "./model.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
@@ -51,11 +51,11 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
       headers: {
         authorization: `Bearer ${this.credentials.accessToken}`,
         "chatgpt-account-id": this.credentials.accountId,
-        originator: "cortex",
+        originator: "strata",
         "openai-beta": "responses=experimental",
         accept: "text/event-stream",
         "content-type": "application/json",
-        "user-agent": "cortex",
+        "user-agent": "strata",
       },
       body: JSON.stringify(body),
     };

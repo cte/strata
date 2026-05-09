@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { addTodo, writeMemoryDocument } from "@cortex/core";
+import { addTodo, writeMemoryDocument } from "@strata/core";
 import { buildRunContext } from "./runContext.js";
 
 describe("buildRunContext", () => {
   test("injects memory, active todos, and skill index", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-run-context-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-run-context-"));
     try {
       await writeMemoryDocument(
         repoRoot,
@@ -19,7 +19,7 @@ describe("buildRunContext", () => {
         priority: "high",
         tags: ["roadmap"],
       });
-      const skillDir = path.join(repoRoot, ".cortex", "skills", "query-wiki");
+      const skillDir = path.join(repoRoot, ".strata", "skills", "query-wiki");
       await mkdir(skillDir, { recursive: true });
       await writeFile(
         path.join(skillDir, "SKILL.md"),
@@ -43,7 +43,7 @@ describe("buildRunContext", () => {
       });
 
       expect(context.messages).toHaveLength(3);
-      expect(context.messages[0]?.content).toContain("You are Cortex");
+      expect(context.messages[0]?.content).toContain("You are Strata");
       expect(context.messages[1]?.content).toContain("Prefers concise engineering updates");
       expect(context.messages[1]?.content).toContain("Finish learning-state tools");
       expect(context.messages[1]?.content).toContain("query-wiki");

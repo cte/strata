@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Documentation"
+  short_description: "Keep roadmap and status docs aligned"
+  default_prompt: "Use $maintain-documentation to update Strata roadmap, status, and plan docs after a load-bearing change."

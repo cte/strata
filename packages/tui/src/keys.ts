@@ -3,7 +3,7 @@
  * MIT-licensed. Supports legacy terminal sequences and the Kitty keyboard
  * protocol. See https://sw.kovidgoyal.net/kitty/keyboard-protocol/.
  *
- * Cortex preserves a narrow `KeyId` union covering only the keys cortex's
+ * Strata preserves a narrow `KeyId` union covering only the keys strata's
  * components actually handle; pi's `parseKey` returns arbitrary key id
  * strings, which we filter into the union via `parseRecognizedKey`.
  */
@@ -76,7 +76,7 @@ const RECOGNIZED_KEY_IDS = new Set<string>([
   "ctrl+w",
 ]);
 
-// Pi uses "pageUp"/"pageDown"; cortex's KeyId uses "pageup"/"pagedown".
+// Pi uses "pageUp"/"pageDown"; strata's KeyId uses "pageup"/"pagedown".
 function normalizeRecognizedKey(id: string): KeyId | undefined {
   if (id === "pageUp") return "pageup";
   if (id === "pageDown") return "pagedown";
@@ -540,8 +540,8 @@ export function isKeyRelease(data: string): boolean {
 export function sequenceToInputEvent(sequence: string): InputEvent | undefined {
   if (sequence === "") return undefined;
 
-  // Try to map this sequence to a key cortex's components know about. Pi's
-  // parseKey may return identifiers cortex doesn't model (e.g. "a", "shift+B",
+  // Try to map this sequence to a key strata's components know about. Pi's
+  // parseKey may return identifiers strata doesn't model (e.g. "a", "shift+B",
   // "ctrl+shift+p") — those should fall through to the printable/text path.
   const keyName = parseKey(sequence);
   if (keyName !== undefined) {

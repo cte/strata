@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getCortexPaths } from "./paths.js";
-import { CortexStateError } from "./stateErrors.js";
+import { getStrataPaths } from "./paths.js";
+import { StrataStateError } from "./stateErrors.js";
 import type { JsonObject } from "./types.js";
 
 export type TodoStatus = "open" | "in_progress" | "blocked" | "done" | "cancelled";
@@ -48,7 +48,7 @@ export async function readTodoState(repoRoot: string): Promise<TodoState> {
   try {
     const parsed = JSON.parse(await readFile(file, "utf8")) as Partial<TodoState>;
     if (parsed.version !== 1 || !Array.isArray(parsed.items)) {
-      throw new CortexStateError("todo_state_invalid", `Invalid todo state file: ${file}`);
+      throw new StrataStateError("todo_state_invalid", `Invalid todo state file: ${file}`);
     }
     return { version: 1, items: parsed.items as TodoItem[] };
   } catch (error: unknown) {
@@ -100,7 +100,7 @@ export async function updateTodo(
   const state = await readTodoState(repoRoot);
   const item = state.items.find((candidate) => candidate.id === id);
   if (item === undefined) {
-    throw new CortexStateError("todo_not_found", `Todo not found: ${id}`);
+    throw new StrataStateError("todo_not_found", `Todo not found: ${id}`);
   }
 
   if (input.title !== undefined) {
@@ -130,18 +130,18 @@ export async function removeTodo(repoRoot: string, id: string): Promise<TodoItem
   const state = await readTodoState(repoRoot);
   const index = state.items.findIndex((candidate) => candidate.id === id);
   if (index === -1) {
-    throw new CortexStateError("todo_not_found", `Todo not found: ${id}`);
+    throw new StrataStateError("todo_not_found", `Todo not found: ${id}`);
   }
   const [removed] = state.items.splice(index, 1);
   if (removed === undefined) {
-    throw new CortexStateError("todo_not_found", `Todo not found: ${id}`);
+    throw new StrataStateError("todo_not_found", `Todo not found: ${id}`);
   }
   await writeTodoState(repoRoot, state);
   return removed;
 }
 
 export function todoStatePath(repoRoot: string): string {
-  return path.join(getCortexPaths(repoRoot).runtimeDir, TODO_FILE);
+  return path.join(getStrataPaths(repoRoot).runtimeDir, TODO_FILE);
 }
 
 function createTodoId(): string {

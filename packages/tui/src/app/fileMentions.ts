@@ -9,7 +9,7 @@ const CACHE_TTL_MS = 5_000;
  * Pi-aligned `@` mention provider. Suggests files anywhere under the repo
  * root when the user types `@<query>` in the editor.
  *
- * Pi uses `fd` to enumerate files; cortex uses `rg --files` (already a
+ * Pi uses `fd` to enumerate files; strata uses `rg --files` (already a
  * required dependency for `fs.grep`) which has identical semantics for our
  * purposes — gitignore-aware, hidden-files included, fast on large repos.
  *

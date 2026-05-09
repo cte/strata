@@ -5,7 +5,7 @@ import path from "node:path";
 import { FileMentionProvider } from "./fileMentions.js";
 
 async function makeRepo(layout: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "cortex-mentions-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "strata-mentions-"));
   for (const [relativePath, content] of Object.entries(layout)) {
     const full = path.join(root, relativePath);
     await mkdir(path.dirname(full), { recursive: true });

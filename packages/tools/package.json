@@ -1,5 +1,5 @@
 {
-  "name": "@cortex/tools",
+  "name": "@strata/tools",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,7 +17,7 @@
     "./types": "./src/types.ts"
   },
   "dependencies": {
-    "@cortex/core": "workspace:*"
+    "@strata/core": "workspace:*"
   },
   "scripts": {
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionStore } from "@cortex/core";
+import { SessionStore } from "@strata/core";
 import { listMaintenanceJobs, runMaintenanceJob } from "./maintenance.js";
 
 describe("maintenance jobs", () => {
@@ -17,7 +17,7 @@ describe("maintenance jobs", () => {
   });
 
   test("runs index refresh as an auditable maintenance session", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-maintenance-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-maintenance-"));
     try {
       await mkdir(path.join(repoRoot, "wiki", "projects"), { recursive: true });
       await writeFile(
@@ -37,7 +37,7 @@ describe("maintenance jobs", () => {
       expect(result.job).toBe("index.refresh");
       expect(result.findings).toHaveLength(1);
       expect(result.proposals).toHaveLength(1);
-      expect(result.reportPath).toContain(".cortex/reports/maintenance/");
+      expect(result.reportPath).toContain(".strata/reports/maintenance/");
 
       const report = await readFile(path.join(repoRoot, result.reportPath), "utf8");
       expect(report).toContain("projects/alpha.md");
@@ -56,7 +56,7 @@ describe("maintenance jobs", () => {
   });
 
   test("wiki lint flags stale and structurally weak wiki content", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-maintenance-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-maintenance-"));
     try {
       await mkdir(path.join(repoRoot, "wiki", "threads"), { recursive: true });
       await writeFile(path.join(repoRoot, "wiki", "index.md"), "# Index\n", "utf8");

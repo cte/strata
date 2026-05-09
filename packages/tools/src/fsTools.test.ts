@@ -7,7 +7,7 @@ import type { ToolFileChange } from "./types.js";
 
 describe("filesystem tools", () => {
   test("lists, reads, finds, and greps repo files", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-tools-"));
     try {
       await mkdir(path.join(repoRoot, "wiki", "projects"), { recursive: true });
       await mkdir(path.join(repoRoot, "wiki", "raw", "granola"), { recursive: true });
@@ -72,7 +72,7 @@ describe("filesystem tools", () => {
   });
 
   test("fs.list treats empty/whitespace path as the repo root", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       await mkdir(path.join(repoRoot, "wiki"), { recursive: true });
       await writeFile(path.join(repoRoot, "wiki", "index.md"), "# Index\n", "utf8");
@@ -94,7 +94,7 @@ describe("filesystem tools", () => {
   });
 
   test("fs.read supports offset/limit line slices", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
       await writeFile(path.join(repoRoot, "log.txt"), `${lines.join("\n")}\n`, "utf8");
@@ -116,7 +116,7 @@ describe("filesystem tools", () => {
   });
 
   test("fs.grep supports regex, ignoreCase, and context lines", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       await mkdir(path.join(repoRoot, "src"), { recursive: true });
       await writeFile(
@@ -168,7 +168,7 @@ describe("filesystem tools", () => {
   });
 
   test("fs.edit accepts a multi-edit array applied against the original file", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       await writeFile(
         path.join(repoRoot, "doc.md"),
@@ -199,7 +199,7 @@ describe("filesystem tools", () => {
   });
 
   test("fs.edit rejects overlapping edits", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       await writeFile(path.join(repoRoot, "doc.md"), "abcdefghij\n", "utf8");
       const registry = createDefaultToolRegistry();
@@ -226,7 +226,7 @@ describe("filesystem tools", () => {
   });
 
   test("fs.write defaults overwrite/createDirs to true", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
       const registry = createDefaultToolRegistry();
       const context = { repoRoot };
@@ -245,7 +245,7 @@ describe("filesystem tools", () => {
   });
 
   test("requires explicit raw-source reads and searches", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-tools-"));
     try {
       await mkdir(path.join(repoRoot, "wiki", "raw"), { recursive: true });
       await writeFile(path.join(repoRoot, "wiki", "raw", "source.md"), "Raw needle.\n", "utf8");
@@ -287,11 +287,13 @@ describe("filesystem tools", () => {
   });
 
   test("blocks escapes, runtime dirs, binary files, and symlink reads", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-tools-"));
-    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-outside-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-tools-"));
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-outside-"));
     try {
+      await mkdir(path.join(repoRoot, ".strata"), { recursive: true });
       await mkdir(path.join(repoRoot, ".cortex"), { recursive: true });
-      await writeFile(path.join(repoRoot, ".cortex", "secret.txt"), "secret\n", "utf8");
+      await writeFile(path.join(repoRoot, ".strata", "secret.txt"), "secret\n", "utf8");
+      await writeFile(path.join(repoRoot, ".cortex", "legacy-secret.txt"), "secret\n", "utf8");
       await writeFile(path.join(repoRoot, "binary.dat"), Buffer.from([0, 1, 2, 3]));
       await writeFile(path.join(outsideRoot, "outside.txt"), "outside\n", "utf8");
       await symlink(path.join(outsideRoot, "outside.txt"), path.join(repoRoot, "link.txt"));
@@ -302,7 +304,8 @@ describe("filesystem tools", () => {
 
       for (const [requestedPath, code] of [
         ["../outside.txt", "outside_repo"],
-        [".cortex/secret.txt", "blocked_path_segment"],
+        [".strata/secret.txt", "blocked_path_segment"],
+        [".cortex/legacy-secret.txt", "blocked_path_segment"],
         ["binary.dat", "binary_file"],
         ["link.txt", "symlink_not_followed"],
         ["linkdir/outside.txt", "symlink_not_followed"],
@@ -320,7 +323,7 @@ describe("filesystem tools", () => {
   });
 
   test("creates and overwrites text files with file-change records", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-tools-"));
     try {
       const changes: ToolFileChange[] = [];
       const registry = createDefaultToolRegistry({ profile: "maintenance" });
@@ -382,7 +385,7 @@ describe("filesystem tools", () => {
   });
 
   test("edits text files only when the match is unambiguous", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-tools-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-tools-"));
     try {
       await mkdir(path.join(repoRoot, "notes"), { recursive: true });
       await writeFile(path.join(repoRoot, "notes", "today.md"), "alpha\nbeta\nbeta\n", "utf8");
@@ -437,8 +440,8 @@ describe("filesystem tools", () => {
   });
 
   test("blocks writes under raw, runtime dirs, and symlink paths", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-tools-"));
-    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "cortex-fs-outside-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-tools-"));
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "strata-fs-outside-"));
     try {
       await mkdir(path.join(repoRoot, "wiki", "raw"), { recursive: true });
       await symlink(outsideRoot, path.join(repoRoot, "linkdir"));
@@ -448,7 +451,8 @@ describe("filesystem tools", () => {
 
       for (const [requestedPath, code] of [
         ["wiki/raw/source.md", "raw_write_forbidden"],
-        [".cortex/secret.txt", "blocked_path_segment"],
+        [".strata/secret.txt", "blocked_path_segment"],
+        [".cortex/legacy-secret.txt", "blocked_path_segment"],
         ["linkdir/outside.txt", "symlink_not_followed"],
       ] as const) {
         const result = await registry.safeExecute(

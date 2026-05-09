@@ -1,4 +1,4 @@
-import { getCortexPaths, type MessageRecord, SessionStore } from "@cortex/core";
+import { getStrataPaths, type MessageRecord, SessionStore } from "@strata/core";
 import type { ModelAdapter } from "./types.js";
 
 // Prompts ported verbatim from pi-mono (`coding-agent/src/core/compaction/{utils,compaction}.ts`).
@@ -111,7 +111,7 @@ export interface CompactSessionResult {
 export async function compactSession(
   options: CompactSessionOptions,
 ): Promise<CompactSessionResult> {
-  const repoRoot = getCortexPaths(options.repoRoot).repoRoot;
+  const repoRoot = getStrataPaths(options.repoRoot).repoRoot;
   const store = await SessionStore.open(repoRoot);
   try {
     const allMessages = store

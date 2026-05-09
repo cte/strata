@@ -10,7 +10,7 @@ import { platform } from "node:os";
  *      non-remote session.
  *   2. On SSH/Mosh sessions, *also* emit OSC 52 so the terminal forwards the
  *      copy to the user's actual local clipboard. This is the only path that
- *      works when cortex is running on a remote machine.
+ *      works when strata is running on a remote machine.
  *
  * Throws if no path succeeds.
  */

@@ -1,5 +1,5 @@
 {
-  "name": "@cortex/tui",
+  "name": "@strata/tui",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,9 +9,9 @@
     "./internal/app": "./src/app/app.ts"
   },
   "dependencies": {
-    "@cortex/agent": "workspace:*",
-    "@cortex/core": "workspace:*",
-    "@cortex/tools": "workspace:*",
+    "@strata/agent": "workspace:*",
+    "@strata/core": "workspace:*",
+    "@strata/tools": "workspace:*",
     "cli-highlight": "^2.1.11",
     "marked": "^18.0.3"
   },

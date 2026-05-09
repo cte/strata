@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getCortexPaths } from "./paths.js";
-import { CortexStateError } from "./stateErrors.js";
+import { getStrataPaths } from "./paths.js";
+import { StrataStateError } from "./stateErrors.js";
 import type { JsonObject } from "./types.js";
 
 export type MemoryTarget = "user" | "operations";
@@ -76,7 +76,7 @@ export async function writeMemoryDocument(
   const file = memoryDocumentPath(repoRoot, target);
   const normalized = ensureTrailingNewline(content);
   if (normalized.length > maxChars) {
-    throw new CortexStateError(
+    throw new StrataStateError(
       "memory_too_large",
       `Memory content exceeds maxChars (${normalized.length} > ${maxChars})`,
     );
@@ -97,7 +97,7 @@ export async function appendMemoryEntry(
   const initial = current.exists ? current.content : `# ${MEMORY_TITLES[target]}\n`;
   const next = `${initial.trimEnd()}${formatMemoryEntry(entry, heading)}`;
   if (next.length > maxChars) {
-    throw new CortexStateError(
+    throw new StrataStateError(
       "memory_too_large",
       `Memory content exceeds maxChars (${next.length} > ${maxChars})`,
     );
@@ -108,9 +108,9 @@ export async function appendMemoryEntry(
 export function memoryDocumentPath(repoRoot: string, target: MemoryTarget): string {
   const filename = MEMORY_FILES[target];
   if (filename === undefined) {
-    throw new CortexStateError("invalid_memory_target", `Invalid memory target: ${target}`);
+    throw new StrataStateError("invalid_memory_target", `Invalid memory target: ${target}`);
   }
-  return path.join(getCortexPaths(repoRoot).memoryDir, filename);
+  return path.join(getStrataPaths(repoRoot).memoryDir, filename);
 }
 
 function formatMemoryEntry(entry: string, heading: string | undefined): string {

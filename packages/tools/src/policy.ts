@@ -14,7 +14,7 @@ export interface ResolveRepoPathOptions {
   allowRawRead?: boolean;
 }
 
-const BLOCKED_PATH_SEGMENTS = new Set([".git", ".cortex", "node_modules", "dist"]);
+const BLOCKED_PATH_SEGMENTS = new Set([".git", ".strata", ".cortex", "node_modules", "dist"]);
 
 export class PolicyViolationError extends Error {
   readonly code: string;

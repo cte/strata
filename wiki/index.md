@@ -3,7 +3,7 @@ type: index
 last_updated: null
 ---
 
-# Cortex Index
+# Strata Index
 
 ## People
 

@@ -1,15 +1,15 @@
-# Cortex Agent Harness Plan
+# Strata Agent Harness Plan
 
 Status: Phase 2 implementation complete.
 
-This plan supersedes immediate work on the raw-source wiki automation. The next major objective is to build a small Bun/TypeScript agentic harness that can eventually maintain and query the Cortex wiki. Hermes Agent is the reference architecture, but Cortex should copy the loop patterns, not the platform scope.
+This plan supersedes immediate work on the raw-source wiki automation. The next major objective is to build a small Bun/TypeScript agentic harness that can eventually maintain and query the Strata wiki. Hermes Agent is the reference architecture, but Strata should copy the loop patterns, not the platform scope.
 
 ## 1. Objective
 
 Build a local agent harness that can:
 
 1. Run a bounded tool-calling loop against a model.
-2. Read, search, update, and lint the Cortex wiki through explicit tools.
+2. Read, search, update, and lint the Strata wiki through explicit tools.
 3. Persist every run as a trace so future runs can recall prior work.
 4. Learn from experience by maintaining user memory, operational memory, reusable skills, and schema proposals.
 5. Keep raw source material immutable and keep high-risk changes reviewable.
@@ -58,7 +58,7 @@ Hermes mechanisms to defer:
 
 ## 5. Proposed Directory Layout
 
-Project source uses a Bun workspace monorepo. Package boundaries are intentional: shared runtime primitives live in `@cortex/core`, the command surface lives in `@cortex/cli`, and later agent/tool/learning packages can be added without turning the repo into one large import graph.
+Project source uses a Bun workspace monorepo. Package boundaries are intentional: shared runtime primitives live in `@strata/core`, the command surface lives in `@strata/cli`, and later agent/tool/learning packages can be added without turning the repo into one large import graph.
 
 ```text
 packages/
@@ -119,7 +119,7 @@ apps/
 Harness runtime state:
 
 ```text
-.cortex/
+.strata/
   state.sqlite
   traces/
     <session-id>.jsonl
@@ -161,7 +161,7 @@ wiki/
   meta/
 ```
 
-The `.cortex/` directory stores agent runtime state. The wiki stores user-facing knowledge. This separation prevents operational learning artifacts from polluting the work wiki while still allowing approved learning to update `AGENTS.md`, `me.md`, and wiki pages.
+The `.strata/` directory stores agent runtime state. The wiki stores user-facing knowledge. This separation prevents operational learning artifacts from polluting the work wiki while still allowing approved learning to update `AGENTS.md`, `me.md`, and wiki pages.
 
 ## 6. Runtime Architecture
 
@@ -170,14 +170,14 @@ The `.cortex/` directory stores agent runtime state. The wiki stores user-facing
 Initial command surface:
 
 ```text
-cortex chat
-cortex query "<question>"
-cortex ingest wiki/raw/granola/<file>.md
-cortex lint
-cortex learn reflect <session-id>
-cortex learn curator
-cortex sessions list
-cortex sessions search "<query>"
+strata chat
+strata query "<question>"
+strata ingest wiki/raw/granola/<file>.md
+strata lint
+strata learn reflect <session-id>
+strata learn curator
+strata sessions list
+strata sessions search "<query>"
 ```
 
 Implementation target:
@@ -263,7 +263,7 @@ Hard rules:
 - No deletion of decision pages.
 - No unreviewed changes to `AGENTS.md`.
 - No secrets in wiki pages, traces, memory, skills, or proposals.
-- No writes outside the Cortex repo.
+- No writes outside the Strata repo.
 - No broad recursive rewrites without explicit user approval.
 
 Policy decisions should return structured results:
@@ -327,7 +327,7 @@ type PolicyDecision =
 
 `learning.readMemory`
 
-- Reads `.cortex/memory/USER.md` and `.cortex/memory/OPERATIONS.md`.
+- Reads `.strata/memory/USER.md` and `.strata/memory/OPERATIONS.md`.
 
 `learning.proposeMemoryUpdate`
 
@@ -336,7 +336,7 @@ type PolicyDecision =
 
 `learning.readSkills`
 
-- Lists `.cortex/skills/*/SKILL.md` metadata.
+- Lists `.strata/skills/*/SKILL.md` metadata.
 
 `learning.viewSkill`
 
@@ -356,7 +356,7 @@ type PolicyDecision =
 
 ## 8. Session Store And Trace Design
 
-Use `.cortex/state.sqlite` as the primary index and `.cortex/traces/*.jsonl` as append-only raw event logs.
+Use `.strata/state.sqlite` as the primary index and `.strata/traces/*.jsonl` as append-only raw event logs.
 
 ### 8.1 SQLite Tables
 
@@ -455,7 +455,7 @@ Trace events should be sufficient to reconstruct what the agent knew and why it 
 
 ## 9. Learning Loop Design
 
-Learning is the key feature. Cortex should implement several small loops rather than one vague "memory" feature.
+Learning is the key feature. Strata should implement several small loops rather than one vague "memory" feature.
 
 ### 9.1 Loop A: Run Trace Loop
 
@@ -467,8 +467,8 @@ Trigger:
 
 Writes:
 
-- `.cortex/traces/<session-id>.jsonl`
-- `.cortex/state.sqlite`
+- `.strata/traces/<session-id>.jsonl`
+- `.strata/state.sqlite`
 
 What it captures:
 
@@ -503,7 +503,7 @@ Trigger:
 - After every agent run that used tools.
 - Always after ingest.
 - Always after failed or interrupted runs.
-- Manually via `cortex learn reflect <session-id>`.
+- Manually via `strata learn reflect <session-id>`.
 
 Inputs:
 
@@ -581,8 +581,8 @@ Purpose: keep compact durable facts available in future sessions.
 
 Files:
 
-- `.cortex/memory/USER.md`
-- `.cortex/memory/OPERATIONS.md`
+- `.strata/memory/USER.md`
+- `.strata/memory/OPERATIONS.md`
 
 `USER.md` stores:
 
@@ -590,7 +590,7 @@ Files:
 - Communication preferences.
 - Durable working preferences.
 - Repeated corrections.
-- Important stable personal context relevant to Cortex.
+- Important stable personal context relevant to Strata.
 
 `OPERATIONS.md` stores:
 
@@ -598,7 +598,7 @@ Files:
 - Tool quirks.
 - Model/provider quirks.
 - Local environment facts.
-- Lessons about running Cortex itself.
+- Lessons about running Strata itself.
 
 Rules:
 
@@ -627,7 +627,7 @@ Purpose: capture procedural knowledge that improves future work.
 Skill shape:
 
 ```text
-.cortex/skills/<skill-name>/
+.strata/skills/<skill-name>/
   SKILL.md
   references/
   templates/
@@ -639,7 +639,7 @@ Skill shape:
 ```yaml
 ---
 name: ingest-granola-meeting
-description: How to ingest a Granola transcript into the Cortex wiki.
+description: How to ingest a Granola transcript into the Strata wiki.
 triggers:
   - ingest wiki/raw/granola files
   - summarize meetings
@@ -695,7 +695,7 @@ Trigger:
 - User asks about prior work.
 - Agent sees references like "last time", "we did this before", "that Slack thread", "the meeting with X".
 - Reflection or ingest needs prior context.
-- Manual `cortex sessions search`.
+- Manual `strata sessions search`.
 
 Implementation:
 
@@ -751,7 +751,7 @@ Purpose: keep the learning artifacts healthy.
 
 Trigger:
 
-- Manual `cortex learn curator`.
+- Manual `strata learn curator`.
 - Later: weekly or after N sessions.
 
 Inputs:
@@ -780,7 +780,7 @@ Auto-apply policy for v1:
 Report output:
 
 ```text
-.cortex/reports/curator/YYYY-MM-DD.md
+.strata/reports/curator/YYYY-MM-DD.md
 ```
 
 Acceptance criteria:
@@ -815,7 +815,7 @@ Acceptance criteria:
 
 ## 10. Ingest Flow With Learning
 
-`cortex ingest wiki/raw/granola/YYYY-MM-DD-title.md`
+`strata ingest wiki/raw/granola/YYYY-MM-DD-title.md`
 
 1. Start session.
 2. Load memory.
@@ -852,7 +852,7 @@ Validation before commit:
 
 ## 11. Query Flow With Learning
 
-`cortex query "<question>"`
+`strata query "<question>"`
 
 1. Start session.
 2. Load memory.
@@ -868,7 +868,7 @@ The query command should be allowed to make no wiki changes. Filing synthesis is
 
 ## 12. Lint Flow With Learning
 
-`cortex lint`
+`strata lint`
 
 1. Deterministically scan wiki pages.
 2. Produce structural findings.
@@ -894,7 +894,7 @@ Lint checks:
 
 Deliverables:
 
-- `.cortex/` runtime directories.
+- `.strata/` runtime directories.
 - Bun workspaces under `packages/*`.
 - `packages/core/src/types.ts`.
 - `packages/core/src/events.ts`.
@@ -903,7 +903,7 @@ Deliverables:
 
 Acceptance:
 
-- `cortex sessions list` works.
+- `strata sessions list` works.
 - A dummy session writes trace events.
 - `bun run check` passes.
 
@@ -961,7 +961,7 @@ Deliverables:
 
 - SQLite FTS index.
 - `learning.sessionSearch`.
-- `cortex sessions search`.
+- `strata sessions search`.
 
 Acceptance:
 
@@ -972,8 +972,8 @@ Acceptance:
 
 Deliverables:
 
-- `.cortex/memory/USER.md`.
-- `.cortex/memory/OPERATIONS.md`.
+- `.strata/memory/USER.md`.
+- `.strata/memory/OPERATIONS.md`.
 - Skill store and skill index.
 - Seed skills.
 - `learning.readMemory`, `learning.readSkills`, `learning.viewSkill`.
@@ -1003,8 +1003,8 @@ Acceptance:
 
 Deliverables:
 
-- `cortex query`.
-- `cortex ingest`.
+- `strata query`.
+- `strata ingest`.
 - Deterministic validations before commit.
 - Optional git commit integration.
 
@@ -1018,8 +1018,8 @@ Acceptance:
 
 Deliverables:
 
-- `cortex lint`.
-- `cortex learn curator`.
+- `strata lint`.
+- `strata learn curator`.
 - Curator reports and merge proposals.
 
 Acceptance:
@@ -1040,7 +1040,7 @@ Deliverables:
 Acceptance:
 
 - CLI, TUI, scheduler, and future web surfaces can call the same connector APIs.
-- `pull:*` scripts can feed `cortex ingest`.
+- `pull:*` scripts can feed `strata ingest`.
 - Raw source files remain immutable.
 
 ### Phase 10: Local Web Control Plane
@@ -1055,12 +1055,12 @@ Acceptance:
 
 - The web app can validate a connector configuration without writing raw source snapshots.
 - The web app can trigger the same trace-backed dry-run and pull paths as the CLI.
-- The web app can show recent ingest sessions and proposal status from `.cortex/`.
+- The web app can show recent ingest sessions and proposal status from `.strata/`.
 - The web server binds to loopback by default and does not expose secrets in logs, traces, or client-rendered pages.
 
 ## 14. Configuration
 
-Add `.cortex/config.json` or typed config loaded from environment.
+Add `.strata/config.json` or typed config loaded from environment.
 
 Initial fields:
 
@@ -1071,7 +1071,7 @@ Initial fields:
     "model": "",
     "baseUrl": "",
     "apiKeyEnv": "OPENAI_API_KEY",
-    "authFile": ".cortex/auth.json"
+    "authFile": ".strata/auth.json"
   },
   "agent": {
     "maxIterations": 12,
@@ -1097,10 +1097,10 @@ Secrets stay in `.env`, never config files committed to git.
 Commands:
 
 ```text
-cortex proposals list
-cortex proposals show <id>
-cortex proposals apply <id>
-cortex proposals reject <id>
+strata proposals list
+strata proposals show <id>
+strata proposals apply <id>
+strata proposals reject <id>
 ```
 
 Proposal statuses:
@@ -1137,7 +1137,7 @@ Redaction:
 Write boundaries:
 
 - Tools must resolve absolute paths and confirm they stay within the repo.
-- Runtime state writes stay under `.cortex/`.
+- Runtime state writes stay under `.strata/`.
 - Wiki writes stay in approved wiki paths.
 
 Prompt injection:
@@ -1157,7 +1157,7 @@ Auditability:
 - Should low-risk memory auto-apply be enabled immediately, or should all memory start as proposals?
 - Should `me.md` be updated directly from user memory, or only via proposals?
 - Should git commits be automatic after successful ingest, or explicitly confirmed?
-- Should `.cortex/` be committed, partially committed, or ignored? Recommended: commit seed skills and config examples, ignore traces/state.
+- Should `.strata/` be committed, partially committed, or ignored? Recommended: commit seed skills and config examples, ignore traces/state.
 
 ## 18. Recommended First Build Slice
 
@@ -1166,7 +1166,7 @@ The first useful slice should be intentionally small:
 1. Session store and trace events.
 2. Tool registry and path policy.
 3. Wiki read/search tools.
-4. Agent loop that can answer `cortex query` with citations.
+4. Agent loop that can answer `strata query` with citations.
 5. Post-run reflection that writes proposals only.
 6. Seed `query-wiki` and `learning-reflection` skills.
 
