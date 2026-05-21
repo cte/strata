@@ -52,6 +52,7 @@ export interface MessageInput {
   toolCallId?: string;
   toolCalls?: JsonValue;
   attachments?: JsonValue;
+  usage?: TokenUsage;
 }
 
 export interface MessageRecord {
@@ -62,5 +63,28 @@ export interface MessageRecord {
   toolCallId: string | null;
   toolCalls: JsonValue | null;
   attachments: JsonValue | null;
+  usage: TokenUsage | null;
   ts: string;
+}
+
+/**
+ * Per-turn token usage produced by a single model call.
+ *
+ * Stored on the assistant Message that the model call produced (denormalised
+ * from the `model.response` Event payload) so transcript reads, per-turn
+ * rendering, and session aggregations all read directly from the Messages
+ * table without re-parsing event JSON.
+ *
+ * Counts are post-deduplication: `input` excludes tokens already counted as
+ * `cacheRead` or `cacheWrite`. `total` and `cost` are convenience aggregates
+ * that the producer (`normalizeModelUsage`) computes once.
+ */
+export interface TokenUsage {
+  [key: string]: JsonValue;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  cost: number;
 }

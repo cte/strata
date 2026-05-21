@@ -1,5 +1,5 @@
-import type { JsonObject, JsonValue, SessionStatus } from "@strata/core";
-import type { ToolExecutionResult, ToolMetadata, ToolRegistry } from "@strata/tools";
+import type { JsonObject, JsonValue, SessionStatus } from "@strata/core/types";
+import type { ToolExecutionResult, ToolMetadata, ToolRegistry } from "@strata/tools/types";
 
 export type AgentMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -89,6 +89,11 @@ export interface AgentRunConfig {
    * each run, so they always reflect current state.
    */
   continueSessionId?: string;
+  /**
+   * Retry transient model transport failures before marking the run failed.
+   * Attempts are total attempts, including the first request.
+   */
+  modelRetryPolicy?: ModelRetryPolicy;
 }
 
 export interface AgentRunResult {
@@ -100,12 +105,28 @@ export interface AgentRunResult {
   toolCalls: number;
 }
 
+export interface ModelRetryPolicy {
+  maxAttempts?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  backoffFactor?: number;
+}
+
 export type ToolResultContent = JsonValue;
 
 export type AgentRunEvent =
   | { type: "session.started"; sessionId: string; title: string; model: string }
   | { type: "message.user"; content: string }
-  | { type: "model.request"; iteration: number; messageCount: number }
+  | { type: "model.request"; iteration: number; messageCount: number; attempt?: number }
+  | {
+      type: "model.retry";
+      iteration: number;
+      attempt: number;
+      nextAttempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      message: string;
+    }
   | { type: "assistant.delta"; iteration: number; contentDelta: string }
   | {
       type: "model.response";

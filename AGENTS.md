@@ -122,6 +122,16 @@ Cancellation is end-to-end. `AgentRunConfig.signal` and `ModelRequest.signal` fl
 
 Session storage is centralized. Use `SessionStore.open(repoRoot?)`; runs persist to `.strata/state.sqlite` and `.strata/traces/<sessionId>.jsonl`.
 
+Web chat runs are server-side jobs, not HTTP request lifetimes. `packages/web-api/src/chat.ts` owns active-run state and an abort controller per run; browser SSE streams are subscribers. A dropped browser/proxy stream must not cancel the agent. Only explicit run cancellation should abort the run signal.
+
+Web chat run state is write-through durable. `packages/web-api/src/chatRunStore.ts` persists web chat run metadata and SSE event payloads in `.strata/state.sqlite`; SSE frames include event IDs; `GET /api/chat/runs/:runId/events` replays events after a given ID for reconnects; and server startup marks abandoned running rows failed with `stoppedReason: "server_restarted"`. Do not make the browser depend only on the in-memory active-run map or the original `POST /api/chat/runs` response stream.
+
+Web chat SSE streams must stay alive while the model is thinking. `packages/web-api/src/server.ts` sends heartbeat comments during quiet periods and configures Bun's server idle timeout above the default, so long model requests do not look like hung or cancelled browser runs.
+
+Web chat lifecycle diagnostics are durable trace events. Run start, browser stream close, explicit cancel requests, and run finish should be appended to the associated `.strata/traces/<sessionId>.jsonl` trace so stopped browser tasks can be debugged after the request is gone.
+
+Run context includes durable local guidance. `packages/agent/src/runContext.ts` injects root `AGENTS.md`, memory, active todos, and the prompt-visible skill index on every run, including continued sessions.
+
 Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), and optional `maxResultChars`. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values.
 
 TUI rendering is pi-style scrollback, not alt-screen. `TuiRuntime` writes to the main terminal buffer and must not enable alt-screen. Width/height changes clear the visible viewport but must not wipe terminal scrollback.

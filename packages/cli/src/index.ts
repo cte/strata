@@ -3,12 +3,11 @@ import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import {
   clearChatGptCredentials,
+  createModelAdapter,
   getChatGptCredentials,
-  getValidChatGptCredentials,
   listMaintenanceJobs,
   loginChatGpt,
-  OpenAICodexModelAdapter,
-  OpenAICompatibleChatModelAdapter,
+  type ModelProviderName,
   runAgentLoop,
   runMaintenanceJob,
   runReflection,
@@ -51,7 +50,7 @@ commands:
 `;
 }
 
-type ProviderName = "openai-codex" | "openai-compatible";
+type ProviderName = ModelProviderName;
 
 interface ModelOptions {
   provider?: ProviderName;
@@ -860,73 +859,4 @@ function parseModelOptions(args: string[]): ModelOptions & { rest: string[] } {
     parsed.model = model;
   }
   return parsed;
-}
-
-async function createModelAdapter(
-  options: ModelOptions,
-): Promise<OpenAICodexModelAdapter | OpenAICompatibleChatModelAdapter> {
-  const provider =
-    options.provider ??
-    parseProviderName(Bun.env.STRATA_PROVIDER) ??
-    (await inferDefaultProvider());
-  if (provider === "openai-codex") {
-    const credentials = await getValidChatGptCredentials();
-    const codexOptions = {
-      credentials,
-      model: options.model ?? Bun.env.STRATA_MODEL ?? "gpt-5.5",
-    };
-    if (Bun.env.STRATA_CODEX_BASE_URL !== undefined) {
-      return new OpenAICodexModelAdapter({
-        ...codexOptions,
-        baseUrl: Bun.env.STRATA_CODEX_BASE_URL,
-      });
-    }
-    return new OpenAICodexModelAdapter(codexOptions);
-  }
-  return createOpenAICompatibleAdapter(options);
-}
-
-async function inferDefaultProvider(): Promise<ProviderName> {
-  if ((await getChatGptCredentials()) !== undefined) {
-    return "openai-codex";
-  }
-  if (Bun.env.STRATA_API_KEY !== undefined || Bun.env.OPENAI_API_KEY !== undefined) {
-    return "openai-compatible";
-  }
-  return "openai-codex";
-}
-
-function parseProviderName(value: string | undefined): ProviderName | undefined {
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  if (value === "openai-codex" || value === "openai-compatible") {
-    return value;
-  }
-  throw new Error("STRATA_PROVIDER must be openai-codex or openai-compatible");
-}
-
-function createOpenAICompatibleAdapter(options: ModelOptions): OpenAICompatibleChatModelAdapter {
-  const apiKey = Bun.env.STRATA_API_KEY ?? Bun.env.OPENAI_API_KEY;
-  const model = options.model ?? Bun.env.STRATA_MODEL ?? Bun.env.OPENAI_MODEL;
-  const baseUrl = Bun.env.STRATA_BASE_URL ?? Bun.env.OPENAI_BASE_URL;
-
-  if (!apiKey) {
-    throw new Error("Missing model API key. Set STRATA_API_KEY or OPENAI_API_KEY.");
-  }
-  if (!model) {
-    throw new Error("Missing model name. Set STRATA_MODEL or OPENAI_MODEL.");
-  }
-
-  const adapterOptions = {
-    apiKey,
-    model,
-  };
-  if (baseUrl !== undefined) {
-    return new OpenAICompatibleChatModelAdapter({
-      ...adapterOptions,
-      baseUrl,
-    });
-  }
-  return new OpenAICompatibleChatModelAdapter(adapterOptions);
 }

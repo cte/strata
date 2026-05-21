@@ -1,3 +1,4 @@
+import type { TokenUsage } from "@strata/core/types";
 import type {
   ConnectorName,
   ConnectorPullResult,
@@ -47,6 +48,76 @@ export interface GranolaStatus {
   validatedAt?: string;
 }
 
+export type ChatProviderName = "openai-codex" | "openai-compatible";
+export type ChatSessionKind = "chat" | "query";
+export type ChatSessionStatus = "running" | "completed" | "failed" | "interrupted";
+export type ChatMessageRole = "system" | "user" | "assistant" | "tool";
+export type BrowserJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | BrowserJsonValue[]
+  | { [key: string]: BrowserJsonValue };
+
+export interface ChatModelStatus {
+  provider: ChatProviderName;
+  model: string;
+  codexLoggedIn: boolean;
+  apiKeyConfigured: boolean;
+  codexExpiresAt?: number;
+}
+
+export interface ChatModelSummary {
+  id: string;
+  description: string;
+}
+
+export interface ChatFileEntry {
+  path: string;
+  isDirectory: boolean;
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  kind: ChatSessionKind;
+  startedAt: string;
+  endedAt: string | null;
+  status: ChatSessionStatus;
+  model: string | null;
+}
+
+export interface ChatMessageSummary {
+  id: number;
+  role: ChatMessageRole;
+  content: string;
+  ts: string;
+  toolCallId: string | null;
+  toolCalls: BrowserJsonValue | null;
+  attachments: BrowserJsonValue | null;
+  usage: TokenUsage | null;
+}
+
+export interface ChatSessionDetail {
+  session: ChatSessionSummary;
+  messages: ChatMessageSummary[];
+}
+
+export interface ChatActiveRunSummary {
+  runId: string;
+  startedAt: string;
+  updatedAt?: string;
+  endedAt?: string | null;
+  status: ChatSessionStatus;
+  cancelled: boolean;
+  lastEventId?: number;
+  sessionId?: string;
+  continueSessionId?: string;
+  stoppedReason?: string;
+  errorMessage?: string;
+}
+
 export const notionConfigInput = z.object({
   pageId: z.string(),
   token: z.string().optional(),
@@ -67,8 +138,61 @@ export const granolaConfigureInput = z.object({
 
 export type GranolaConfigureRpcInput = z.output<typeof granolaConfigureInput>;
 
+export const chatSessionsListInput = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+});
+
+export type ChatSessionsListInput = z.output<typeof chatSessionsListInput>;
+
+export const chatSessionGetInput = z.object({
+  sessionId: z.string().min(1),
+});
+
+export type ChatSessionGetInput = z.output<typeof chatSessionGetInput>;
+
+export const chatSessionForkInput = z.object({
+  sessionId: z.string().min(1),
+});
+
+export type ChatSessionForkInput = z.output<typeof chatSessionForkInput>;
+
+export const chatSessionsSearchInput = z.object({
+  query: z.string().min(1),
+  limit: z.number().int().min(1).max(100).default(20),
+});
+
+export type ChatSessionsSearchInput = z.output<typeof chatSessionsSearchInput>;
+
+export const chatRunGetInput = z.object({
+  runId: z.string().min(1),
+});
+
+export type ChatRunGetInput = z.output<typeof chatRunGetInput>;
+
+export const chatFilesListInput = z.object({
+  query: z.string().default(""),
+  limit: z.number().int().min(1).max(100).default(20),
+});
+
+export type ChatFilesListInput = z.output<typeof chatFilesListInput>;
+
+export const chatModelsListInput = z.object({
+  provider: z.enum(["openai-codex", "openai-compatible"]),
+});
+
+export type ChatModelsListInput = z.output<typeof chatModelsListInput>;
+
 export interface WebApiServices {
   health(): { ok: true; repoRoot: string };
+  chatModelStatus(): Promise<ChatModelStatus>;
+  listChatModels(input: ChatModelsListInput): Promise<{ models: ChatModelSummary[] }>;
+  listChatFiles(input: ChatFilesListInput): { entries: ChatFileEntry[] };
+  listActiveChatRuns(): { runs: ChatActiveRunSummary[] };
+  getChatRun(input: ChatRunGetInput): { run: ChatActiveRunSummary | null };
+  listChatSessions(input: ChatSessionsListInput): Promise<{ sessions: ChatSessionSummary[] }>;
+  getChatSession(input: ChatSessionGetInput): Promise<ChatSessionDetail | null>;
+  forkChatSession(input: ChatSessionForkInput): Promise<ChatSessionDetail>;
+  searchChatSessions(input: ChatSessionsSearchInput): Promise<{ sessions: ChatSessionSummary[] }>;
   connectorSummaries(): ConnectorSummary[];
   validateNotion(config: NotionConnectorInput): Promise<ConnectorStatus>;
   runNotionSession(
@@ -92,6 +216,39 @@ const t = initTRPC.context<WebApiContext>().create();
 
 export const appRouter = t.router({
   health: t.procedure.query(({ ctx }) => ctx.services.health()),
+  chat: t.router({
+    models: t.router({
+      status: t.procedure.query(({ ctx }) => ctx.services.chatModelStatus()),
+      list: t.procedure
+        .input(chatModelsListInput)
+        .query(({ ctx, input }) => ctx.services.listChatModels(input)),
+    }),
+    files: t.router({
+      list: t.procedure
+        .input(chatFilesListInput)
+        .query(({ ctx, input }) => ctx.services.listChatFiles(input)),
+    }),
+    runs: t.router({
+      active: t.procedure.query(({ ctx }) => ctx.services.listActiveChatRuns()),
+      get: t.procedure
+        .input(chatRunGetInput)
+        .query(({ ctx, input }) => ctx.services.getChatRun(input)),
+    }),
+    sessions: t.router({
+      list: t.procedure
+        .input(chatSessionsListInput)
+        .query(({ ctx, input }) => ctx.services.listChatSessions(input)),
+      get: t.procedure
+        .input(chatSessionGetInput)
+        .query(({ ctx, input }) => ctx.services.getChatSession(input)),
+      fork: t.procedure
+        .input(chatSessionForkInput)
+        .mutation(({ ctx, input }) => ctx.services.forkChatSession(input)),
+      search: t.procedure
+        .input(chatSessionsSearchInput)
+        .query(({ ctx, input }) => ctx.services.searchChatSessions(input)),
+    }),
+  }),
   connectors: t.router({
     list: t.procedure.query(({ ctx }) => ({
       connectors: ctx.services.connectorSummaries(),

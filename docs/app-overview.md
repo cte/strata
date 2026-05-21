@@ -17,9 +17,10 @@ The wiki is the durable knowledge base. The harness is the operating system that
 
 - `packages/cli`: `strata` command-line entrypoint for auth, init, query, TUI launch, sessions, tools, ingest, learning, and maintenance commands.
 - `packages/tui`: first-party terminal UI over the shared agent loop.
-- `packages/web-api`: local Hono + tRPC server for the browser app, connector operations, and planned chat streaming.
-- `apps/web`: Vite + React + TanStack Router browser app for connector setup and planned agent chat.
+- `packages/web-api`: local Hono + tRPC server for the browser app, connector operations, and chat streaming.
+- `apps/web`: Vite + React + TanStack Router browser app for connector setup and initial agent chat.
 - `packages/ingest`: connector contracts, source pullers, checkpointing, and raw snapshot writers for Notion, Granola, and Slack.
+- Planned `packages/integrations/*`: optional third-party tool packs, starting with Notion MCP, that register external capabilities as ordinary Strata tools without adding provider-specific code to the agent loop.
 
 The CLI, TUI, and web chat should be presentation layers over the same agent runtime. Do not duplicate agent-loop behavior inside an interface package.
 
@@ -27,7 +28,7 @@ The CLI, TUI, and web chat should be presentation layers over the same agent run
 
 Core packages:
 
-- `packages/core`: paths, runtime directories, SQLite-backed `SessionStore`, memory/proposal/skill/todo stores, and shared JSON/session types.
+- `packages/core`: paths, runtime directories, SQLite-backed `SessionStore`, memory/proposal/skill/todo stores, AGENTS.md instruction loading, and shared JSON/session types.
 - `packages/agent`: model adapters, ChatGPT/OpenAI Codex auth, OpenAI-compatible adapter, `runAgentLoopEvents()`, run-context injection, compaction, reflection, and maintenance jobs.
 - `packages/tools`: `ToolRegistry`, tool policy/profile handling, wiki tools, filesystem tools, shell tool, memory/todo/session/skill tools.
 
@@ -37,19 +38,20 @@ Key invariant:
 
 ## Runtime State
 
-- `.strata/` contains local runtime state: SQLite DB, traces, auth, memory, skills, proposals, connector checkpoints, and reports.
+- `.strata/` contains local runtime state: SQLite DB, traces, auth, memory, Strata-owned skills, proposals, connector checkpoints, and reports.
+- `AGENTS.md` and `.agents/skills/**/SKILL.md` are read as project agent guidance. `.agents/skills` is a compatibility skill source; `.strata/skills` remains Strata's own procedural-memory store.
 - `.env` may contain dotenvx-encrypted secrets; runtime scripts that need secrets already wrap dotenvx.
 - `wiki/raw/` contains immutable raw source snapshots. Agents may read it but should not edit it.
 - Legacy `.cortex/` may exist locally from the old project name. New code should use `.strata/`.
 
 ## Current Strategic Direction
 
-Near-term work is shifting from connector bring-up to a browser chat foundation:
+Near-term work is focused on deepening the now-usable web chat surface before returning to connector bring-up:
 
 1. Keep Slack ingestion running and continue connector validation in parallel.
-2. Add a web chat interface that streams events from the shared agent loop through `packages/web-api`.
-3. Use Vercel AI Elements in `apps/web` for conversation, messages, prompt input, and tool panels.
-4. Return to connector UI depth and raw-to-wiki proposal generation after web chat is usable.
+2. Treat [web-feature-parity-plan.md](./web-feature-parity-plan.md) as complete: `listModels` lives in `@strata/agent`, repo-file enumeration lives in `@strata/core` as `findRepoFiles`, `chat.files.list` / `chat.models.list` expose those data sources through tRPC, and the web composer now has file `@`-mentions, a persisted model/reasoning picker, slash commands, and prompt history.
+3. Resume deeper web chat polish: dropped-stream reconnect edge-case verification and responsive polish now that context/token metrics and learning-tool renderers are present.
+4. Return to connector UI depth and raw-to-wiki proposal generation after web chat polish is usable.
 
 Use [status.md](./status.md) for the exact handoff and next concrete implementation step.
 

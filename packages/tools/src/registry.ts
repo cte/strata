@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@strata/core";
+import type { JsonObject, JsonValue } from "@strata/core/types";
 import type {
   ToolContext,
   ToolDefinition,

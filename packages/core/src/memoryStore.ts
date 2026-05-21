@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { readTextFileOrUndefined, truncateForAgent, writeTextFile } from "./fileStore.js";
 import { getStrataPaths } from "./paths.js";
 import { StrataStateError } from "./stateErrors.js";
 import type { JsonObject } from "./types.js";
@@ -32,30 +32,26 @@ export async function readMemoryDocument(
   maxChars = 4_000,
 ): Promise<MemoryDocument> {
   const file = memoryDocumentPath(repoRoot, target);
-  try {
-    const content = await readFile(file, "utf8");
-    const truncated = content.length > maxChars;
+  const raw = await readTextFileOrUndefined(file);
+  if (raw === undefined) {
     return {
       target,
       path: path.relative(repoRoot, file),
-      exists: true,
-      chars: content.length,
-      content: truncated ? content.slice(0, maxChars) : content,
-      truncated,
+      exists: false,
+      chars: 0,
+      content: "",
+      truncated: false,
     };
-  } catch (error: unknown) {
-    if (isNotFoundError(error)) {
-      return {
-        target,
-        path: path.relative(repoRoot, file),
-        exists: false,
-        chars: 0,
-        content: "",
-        truncated: false,
-      };
-    }
-    throw error;
   }
+  const truncated = truncateForAgent(raw, maxChars);
+  return {
+    target,
+    path: path.relative(repoRoot, file),
+    exists: true,
+    chars: truncated.chars,
+    content: truncated.content,
+    truncated: truncated.truncated,
+  };
 }
 
 export async function readMemoryDocuments(
@@ -81,8 +77,7 @@ export async function writeMemoryDocument(
       `Memory content exceeds maxChars (${normalized.length} > ${maxChars})`,
     );
   }
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, normalized, "utf8");
+  await writeTextFile(file, normalized);
   return readMemoryDocument(repoRoot, target, Number.POSITIVE_INFINITY);
 }
 
@@ -123,13 +118,4 @@ function formatMemoryEntry(entry: string, heading: string | undefined): string {
 
 function ensureTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof error.code === "string" &&
-    error.code === "ENOENT"
-  );
 }

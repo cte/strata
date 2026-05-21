@@ -1,6 +1,6 @@
 # Strata Web Chat Plan
 
-Status: planned.
+Status: foundation live-verified; durable run replay present; composer feature parity complete; token/context metrics and learning-tool renderers present.
 
 This plan covers the local browser chat interface for Strata. It is subordinate to [roadmap.md](./roadmap.md), [agent-harness-plan.md](./agent-harness-plan.md), and [web-control-plane-plan.md](./web-control-plane-plan.md).
 
@@ -70,16 +70,22 @@ Run state:
 
 - Each run gets a unique `runId`.
 - Each run gets an `AbortController`.
-- Each run gets one streamed response to the browser.
+- Each run publishes browser-safe events through a write-through event log backed by `.strata/state.sqlite`.
+- Browser SSE responses subscribe to that event log; they are not the owner of the agent loop.
+- SSE frames include event IDs, and `GET /api/chat/runs/:runId/events` can replay events after a given ID for reconnects or completed-run inspection.
+- Browser SSE responses send heartbeat comments during quiet model/tool periods and the Bun server idle timeout is configured above the default 10 seconds, so long model requests do not close the stream.
 - Each run owns exactly one agent-loop invocation.
 - The persisted Strata session remains the durable conversation record.
+- Web chat run metadata remains durable too: final status, cancellation, stopped reason, error message, associated session ID, and last event ID are persisted independently of the original HTTP stream.
+- Server startup marks abandoned running web chat rows as failed with `stoppedReason: "server_restarted"` so stale active runs are visible instead of silently hanging forever.
+- Web chat run lifecycle diagnostics are appended to the persisted session trace, including run start, browser stream close reason, explicit cancel requests, and run finish.
 
 Concurrency rules:
 
 - Allow multiple sessions to run concurrently.
 - Prevent more than one active run for the same `sessionId`.
-- Abort a run if its browser stream disconnects in the first implementation.
-- Later, support detached/background runs that keep executing after disconnect.
+- Keep a run executing if its browser stream disconnects; proxy/browser request lifetimes must not cancel the agent.
+- Cancel only through explicit run cancellation, which aborts the server-side `AbortController`.
 - Treat repo/wiki writes as shared mutable state; add file-level or session-level locking only once write conflicts are observed.
 
 ## API Design
@@ -115,6 +121,7 @@ Response:
 - `Content-Type: text/event-stream` or newline-delimited JSON.
 - First implementation should prefer SSE because it is simple to inspect and maps naturally to named events.
 - If `fetch()` streaming proves simpler for request/response handling in React, newline-delimited JSON is acceptable.
+- Current SSE frames include `id: <event-id>`, `event: <event-type>`, and a JSON `data:` payload. Clients should store the highest seen ID and reconnect through `GET /api/chat/runs/:runId/events?after=<event-id>` when the stream drops.
 
 Event payloads should be a browser-safe subset of `AgentRunEvent`:
 
@@ -140,16 +147,66 @@ Cancels an active run by aborting the server-side `AbortController`.
 
 First implementation can return `404` when the run is no longer active.
 
+### `GET /api/chat/runs/:runId/events`
+
+Streams active events or replays stored events for a known web chat run.
+
+Clients may pass `?after=<event-id>` or a `Last-Event-ID` header. Active runs subscribe after that ID; inactive runs return the stored suffix and close. Unknown run IDs return `404`.
+
+### `chat.runs.active`
+
+Returns browser-safe snapshots of active web chat runs. The browser uses this after a stream disconnect to keep the UI honest: the server-side run may still be executing even though the live SSE subscription ended.
+
+### `chat.runs.get`
+
+Returns a browser-safe snapshot for an active or completed web chat run, including status, session ID, stopped reason, error message, and last event ID. The browser uses this after reconnect exhaustion or disconnected-state polling to reload the final persisted transcript and surface terminal errors.
+
 ### tRPC Procedures
 
 Add these under `appRouter.chat`:
 
 - `chat.sessions.list`: recent chat/query sessions.
 - `chat.sessions.get`: session metadata plus persisted messages.
+- `chat.sessions.fork`: clones an existing chat/query session through `SessionStore.cloneSession`.
 - `chat.sessions.search`: simple search over prior sessions.
 - `chat.models.status`: active provider/model/auth summary for UI display.
+- `chat.models.list`: model list for a chosen provider, backed by `@strata/agent`'s shared `listModels`.
+- `chat.files.list`: repo file/directory suggestions for composer `@`-mentions, backed by `@strata/core`'s shared `findRepoFiles`.
+- `chat.runs.active`: active run metadata for disconnected-stream recovery.
+- `chat.runs.get`: active or terminal run metadata for final-state recovery.
 
 Keep tRPC DTOs browser-safe. Filesystem, session store, and model adapter construction stay in server service modules.
+
+## Composer Autocomplete Contract
+
+The web composer uses a web-only rendering layer over shared data sources. `apps/web/src/lib/useAutocomplete.ts` defines the provider contract:
+
+```ts
+interface AutocompleteProvider {
+  id: string;
+  provide(input: {
+    text: string;
+    cursor: number;
+    signal: AbortSignal;
+  }): AutocompleteSuggestions | Promise<AutocompleteSuggestions | undefined> | undefined;
+}
+
+interface AutocompleteItem {
+  label: string;
+  value: string;
+  description?: string;
+  kind?: string;
+  commit?: "insert" | "run";
+}
+
+interface AutocompleteSuggestions {
+  items: AutocompleteItem[];
+  replaceStart: number;
+  replaceEnd: number;
+}
+```
+
+`PromptInput` owns the textarea ref, calls providers in order through `useAutocomplete`, and renders `AutocompletePopover` at the caret. Providers should stay data-oriented and return replacement ranges only; UI concerns belong in the popover. `slashCommandProvider` runs first for leading `/` commands and may return `commit: "run"` items. `fileMentionProvider` detects active `@<query>` tokens, calls `chat.files.list`, and inserts `@path` or `@path/`. Future skill and session providers should reuse the same contract.
 
 ## Model Adapter Construction
 
@@ -181,7 +238,7 @@ Initial components:
 - `prompt-input`: multiline composer, submit button, model/thinking controls later.
 - `tool`: collapsible tool-call display.
 - `reasoning` or `chain-of-thought`: only if we expose safe high-level thinking/status summaries, not hidden model reasoning.
-- `context`: later, for context-window and token usage display.
+- `context`: compact context-window and token-usage display.
 
 Initial route:
 
@@ -220,12 +277,14 @@ The first web version should render every tool generically:
 - Running/completed/error status.
 - Result preview with truncation awareness.
 
-Then add specialized renderers for high-value tools:
+The current web route adds specialized renderers for high-value tools:
 
 - `shell.run`: command, cwd, exit code, duration, stdout/stderr previews.
 - `fs.read` / `wiki.readPage`: path and excerpt.
 - `fs.edit` / `wiki.patchPage`: path and changed-line summary.
-- `memory.write` / `todo.add` / `skills.read`: learning state changes.
+- `memory.write` / `memory.append`: target, path, size, and changed content preview.
+- `todo.add` / `todo.update` / `todo.remove`: action, status, priority, due date, title, id, tags, and notes.
+- `skills.list` / `skills.read`: count/source/path metadata and compact skill rows or content preview.
 - Slack/Notion/Granola ingest tools once agent-facing connector tools exist.
 
 Pi's generic tool-display pattern is a good reference, but the implementation should use AI Elements `Tool` components in React.
@@ -250,18 +309,14 @@ Later behavior:
 
 ## Cancellation And Disconnects
 
-First implementation:
+Current implementation:
 
 - Submit starts a run and stream.
 - Stop button calls `POST /api/chat/runs/:runId/cancel`.
-- Browser disconnect aborts the run.
-- Server emits a final interrupted completion event when possible.
-
-Later:
-
-- Keep background runs alive after disconnect.
-- Add `GET /api/chat/runs/:runId/events` to reconnect to an active run.
-- Persist run heartbeat/progress events for recovery.
+- Browser/proxy disconnect closes only that SSE subscription; the run continues server-side.
+- The browser stores the latest SSE event ID and can reconnect through `GET /api/chat/runs/:runId/events`.
+- If reconnects fail or disconnected-state polling sees the run finish, the browser loads `chat.runs.get` plus `chat.sessions.get` to show the persisted terminal state.
+- Server emits a final interrupted completion event when cancellation reaches the agent loop.
 
 ## Security And Locality
 
@@ -303,9 +358,10 @@ Later, a `strata --mode rpc` JSONL mode may still be useful for external embeddi
 6. Add `/chat` route with conversation, messages, prompt input, and generic tool panels.
 7. Add session continuation in the UI.
 8. Add recent sessions/search sidebar.
-9. Add token/context metrics and model/thinking controls.
-10. Add richer specialized tool renderers.
-11. Add optional detached/background run support if browser disconnects become painful.
+9. Make web chat runs independent of the original HTTP request lifetime, persist run/event state, and add replayable reconnects.
+10. Add token/context metrics and model/thinking controls. Status: complete.
+11. Add richer specialized tool renderers. Status: complete for wiki/file/shell/learning tools.
+12. Browser-verify reconnect edge cases and finish responsive polish.
 
 ## Acceptance Criteria
 
@@ -324,7 +380,7 @@ The first useful web chat milestone is complete when:
 The second milestone is complete when:
 
 - Prior chat sessions can be listed, searched, opened, and continued.
+- Browser disconnect, reconnect, cancellation, and final-error surfacing are predictable.
 - Context-window and token metrics render in the chat UI.
 - Shell/file/wiki/learning tools have specialized renderers.
-- Browser disconnect and cancellation behavior is predictable.
 - Web chat and TUI behavior remain semantically aligned because both consume the same agent events.

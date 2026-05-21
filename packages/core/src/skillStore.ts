@@ -1,8 +1,12 @@
-import { readdir, readFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { isNotFoundError, readTextFileOrUndefined, truncateForAgent } from "./fileStore.js";
 import { getStrataPaths } from "./paths.js";
 import { StrataStateError } from "./stateErrors.js";
 import type { JsonObject } from "./types.js";
+
+export type SkillSource = "strata" | "agents";
 
 export interface SkillMetadata extends JsonObject {
   name: string;
@@ -11,6 +15,8 @@ export interface SkillMetadata extends JsonObject {
   description: string;
   status: string;
   triggers: string[];
+  source: SkillSource;
+  disableModelInvocation: boolean;
 }
 
 export interface SkillDocument extends JsonObject {
@@ -21,40 +27,16 @@ export interface SkillDocument extends JsonObject {
 }
 
 const SKILL_FILE = "SKILL.md";
+const AGENTS_SKILLS_DIR = path.join(".agents", "skills");
 
 export async function listSkills(repoRoot: string): Promise<SkillMetadata[]> {
-  const skillsDir = getStrataPaths(repoRoot).skillsDir;
-  let entries;
-  try {
-    entries = await readdir(skillsDir, { withFileTypes: true });
-  } catch (error: unknown) {
-    if (isNotFoundError(error)) {
-      return [];
-    }
-    throw error;
-  }
+  return loadSkills(path.resolve(repoRoot));
+}
 
-  const skills = await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory())
-      .map(async (entry) => {
-        const directory = entry.name;
-        const skillPath = skillDocumentPath(repoRoot, directory);
-        try {
-          const content = await readFile(skillPath, "utf8");
-          return parseSkillMetadata(repoRoot, directory, content);
-        } catch (error: unknown) {
-          if (isNotFoundError(error)) {
-            return undefined;
-          }
-          throw error;
-        }
-      }),
+export async function listPromptVisibleSkills(repoRoot: string): Promise<SkillMetadata[]> {
+  return (await listSkills(path.resolve(repoRoot))).filter(
+    (skill) => !skill.disableModelInvocation,
   );
-
-  return skills
-    .filter((skill): skill is SkillMetadata => skill !== undefined)
-    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export async function readSkill(
@@ -62,15 +44,23 @@ export async function readSkill(
   name: string,
   maxChars = 24_000,
 ): Promise<SkillDocument> {
+  const resolvedRepoRoot = path.resolve(repoRoot);
   assertSkillName(name);
-  const skillPath = skillDocumentPath(repoRoot, name);
-  const content = await readFile(skillPath, "utf8");
-  const truncated = content.length > maxChars;
+  const metadata = (await listSkills(resolvedRepoRoot)).find((skill) => skill.name === name);
+  if (metadata === undefined) {
+    throw new StrataStateError("skill_not_found", `No skill named ${name} was found`);
+  }
+  const skillPath = path.resolve(resolvedRepoRoot, metadata.path);
+  const raw = await readTextFileOrUndefined(skillPath);
+  if (raw === undefined) {
+    throw new StrataStateError("skill_not_found", `Skill file vanished: ${metadata.path}`);
+  }
+  const truncated = truncateForAgent(raw, maxChars);
   return {
-    metadata: parseSkillMetadata(repoRoot, name, content),
-    content: truncated ? content.slice(0, maxChars) : content,
-    chars: content.length,
-    truncated,
+    metadata,
+    content: truncated.content,
+    chars: truncated.chars,
+    truncated: truncated.truncated,
   };
 }
 
@@ -88,18 +78,114 @@ export function assertSkillName(name: string): void {
   }
 }
 
-function parseSkillMetadata(repoRoot: string, directory: string, content: string): SkillMetadata {
+interface SkillEntry {
+  directory: string;
+  filePath: string;
+  source: SkillSource;
+}
+
+interface LoadedSkill {
+  metadata: SkillMetadata;
+  filePath: string;
+}
+
+async function loadSkills(repoRoot: string): Promise<SkillMetadata[]> {
+  const entries = [
+    ...(await discoverSkillEntries(getStrataPaths(repoRoot).skillsDir, "strata")),
+    ...(await discoverSkillEntries(path.join(repoRoot, AGENTS_SKILLS_DIR), "agents")),
+  ];
+  const loaded: LoadedSkill[] = [];
+  const seenFiles = new Set<string>();
+
+  for (const entry of entries) {
+    const canonicalPath = await canonicalFilePath(entry.filePath);
+    if (seenFiles.has(canonicalPath)) {
+      continue;
+    }
+    seenFiles.add(canonicalPath);
+
+    const content = await readTextFileOrUndefined(entry.filePath);
+    if (content === undefined) {
+      continue;
+    }
+    loaded.push({
+      filePath: entry.filePath,
+      metadata: parseSkillMetadata(repoRoot, entry, content),
+    });
+  }
+
+  const byName = new Map<string, LoadedSkill>();
+  for (const skill of loaded) {
+    if (!byName.has(skill.metadata.name)) {
+      byName.set(skill.metadata.name, skill);
+    }
+  }
+
+  return Array.from(byName.values())
+    .map((skill) => skill.metadata)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function discoverSkillEntries(root: string, source: SkillSource): Promise<SkillEntry[]> {
+  if (!(await pathExists(root))) {
+    return [];
+  }
+  return discoverSkillEntriesInDirectory(root, source);
+}
+
+async function discoverSkillEntriesInDirectory(
+  directory: string,
+  source: SkillSource,
+): Promise<SkillEntry[]> {
+  const skillFile = path.join(directory, SKILL_FILE);
+  if (await isFile(skillFile)) {
+    return [
+      {
+        directory: path.basename(directory),
+        filePath: skillFile,
+        source,
+      },
+    ];
+  }
+
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error: unknown) {
+    if (isNotFoundError(error)) {
+      return [];
+    }
+    throw error;
+  }
+
+  const skills: SkillEntry[] = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") {
+      continue;
+    }
+    const childPath = path.join(directory, entry.name);
+    if (!(await isDirectoryEntry(childPath, entry))) {
+      continue;
+    }
+    skills.push(...(await discoverSkillEntriesInDirectory(childPath, source)));
+  }
+  return skills;
+}
+
+function parseSkillMetadata(repoRoot: string, entry: SkillEntry, content: string): SkillMetadata {
   const frontmatter = readFrontmatter(content);
-  const name = frontmatter.name ?? directory;
+  const name = frontmatter.name ?? entry.directory;
   const description = frontmatter.description ?? "";
   const status = frontmatter.status ?? "active";
   return {
     name,
-    directory,
-    path: path.relative(repoRoot, skillDocumentPath(repoRoot, directory)),
+    directory: entry.directory,
+    path: path.relative(repoRoot, entry.filePath),
     description,
     status,
     triggers: frontmatter.triggers ?? [],
+    source: entry.source,
+    disableModelInvocation: frontmatter.disableModelInvocation ?? false,
   };
 }
 
@@ -108,6 +194,7 @@ interface ParsedFrontmatter {
   description?: string;
   status?: string;
   triggers?: string[];
+  disableModelInvocation?: boolean;
 }
 
 function readFrontmatter(content: string): ParsedFrontmatter {
@@ -156,6 +243,8 @@ function readFrontmatter(content: string): ParsedFrontmatter {
       parsed.description = value;
     } else if (key === "status") {
       parsed.status = value;
+    } else if (key === "disable-model-invocation") {
+      parsed.disableModelInvocation = value.toLowerCase() === "true";
     }
   }
 
@@ -172,11 +261,50 @@ function unquote(value: string): string {
   return value;
 }
 
-function isNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof error.code === "string" &&
-    error.code === "ENOENT"
-  );
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error: unknown) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function isFile(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch (error: unknown) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function isDirectoryEntry(filePath: string, entry: Dirent): Promise<boolean> {
+  if (entry.isDirectory()) {
+    return true;
+  }
+  if (!entry.isSymbolicLink()) {
+    return false;
+  }
+  try {
+    return (await stat(filePath)).isDirectory();
+  } catch (error: unknown) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function canonicalFilePath(filePath: string): Promise<string> {
+  try {
+    return await realpath(filePath);
+  } catch {
+    return filePath;
+  }
 }

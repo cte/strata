@@ -623,6 +623,8 @@ function isLowRisk(risk: ReflectionRisk): boolean {
 function skillSummary(skill: SkillMetadata): JsonObject {
   return {
     name: skill.name,
+    source: skill.source,
+    path: skill.path,
     description: skill.description,
     status: skill.status,
     triggers: skill.triggers,

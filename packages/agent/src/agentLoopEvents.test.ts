@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgentLoopEvents } from "./agentLoop.js";
@@ -145,7 +145,7 @@ describe("runAgentLoopEvents", () => {
         name: "abort-test",
         async complete(request: ModelRequest): Promise<ModelResponse> {
           if (request.signal !== undefined && !request.signal.aborted) {
-            controller.abort();
+            controller.abort({ source: "test.abort", message: "unit test cancellation" });
           }
           return {
             content: "",
@@ -174,8 +174,35 @@ describe("runAgentLoopEvents", () => {
       expect(completion?.type === "agent.completed" && completion.result.stoppedReason).toBe(
         "cancelled",
       );
+      if (completion?.type !== "agent.completed") {
+        throw new Error("expected completion event");
+      }
+      const traceEvents = await readTraceEvents(repoRoot, completion.result.sessionId);
+      const stopped = traceEvents.find((event) => event.type === "agent.loop.stopped");
+      expect(stopped?.payload).toMatchObject({
+        reason: "cancelled",
+        cancellation: {
+          source: "test.abort",
+          message: "unit test cancellation",
+        },
+      });
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
 });
+
+async function readTraceEvents(
+  repoRoot: string,
+  sessionId: string,
+): Promise<Array<{ type: string; payload: unknown }>> {
+  const content = await readFile(
+    path.join(repoRoot, ".strata", "traces", `${sessionId}.jsonl`),
+    "utf8",
+  );
+  return content
+    .trim()
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as { type: string; payload: unknown });
+}

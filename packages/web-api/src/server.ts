@@ -4,6 +4,14 @@ import { ensureRuntimeDirs, getStrataPaths } from "@strata/core";
 import { loadDotenv } from "@strata/ingest/common";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import {
+  ChatRunConflictError,
+  type ChatRunEvent,
+  type ChatRunEventEnvelope,
+  type ChatStreamCloseReason,
+  type StartChatRunInput,
+  type StartedChatRun,
+} from "./chat.js";
 import { finishNotionMcpAuth } from "./notionMcp.js";
 import {
   connectorSummaries,
@@ -15,6 +23,8 @@ import { appRouter } from "./trpc.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4174;
+const WEB_API_IDLE_TIMEOUT_SECONDS = 255;
+const CHAT_STREAM_HEARTBEAT_MS = 5_000;
 
 export function createWebApiApp(options: WebApiOptions = {}): Hono {
   const app = new Hono();
@@ -53,6 +63,68 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
     }
   });
 
+  app.post("/api/chat/runs", async (c) => {
+    let input: StartChatRunInput;
+    try {
+      input = await parseStartChatRunInput(c.req.raw);
+    } catch (error: unknown) {
+      return c.json(errorResponse("bad_request", messageFromError(error)), 400);
+    }
+
+    try {
+      const run = await services.chat.startRun(input);
+      return streamChatRun(
+        run,
+        c.req.raw.signal,
+        services.chat,
+        positiveNumber(options.chatStreamHeartbeatMs, CHAT_STREAM_HEARTBEAT_MS),
+      );
+    } catch (error: unknown) {
+      if (error instanceof ChatRunConflictError) {
+        return c.json(
+          {
+            error: {
+              code: "chat_run_conflict",
+              message: error.message,
+              runId: error.runId,
+              sessionId: error.sessionId,
+            },
+          },
+          409,
+        );
+      }
+      const message = messageFromError(error);
+      const status = message === "Chat message is required." ? 400 : 500;
+      return c.json(
+        errorResponse(status === 400 ? "bad_request" : "chat_run_failed", message),
+        status,
+      );
+    }
+  });
+
+  app.post("/api/chat/runs/:runId/cancel", async (c) => {
+    const runId = c.req.param("runId");
+    if (!(await services.chat.cancelRun(runId))) {
+      return c.json(errorResponse("not_found", `No active chat run: ${runId}`), 404);
+    }
+    return c.json({ cancelled: true, runId });
+  });
+
+  app.get("/api/chat/runs/:runId/events", (c) => {
+    const runId = c.req.param("runId");
+    const events = services.chat.subscribeRunEvents(runId, lastEventId(c.req.raw));
+    if (events === undefined) {
+      return c.json(errorResponse("not_found", `No chat run: ${runId}`), 404);
+    }
+    return streamChatRunEvents(
+      runId,
+      events,
+      c.req.raw.signal,
+      services.chat,
+      positiveNumber(options.chatStreamHeartbeatMs, CHAT_STREAM_HEARTBEAT_MS),
+    );
+  });
+
   app.use(
     "/api/trpc/*",
     trpcServer({
@@ -83,6 +155,7 @@ export async function startWebApiServer(
   const server = Bun.serve({
     hostname: host,
     port,
+    idleTimeout: WEB_API_IDLE_TIMEOUT_SECONDS,
     fetch: createWebApiHandler({ ...options, repoRoot: root }),
   });
   console.log(`Strata web API listening on http://${server.hostname}:${server.port}`);
@@ -92,6 +165,17 @@ export async function startWebApiServer(
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function positiveNumber(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function lastEventId(request: Request): number {
+  const url = new URL(request.url);
+  const raw = url.searchParams.get("after") ?? request.headers.get("last-event-id") ?? "";
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 if (import.meta.main) {
@@ -123,4 +207,183 @@ function callbackRedirectHtml(opts: { status: "ok" | "error"; message: string })
 
 function escapeAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+const CHAT_PROVIDERS = new Set(["openai-codex", "openai-compatible"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+
+async function parseStartChatRunInput(request: Request): Promise<StartChatRunInput> {
+  const value = await request.json().catch(() => {
+    throw new Error("Request body must be valid JSON.");
+  });
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Request body must be an object.");
+  }
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.message !== "string" || raw.message.trim() === "") {
+    throw new Error("Chat message is required.");
+  }
+
+  const input: StartChatRunInput = { message: raw.message };
+  if (raw.continueSessionId !== undefined) {
+    if (typeof raw.continueSessionId !== "string" || raw.continueSessionId.trim() === "") {
+      throw new Error("continueSessionId must be a non-empty string.");
+    }
+    input.continueSessionId = raw.continueSessionId;
+  }
+  if (raw.provider !== undefined) {
+    if (typeof raw.provider !== "string" || !CHAT_PROVIDERS.has(raw.provider)) {
+      throw new Error("provider must be openai-codex or openai-compatible.");
+    }
+    input.provider = raw.provider as NonNullable<StartChatRunInput["provider"]>;
+  }
+  if (raw.model !== undefined) {
+    if (typeof raw.model !== "string" || raw.model.trim() === "") {
+      throw new Error("model must be a non-empty string.");
+    }
+    input.model = raw.model;
+  }
+  if (raw.reasoningEffort !== undefined) {
+    if (typeof raw.reasoningEffort !== "string" || !THINKING_LEVELS.has(raw.reasoningEffort)) {
+      throw new Error("reasoningEffort is invalid.");
+    }
+    input.reasoningEffort = raw.reasoningEffort as NonNullable<
+      StartChatRunInput["reasoningEffort"]
+    >;
+  }
+  if (raw.attachments !== undefined) {
+    if (!Array.isArray(raw.attachments)) {
+      throw new Error("attachments must be an array.");
+    }
+    input.attachments = raw.attachments.map(parseAttachment);
+  }
+  return input;
+}
+
+function parseAttachment(value: unknown): NonNullable<StartChatRunInput["attachments"]>[number] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("attachments must contain objects.");
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.kind !== "image") {
+    throw new Error("Only image attachments are supported.");
+  }
+  if (typeof raw.mimeType !== "string" || raw.mimeType.trim() === "") {
+    throw new Error("attachment mimeType must be a non-empty string.");
+  }
+  if (typeof raw.dataBase64 !== "string" || raw.dataBase64.trim() === "") {
+    throw new Error("attachment dataBase64 must be a non-empty string.");
+  }
+  const attachment: NonNullable<StartChatRunInput["attachments"]>[number] = {
+    kind: "image",
+    mimeType: raw.mimeType,
+    dataBase64: raw.dataBase64,
+  };
+  if (raw.name !== undefined) {
+    if (typeof raw.name !== "string") {
+      throw new Error("attachment name must be a string.");
+    }
+    attachment.name = raw.name;
+  }
+  return attachment;
+}
+
+function streamChatRun(
+  run: StartedChatRun,
+  requestSignal: AbortSignal,
+  chat: ReturnType<typeof createWebApiServices>["chat"],
+  heartbeatMs: number,
+): Response {
+  return streamChatRunEvents(run.runId, run.events, requestSignal, chat, heartbeatMs);
+}
+
+function streamChatRunEvents(
+  runId: string,
+  events: AsyncIterable<ChatRunEventEnvelope>,
+  requestSignal: AbortSignal,
+  chat: ReturnType<typeof createWebApiServices>["chat"],
+  heartbeatMs: number,
+): Response {
+  const encoder = new TextEncoder();
+  let disconnected = false;
+  let iterator: AsyncIterator<ChatRunEventEnvelope> | undefined;
+  const closeStream = async (reason: ChatStreamCloseReason) => {
+    if (disconnected) {
+      return;
+    }
+    disconnected = true;
+    await chat.recordStreamClosed(runId, reason);
+    await iterator?.return?.();
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const abortListener = () => void closeStream("request_aborted");
+      requestSignal.addEventListener("abort", abortListener, { once: true });
+      iterator = events[Symbol.asyncIterator]();
+      const heartbeat = setInterval(() => {
+        if (disconnected) {
+          return;
+        }
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          void closeStream("request_aborted");
+        }
+      }, heartbeatMs);
+      try {
+        while (!disconnected) {
+          const next = await iterator.next();
+          if (next.done === true) {
+            break;
+          }
+          controller.enqueue(encoder.encode(formatSseEvent(next.value)));
+        }
+      } catch (error: unknown) {
+        if (!disconnected && !requestSignal.aborted) {
+          controller.enqueue(
+            encoder.encode(formatSseEvent({ id: 0, event: agentFailedEvent(error) })),
+          );
+        }
+      } finally {
+        clearInterval(heartbeat);
+        requestSignal.removeEventListener("abort", abortListener);
+        if (!disconnected) {
+          controller.close();
+        }
+      }
+    },
+    cancel: () => closeStream("reader_cancelled"),
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+function formatSseEvent(envelope: ChatRunEventEnvelope): string {
+  return `id: ${envelope.id}\nevent: ${envelope.event.type}\ndata: ${JSON.stringify(envelope.event)}\n\n`;
+}
+
+function agentFailedEvent(error: unknown): ChatRunEvent {
+  return {
+    type: "agent.failed",
+    message: messageFromError(error),
+  };
+}
+
+function errorResponse(
+  code: string,
+  message: string,
+): { error: { code: string; message: string } } {
+  return { error: { code, message } };
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

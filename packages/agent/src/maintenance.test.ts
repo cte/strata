@@ -76,4 +76,41 @@ describe("maintenance jobs", () => {
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
+
+  test("skills inventory counts .agents skills without requiring Strata-specific trigger metadata", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-maintenance-"));
+    try {
+      const strataSkillDir = path.join(repoRoot, ".strata", "skills", "query-wiki");
+      await mkdir(strataSkillDir, { recursive: true });
+      await writeFile(
+        path.join(strataSkillDir, "SKILL.md"),
+        "---\nname: query-wiki\ndescription: Query wiki.\n---\n# Query Wiki\n",
+        "utf8",
+      );
+      const agentSkillDir = path.join(repoRoot, ".agents", "skills", "review-code");
+      await mkdir(agentSkillDir, { recursive: true });
+      await writeFile(
+        path.join(agentSkillDir, "SKILL.md"),
+        "---\nname: review-code\ndescription: Review code.\n---\n# Review Code\n",
+        "utf8",
+      );
+
+      const result = await runMaintenanceJob({ jobName: "skills.inventory", repoRoot });
+
+      expect(result.status).toBe("ok");
+      expect(result.metrics).toMatchObject({
+        skills: 2,
+        strataSkills: 1,
+        agentSkills: 1,
+      });
+      expect(
+        result.findings.filter((finding) => finding.title === "Skill missing triggers"),
+      ).toHaveLength(1);
+      expect(result.findings[0]).toMatchObject({
+        path: path.join(".strata", "skills", "query-wiki", "SKILL.md"),
+      });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
 });

@@ -2,7 +2,7 @@
 
 Status: canonical top-level planning document.
 
-This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [tui-plan.md](./tui-plan.md), [web-chat-plan.md](./web-chat-plan.md), and [web-control-plane-plan.md](./web-control-plane-plan.md). Those documents contain implementation details. This document defines what Strata is, what we are building first, and how the pieces fit together.
+This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [tui-plan.md](./tui-plan.md), [web-chat-plan.md](./web-chat-plan.md), [web-feature-parity-plan.md](./web-feature-parity-plan.md), [web-control-plane-plan.md](./web-control-plane-plan.md), and [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md). Those documents contain implementation details. This document defines what Strata is, what we are building first, and how the pieces fit together.
 
 Current implementation status: [status.md](./status.md).
 
@@ -82,6 +82,14 @@ The web app must call the same connector, scheduler, session, and proposal APIs 
 
 Detailed plan: [web-control-plane-plan.md](./web-control-plane-plan.md).
 
+### 6. External Tool Packs And MCP
+
+External third-party agent tools, including hosted MCP servers, should be packaged separately from the core harness. The agent loop should remain protocol-agnostic: integration packages discover or define external capabilities, translate them into normal Strata `ToolDefinition`s, and register them into the shared `ToolRegistry`.
+
+The first target is a Notion MCP tool pack that reuses the current Notion MCP OAuth work, exposes selected read-oriented Notion MCP tools as `mcp.notion.*`, and keeps deterministic Notion raw snapshot ingestion separate until MCP can meet the same source-ID, retry, durability, and traceability requirements.
+
+Detailed plan: [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md).
+
 ## Learning Loops
 
 Learning is not model training. In Strata, learning means improving durable local artifacts that future sessions can use.
@@ -116,6 +124,7 @@ We should copy good implementation ideas from Hermes and Pi. Pi is especially re
 - Bun/TypeScript-first: all new first-party implementation should live in the current Bun workspace.
 - Explicit tools: the agent acts through named, auditable tools, not hidden side effects.
 - Shared agent runtime: CLI, TUI, and web chat should call the same agent loop and tool registry rather than implementing separate behavior.
+- Integration isolation: third-party agent tools such as MCP servers should live in explicit integration/tool-pack packages that register ordinary Strata tools; the agent loop should not import provider-specific SDKs.
 - Shared connector contracts: CLI, TUI, scheduler, and web surfaces should call the same connector APIs.
 - Safe writes: raw sources are immutable, broad writes are guarded, and risky changes should be staged for review.
 - Durable traces: completed work should be inspectable and searchable later.
@@ -139,8 +148,10 @@ The next implementation sequence is:
 7. Add scheduled maintenance jobs for wiki hygiene, memory review, skill curation, stale actions, and index refreshes.
 8. Continue improving the TUI around the richer agent runtime.
 9. Return to source ingestion and wiki automation once the harness can maintain the wiki with observable tools and learning loops. Status: Notion, Granola, and Slack raw snapshots now run through the shared connector runner; Slack also has initial checkpointed sync and Socket Mode tailing.
-10. Add a browser chat interface over the shared agent runtime so agent sessions can be driven from `apps/web` while Slack ingestion and connector validation continue in the background. Status: planned.
-11. After connector contracts and at least one raw-to-wiki ingestion path are stable, deepen the local web control plane for connector setup, dry-runs, schedules, ingest history, and proposal review. Status: initial skeleton present with connector list, Notion operations, Granola key setup, Slack status, and Notion MCP auth.
+10. Add a browser chat interface over the shared agent runtime so agent sessions can be driven from `apps/web` while Slack ingestion and connector validation continue in the background. Status: foundation live-verified; backend streaming/cancel endpoints, durable web chat run/event storage, replayable SSE reconnects, chat metadata procedures, and the `/chat` route are present, with tool-call rendering, session continuation, persistence, cancellation, file `@`-mention autocomplete, model/reasoning controls, slash commands, prompt history, context/token metrics, and learning-tool renderers verified in the browser. Core specialized renderers now cover wiki search/read, file read/edit, wiki patch, shell command, memory, todo, and skills tools. Next work is reconnect-edge-case verification and responsive polish.
+11. Bring the web composer up to TUI feature parity: file `@`-mention autocomplete, model picker, slash commands, and prompt history. Status: complete in [web-feature-parity-plan.md](./web-feature-parity-plan.md); `listModels` lives in `@strata/agent`, repo file search lives in `@strata/core` as `findRepoFiles`, `chat.files.list` and `chat.models.list` expose those shared data sources through tRPC, `chat.sessions.fork` supports `/fork`, and the web composer has the shared autocomplete primitive plus file mentions, slash commands, persisted model/reasoning selection, and local prompt history.
+12. After connector contracts and at least one raw-to-wiki ingestion path are stable, deepen the local web control plane for connector setup, dry-runs, schedules, ingest history, and proposal review. Status: initial skeleton present with connector list, Notion operations, Granola key setup, Slack status, and Notion MCP auth.
+13. Add an external tool-pack layer for optional third-party agent tools, starting with Notion MCP tools. Status: planned in [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md); current code has Notion MCP OAuth/list-tools in `packages/web-api`, but no agent-facing MCP tool-pack registration yet.
 
 ## Reference Implementations
 
@@ -172,7 +183,9 @@ Scheduled maintenance should be treated as a first-class product feature. The po
 - [agent-harness-plan.md](./agent-harness-plan.md): model loop, tools, memory, skills, traces, and learning architecture.
 - [tui-plan.md](./tui-plan.md): terminal UI architecture and implementation direction.
 - [web-chat-plan.md](./web-chat-plan.md): local browser chat over the shared agent loop, using `packages/web-api` streaming endpoints and AI Elements UI components.
+- [web-feature-parity-plan.md](./web-feature-parity-plan.md): porting TUI composer features (file `@`-mentions, model picker, slash commands, prompt history) to the web chat by sharing data sources between the two surfaces.
 - [web-control-plane-plan.md](./web-control-plane-plan.md): local web UI for connector setup, operational status, scheduling, and proposal review.
+- [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md): external third-party tool-pack architecture and Notion MCP agent-tool plan.
 - [slack-connector.md](./slack-connector.md): Slack backfill, checkpointing, Socket Mode, and app setup notes.
 
 When the plans conflict, update this document first, then reconcile the lower-level plan.

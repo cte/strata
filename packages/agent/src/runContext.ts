@@ -1,7 +1,9 @@
 import {
+  type AgentInstructionFile,
   type JsonObject,
-  listSkills,
+  listPromptVisibleSkills,
   listTodos,
+  loadAgentInstructionFiles,
   type MemoryDocument,
   readMemoryDocuments,
   type SkillMetadata,
@@ -30,15 +32,17 @@ export async function buildRunContext(options: BuildRunContextOptions): Promise<
   const maxMemoryChars = options.maxMemoryChars ?? DEFAULT_MAX_MEMORY_CHARS;
   const maxTodos = options.maxTodos ?? DEFAULT_MAX_TODOS;
   const maxSkills = options.maxSkills ?? DEFAULT_MAX_SKILLS;
-  const [memory, todos, skills] = await Promise.all([
+  const [agentInstructions, memory, todos, skills] = await Promise.all([
+    loadAgentInstructionFiles(options.repoRoot),
     readMemoryDocuments(options.repoRoot, "all", maxMemoryChars),
     listTodos(options.repoRoot, false),
-    listSkills(options.repoRoot),
+    listPromptVisibleSkills(options.repoRoot),
   ]);
 
   const activeTodos = todos.slice(0, maxTodos);
   const skillIndex = skills.slice(0, maxSkills);
   const systemContext: JsonObject = {
+    agentInstructions: agentInstructions.map(agentInstructionToContext),
     memory: memory.map(memoryDocumentToContext),
     activeTodos: activeTodos.map(todoToContext),
     skills: skillIndex.map(skillToContext),
@@ -52,7 +56,10 @@ export async function buildRunContext(options: BuildRunContextOptions): Promise<
     systemContext,
     messages: [
       { role: "system", content: createBaseSystemPrompt() },
-      { role: "system", content: formatSystemContext(memory, activeTodos, skillIndex) },
+      {
+        role: "system",
+        content: formatSystemContext(agentInstructions, memory, activeTodos, skillIndex),
+      },
       { role: "user", content: options.question },
     ],
   };
@@ -74,12 +81,14 @@ function createBaseSystemPrompt(): string {
 }
 
 function formatSystemContext(
+  agentInstructions: AgentInstructionFile[],
   memory: MemoryDocument[],
   activeTodos: TodoItem[],
   skills: SkillMetadata[],
 ): string {
   return [
     "Strata durable context for this run.",
+    ...formatAgentInstructionsSection(agentInstructions),
     "",
     "## Memory",
     formatMemory(memory),
@@ -92,6 +101,22 @@ function formatSystemContext(
     "",
     "Call skills.read for full skill content when a listed skill applies.",
   ].join("\n");
+}
+
+function formatAgentInstructionsSection(agentInstructions: AgentInstructionFile[]): string[] {
+  if (agentInstructions.length === 0) {
+    return [];
+  }
+  return ["", "## Agent Instructions", formatAgentInstructions(agentInstructions)];
+}
+
+function formatAgentInstructions(agentInstructions: AgentInstructionFile[]): string {
+  return agentInstructions
+    .map((file) => {
+      const suffix = file.truncated ? "\n\n[truncated]" : "";
+      return `### ${file.path}\n${file.content.trim()}${suffix}`;
+    })
+    .join("\n\n");
 }
 
 function formatMemory(memory: MemoryDocument[]): string {
@@ -170,5 +195,16 @@ function skillToContext(skill: SkillMetadata): JsonObject {
     description: skill.description,
     status: skill.status,
     triggers: skill.triggers,
+    source: skill.source,
+    disableModelInvocation: skill.disableModelInvocation,
+  };
+}
+
+function agentInstructionToContext(file: AgentInstructionFile): JsonObject {
+  return {
+    path: file.path,
+    chars: file.chars,
+    truncated: file.truncated,
+    content: file.content,
   };
 }

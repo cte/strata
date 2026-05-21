@@ -375,6 +375,9 @@ async function runSkillsInventoryJob(
         }),
       );
     }
+    if (skill.source !== "strata") {
+      continue;
+    }
     if (skill.triggers.length === 0) {
       findings.push(
         finding("info", "Skill missing triggers", `${skill.name} has no trigger phrases.`, {
@@ -393,6 +396,8 @@ async function runSkillsInventoryJob(
 
   return outputFromFindings("skills.inventory", findings, {
     skills: skills.length,
+    strataSkills: skills.filter((skill) => skill.source === "strata").length,
+    agentSkills: skills.filter((skill) => skill.source === "agents").length,
     activeSkills: skills.filter((skill) => skill.status === "active").length,
   });
 }

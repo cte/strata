@@ -5,6 +5,7 @@ import path from "node:path";
 import { SessionStore } from "@strata/core";
 import { createDefaultToolRegistry } from "@strata/tools";
 import { runAgentLoop } from "./agentLoop.js";
+import { ModelAdapterError } from "./model.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
 class SequenceModelAdapter implements ModelAdapter {
@@ -25,6 +26,28 @@ class SequenceModelAdapter implements ModelAdapter {
       throw new Error("No fake model response configured");
     }
     return response;
+  }
+}
+
+class FlakyModelAdapter implements ModelAdapter {
+  readonly name = "flaky-test";
+  readonly requests: ModelRequest[] = [];
+  private index = 0;
+
+  constructor(private readonly outcomes: Array<ModelResponse | Error>) {}
+
+  async complete(request: ModelRequest): Promise<ModelResponse> {
+    const { onAssistantDelta: _omit, ...rest } = request;
+    this.requests.push(structuredClone(rest));
+    const outcome = this.outcomes[this.index];
+    this.index += 1;
+    if (outcome === undefined) {
+      throw new Error("No fake model outcome configured");
+    }
+    if (outcome instanceof Error) {
+      throw outcome;
+    }
+    return outcome;
   }
 }
 
@@ -78,6 +101,92 @@ describe("runAgentLoop", () => {
       expect(trace).toContain("model.response");
       expect(trace).toContain("tool.call");
       expect(trace).toContain("tool.result");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("retries transient model transport failures before failing the run", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-retry-"));
+    try {
+      const model = new FlakyModelAdapter([
+        new ModelAdapterError(
+          "codex_http_error",
+          "Codex request failed with HTTP 503: upstream connect error",
+        ),
+        new ModelAdapterError(
+          "codex_http_error",
+          "Codex request failed with HTTP 502: upstream reset",
+        ),
+        { content: "Recovered.", finishReason: "stop", toolCalls: [] },
+      ]);
+
+      const result = await runAgentLoop({
+        question: "Can you recover?",
+        model,
+        repoRoot,
+        modelRetryPolicy: { maxAttempts: 3, initialDelayMs: 0, maxDelayMs: 0 },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(result.finalAnswer).toBe("Recovered.");
+      expect(model.requests).toHaveLength(3);
+
+      const trace = await readFile(
+        path.join(repoRoot, ".strata", "traces", `${result.sessionId}.jsonl`),
+        "utf8",
+      );
+      expect(trace.match(/"type":"model.retry"/g) ?? []).toHaveLength(2);
+      expect(trace).not.toContain('"type":"agent.loop.error"');
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("does not retry non-transient model errors", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-no-retry-"));
+    try {
+      const model = new FlakyModelAdapter([
+        new ModelAdapterError(
+          "codex_http_error",
+          "Codex request failed with HTTP 401: unauthorized",
+        ),
+        { content: "Should not run.", finishReason: "stop", toolCalls: [] },
+      ]);
+
+      const result = await runAgentLoop({
+        question: "Can you recover?",
+        model,
+        repoRoot,
+        modelRetryPolicy: { maxAttempts: 3, initialDelayMs: 0, maxDelayMs: 0 },
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.stoppedReason).toBe("model_error");
+      expect(model.requests).toHaveLength(1);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("retries Pi-style transient network error text", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-network-retry-"));
+    try {
+      const model = new FlakyModelAdapter([
+        new Error("Network connection lost."),
+        { content: "Recovered after reconnect.", finishReason: "stop", toolCalls: [] },
+      ]);
+
+      const result = await runAgentLoop({
+        question: "Can you recover?",
+        model,
+        repoRoot,
+        modelRetryPolicy: { maxAttempts: 2, initialDelayMs: 0, maxDelayMs: 0 },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(result.finalAnswer).toBe("Recovered after reconnect.");
+      expect(model.requests).toHaveLength(2);
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

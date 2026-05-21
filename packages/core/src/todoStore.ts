@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { readJsonFileOrUndefined, writeJsonFile } from "./fileStore.js";
 import { getStrataPaths } from "./paths.js";
 import { StrataStateError } from "./stateErrors.js";
 import type { JsonObject } from "./types.js";
@@ -45,24 +45,18 @@ const TODO_FILE = "todos.json";
 
 export async function readTodoState(repoRoot: string): Promise<TodoState> {
   const file = todoStatePath(repoRoot);
-  try {
-    const parsed = JSON.parse(await readFile(file, "utf8")) as Partial<TodoState>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.items)) {
-      throw new StrataStateError("todo_state_invalid", `Invalid todo state file: ${file}`);
-    }
-    return { version: 1, items: parsed.items as TodoItem[] };
-  } catch (error: unknown) {
-    if (isNotFoundError(error)) {
-      return { version: 1, items: [] };
-    }
-    throw error;
+  const parsed = await readJsonFileOrUndefined<Partial<TodoState>>(file);
+  if (parsed === undefined) {
+    return { version: 1, items: [] };
   }
+  if (parsed.version !== 1 || !Array.isArray(parsed.items)) {
+    throw new StrataStateError("todo_state_invalid", `Invalid todo state file: ${file}`);
+  }
+  return { version: 1, items: parsed.items as TodoItem[] };
 }
 
 export async function writeTodoState(repoRoot: string, state: TodoState): Promise<void> {
-  const file = todoStatePath(repoRoot);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await writeJsonFile(todoStatePath(repoRoot), state);
 }
 
 export async function listTodos(repoRoot: string, includeDone = false): Promise<TodoItem[]> {
@@ -146,13 +140,4 @@ export function todoStatePath(repoRoot: string): string {
 
 function createTodoId(): string {
   return `todo_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof error.code === "string" &&
-    error.code === "ENOENT"
-  );
 }

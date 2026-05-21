@@ -10,6 +10,7 @@
     "./chatgpt-oauth": "./src/chatgptOAuth.ts",
     "./maintenance": "./src/maintenance.ts",
     "./model": "./src/model.ts",
+    "./model-factory": "./src/modelFactory.ts",
     "./openai-codex": "./src/openaiCodex.ts",
     "./openai-compatible": "./src/openaiCompatible.ts",
     "./provider-tool-names": "./src/providerToolNames.ts",

@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { nowIso } from "./events.js";
+import { readTextFileOrUndefined, writeTextFile } from "./fileStore.js";
 import { getStrataPaths } from "./paths.js";
 import type { JsonObject } from "./types.js";
 
@@ -33,9 +33,7 @@ export async function writeLearningProposal(
   const file = learningProposalPath(repoRoot, input.sessionId, input.kind, input.title);
   const existingCreated = await readExistingCreated(file);
   const created = existingCreated ?? nowIso();
-  const content = formatLearningProposal(input, created);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, content, "utf8");
+  await writeTextFile(file, formatLearningProposal(input, created));
   return {
     kind: input.kind,
     sessionId: input.sessionId,
@@ -104,16 +102,12 @@ function formatEvidence(evidence: string[]): string {
 }
 
 async function readExistingCreated(file: string): Promise<string | undefined> {
-  try {
-    const content = await readFile(file, "utf8");
-    const match = /^created:\s*(.+)$/m.exec(content);
-    return match?.[1]?.trim();
-  } catch (error: unknown) {
-    if (isNotFoundError(error)) {
-      return undefined;
-    }
-    throw error;
+  const content = await readTextFileOrUndefined(file);
+  if (content === undefined) {
+    return undefined;
   }
+  const match = /^created:\s*(.+)$/m.exec(content);
+  return match?.[1]?.trim();
 }
 
 function slugify(value: string): string {
@@ -124,13 +118,4 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return slug === "" ? "proposal" : slug;
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof error.code === "string" &&
-    error.code === "ENOENT"
-  );
 }

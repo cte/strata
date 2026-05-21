@@ -5,18 +5,31 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./agent-instructions": "./src/agentInstructions.ts",
     "./events": "./src/events.ts",
+    "./file-store": "./src/fileStore.ts",
     "./memory-store": "./src/memoryStore.ts",
     "./paths": "./src/paths.ts",
     "./proposal-store": "./src/proposalStore.ts",
+    "./repo-files": "./src/repoFiles.ts",
     "./session-store": "./src/sessionStore.ts",
     "./skill-store": "./src/skillStore.ts",
     "./state-errors": "./src/stateErrors.ts",
     "./todo-store": "./src/todoStore.ts",
+    "./token-usage": "./src/tokenUsage.ts",
     "./trace-store": "./src/traceStore.ts",
     "./types": "./src/types.ts"
   },
   "scripts": {
-    "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json"
+    "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",
+    "db:generate": "bunx drizzle-kit generate",
+    "db:push": "bunx drizzle-kit push",
+    "db:check": "bunx drizzle-kit check"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10"
   }
 }

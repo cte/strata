@@ -5,12 +5,15 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./chat": "./src/chat.ts",
+    "./chat-events": "./src/chatEvents.ts",
     "./notion-mcp": "./src/notionMcp.ts",
     "./services": "./src/services.ts",
     "./server": "./src/server.ts",
     "./trpc": "./src/trpc.ts"
   },
   "dependencies": {
+    "@strata/agent": "workspace:*",
     "@strata/core": "workspace:*",
     "@strata/ingest": "workspace:*",
     "@hono/trpc-server": "^0.4.2",

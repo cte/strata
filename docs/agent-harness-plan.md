@@ -253,6 +253,8 @@ The registry must:
 - Record start/end/error events.
 - Enforce policy checks before writes.
 
+External third-party tools should use the same registry rather than adding protocol-specific branches to the agent loop. Optional integrations, including MCP servers, should live in integration/tool-pack packages that register ordinary `ToolDefinition`s into a registry constructed by CLI/TUI/web callers. The detailed plan is [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md).
+
 ### 6.5 Policy Layer
 
 `src/harness/policy.ts` owns guardrails.
@@ -336,7 +338,7 @@ type PolicyDecision =
 
 `learning.readSkills`
 
-- Lists `.strata/skills/*/SKILL.md` metadata.
+- Lists skill metadata from Strata-owned `.strata/skills/*/SKILL.md` and compatibility `.agents/skills/**/SKILL.md` sources.
 
 `learning.viewSkill`
 
@@ -634,6 +636,8 @@ Skill shape:
   scripts/
 ```
 
+Strata-owned skills live under `.strata/skills`. Project agent skills under `.agents/skills/**/SKILL.md` are also discovered for compatibility and explicit use, but reflection/proposal flows should treat `.strata/skills` as the writable procedural-memory store.
+
 `SKILL.md` frontmatter:
 
 ```yaml
@@ -645,6 +649,7 @@ triggers:
   - summarize meetings
   - extract actions and decisions from transcripts
 status: active
+disable-model-invocation: false
 ---
 ```
 
@@ -669,7 +674,8 @@ Initial seed skills:
 
 Runtime behavior:
 
-- Before each run, build a compact skill index from names/descriptions/triggers.
+- Before each run, load root `AGENTS.md` plus a compact skill index from names/descriptions/triggers.
+- Skills with `disable-model-invocation: true` remain readable/invokable explicitly but are omitted from the automatic prompt index.
 - The model may call `learning.viewSkill` to load full content.
 - Explicit CLI commands can preload skills.
 - Loaded skills are recorded in the trace.

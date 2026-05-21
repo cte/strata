@@ -163,6 +163,89 @@ describe("OpenAICodexModelAdapter", () => {
     expect(parts[1]?.type).toBe("input_image");
     expect(parts[1]?.image_url).toBe("data:image/png;base64,AAAA");
   });
+
+  test("retries transient HTTP failures and honors retry-after headers", async () => {
+    let calls = 0;
+    const fetchImpl = Object.assign(
+      async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response("upstream connect error", {
+            status: 503,
+            headers: { "retry-after-ms": "0" },
+          });
+        }
+        if (calls === 2) {
+          return new Response("reset before headers", {
+            status: 502,
+            headers: { "retry-after": "0" },
+          });
+        }
+        return new Response(
+          [
+            sse({ type: "response.output_text.delta", delta: "Recovered" }),
+            sse({
+              type: "response.completed",
+              response: { id: "resp_retry", status: "completed" },
+            }),
+          ].join(""),
+          { status: 200 },
+        );
+      },
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+
+    const adapter = new OpenAICodexModelAdapter({
+      credentials: fakeCredentials(),
+      model: "gpt-5.5",
+      fetchImpl,
+    });
+
+    const startedAt = Date.now();
+    const response = await adapter.complete({
+      messages: [{ role: "user", content: "recover" }],
+      tools: [],
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(calls).toBe(3);
+    expect(response.content).toBe("Recovered");
+  });
+
+  test("retries raw fetch failures before surfacing network errors", async () => {
+    let calls = 0;
+    const fetchImpl = Object.assign(
+      async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new TypeError("fetch failed");
+        }
+        return new Response(
+          sse({
+            type: "response.completed",
+            response: { id: "resp_network", status: "completed" },
+          }),
+          { status: 200 },
+        );
+      },
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+
+    const adapter = new OpenAICodexModelAdapter({
+      credentials: fakeCredentials(),
+      model: "gpt-5.5",
+      fetchImpl,
+      retryPolicy: { initialDelayMs: 0 },
+    });
+
+    const response = await adapter.complete({
+      messages: [{ role: "user", content: "recover" }],
+      tools: [],
+    });
+
+    expect(calls).toBe(2);
+    expect(response.finishReason).toBe("completed");
+  });
 });
 
 function sse(value: JsonObject): string {

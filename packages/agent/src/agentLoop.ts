@@ -2,11 +2,13 @@ import {
   getStrataPaths,
   type JsonObject,
   type JsonValue,
+  normalizeModelUsage,
   type SessionRecord,
   SessionStore,
 } from "@strata/core";
 import type { ToolExecutionResult } from "@strata/tools";
 import { createDefaultToolRegistry, type ToolRegistry } from "@strata/tools";
+import { ModelAdapterError } from "./model.js";
 import { buildRunContext } from "./runContext.js";
 import type {
   AgentMessage,
@@ -15,6 +17,7 @@ import type {
   AgentRunResult,
   AgentToolCall,
   ModelResponse,
+  ModelRetryPolicy,
 } from "./types.js";
 
 // Pi parity: no iteration / tool-call ceiling. The loop runs until the model
@@ -34,6 +37,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   let finalAnswer = "";
   let cancelled = false;
   const isAborted = (): boolean => signal !== undefined && signal.aborted;
+  const retryPolicy = normalizeModelRetryPolicy(config.modelRetryPolicy);
 
   const buildCancelledResult = (): AgentRunResult => ({
     sessionId: session?.id ?? "",
@@ -127,95 +131,145 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         break;
       }
       iterations += 1;
-      await store.appendEvent(session.id, "model.request", {
-        iteration: iterations,
-        messageCount: messages.length,
-      });
-      yield { type: "model.request", iteration: iterations, messageCount: messages.length };
-
-      let response: ModelResponse;
-      // Streaming bridge: deltas come from the adapter via callback while we
-      // await the response. Push them into a queue, race the response promise
-      // against a "delta-arrived" wakeup, and yield queued deltas as soon as
-      // they appear so the TUI can render them in real time.
-      const deltaQueue: string[] = [];
-      let wakeup: (() => void) | undefined;
-      const wake = () => {
-        const fn = wakeup;
-        wakeup = undefined;
-        fn?.();
-      };
-      const modelRequest: {
-        messages: typeof messages;
-        tools: ReturnType<typeof tools.list>;
-        signal?: AbortSignal;
-        reasoningEffort?: typeof config.reasoningEffort;
-        onAssistantDelta?: (delta: string) => void;
-      } = {
-        messages,
-        tools: tools.list(),
-        onAssistantDelta: (delta: string) => {
-          if (delta === "") return;
-          deltaQueue.push(delta);
-          wake();
-        },
-      };
-      if (signal !== undefined) {
-        modelRequest.signal = signal;
-      }
-      if (config.reasoningEffort !== undefined && config.reasoningEffort !== "off") {
-        modelRequest.reasoningEffort = config.reasoningEffort;
-      }
-      let settled: { ok: true; value: ModelResponse } | { ok: false; error: unknown } | undefined;
-      const responsePromise = config.model
-        .complete(modelRequest)
-        .then((value) => {
-          settled = { ok: true, value };
-          wake();
-        })
-        .catch((error: unknown) => {
-          settled = { ok: false, error };
-          wake();
+      let response: ModelResponse | undefined;
+      for (let attempt = 1; ; attempt += 1) {
+        await store.appendEvent(session.id, "model.request", {
+          iteration: iterations,
+          messageCount: messages.length,
+          attempt,
         });
+        yield {
+          type: "model.request",
+          iteration: iterations,
+          messageCount: messages.length,
+          attempt,
+        };
 
-      try {
-        while (settled === undefined || deltaQueue.length > 0) {
-          while (deltaQueue.length > 0) {
-            const delta = deltaQueue.shift() ?? "";
-            yield { type: "assistant.delta", iteration: iterations, contentDelta: delta };
-          }
-          if (settled !== undefined) break;
-          await new Promise<void>((resolve) => {
-            wakeup = resolve;
+        // Streaming bridge: deltas come from the adapter via callback while we
+        // await the response. Push them into a queue, race the response promise
+        // against a "delta-arrived" wakeup, and yield queued deltas as soon as
+        // they appear so the TUI can render them in real time.
+        const deltaQueue: string[] = [];
+        let emittedDelta = false;
+        let wakeup: (() => void) | undefined;
+        const wake = () => {
+          const fn = wakeup;
+          wakeup = undefined;
+          fn?.();
+        };
+        const modelRequest: {
+          messages: typeof messages;
+          tools: ReturnType<typeof tools.list>;
+          signal?: AbortSignal;
+          reasoningEffort?: typeof config.reasoningEffort;
+          onAssistantDelta?: (delta: string) => void;
+        } = {
+          messages,
+          tools: tools.list(),
+          onAssistantDelta: (delta: string) => {
+            if (delta === "") return;
+            deltaQueue.push(delta);
+            wake();
+          },
+        };
+        if (signal !== undefined) {
+          modelRequest.signal = signal;
+        }
+        if (config.reasoningEffort !== undefined && config.reasoningEffort !== "off") {
+          modelRequest.reasoningEffort = config.reasoningEffort;
+        }
+        let settled: { ok: true; value: ModelResponse } | { ok: false; error: unknown } | undefined;
+        const responsePromise = config.model
+          .complete(modelRequest)
+          .then((value) => {
+            settled = { ok: true, value };
+            wake();
+          })
+          .catch((error: unknown) => {
+            settled = { ok: false, error };
+            wake();
           });
-        }
-      } finally {
-        // Make sure the in-flight request is awaited so we don't leak it.
-        await responsePromise;
-      }
-      if (settled === undefined) {
-        throw new Error("Model request settled without producing a result");
-      }
-      if (!settled.ok) {
-        if (isAborted()) {
-          cancelled = true;
-          break;
-        }
-        throw settled.error;
-      }
-      response = settled.value;
 
-      await persistModelResponse(store, session.id, iterations, response);
+        try {
+          while (settled === undefined || deltaQueue.length > 0) {
+            while (deltaQueue.length > 0) {
+              const delta = deltaQueue.shift() ?? "";
+              emittedDelta = true;
+              yield { type: "assistant.delta", iteration: iterations, contentDelta: delta };
+            }
+            if (settled !== undefined) break;
+            await new Promise<void>((resolve) => {
+              wakeup = resolve;
+            });
+          }
+        } finally {
+          // Make sure the in-flight request is awaited so we don't leak it.
+          await responsePromise;
+        }
+        if (settled === undefined) {
+          throw new Error("Model request settled without producing a result");
+        }
+        if (!settled.ok) {
+          if (isAborted()) {
+            cancelled = true;
+            break;
+          }
+          const retry = modelRetryDecision(settled.error, emittedDelta, attempt, retryPolicy);
+          if (retry === undefined) {
+            throw settled.error;
+          }
+          const retryEvent: Extract<AgentRunEvent, { type: "model.retry" }> = {
+            type: "model.retry",
+            iteration: iterations,
+            attempt,
+            nextAttempt: attempt + 1,
+            maxAttempts: retryPolicy.maxAttempts,
+            delayMs: retry.delayMs,
+            message: errorMessage(settled.error).slice(0, 500),
+          };
+          await store.appendEvent(session.id, "model.retry", {
+            iteration: retryEvent.iteration,
+            attempt: retryEvent.attempt,
+            nextAttempt: retryEvent.nextAttempt,
+            maxAttempts: retryEvent.maxAttempts,
+            delayMs: retryEvent.delayMs,
+            message: retryEvent.message,
+          });
+          yield retryEvent;
+          await sleepForRetry(retry.delayMs, signal);
+          if (isAborted()) {
+            cancelled = true;
+            break;
+          }
+          continue;
+        }
+        response = settled.value;
+        break;
+      }
+      if (cancelled) {
+        break;
+      }
+      if (response === undefined) {
+        throw new Error("Model request ended without producing a response");
+      }
+
       messages.push({
         role: "assistant",
         content: response.content,
         toolCalls: response.toolCalls,
       });
-      await store.appendMessage({
+      const normalizedUsage =
+        response.usage === undefined ? undefined : normalizeModelUsage(response.usage);
+      await store.recordAssistantMessage({
         sessionId: session.id,
-        role: "assistant",
+        iteration: iterations,
         content: response.content,
-        toolCalls: toolCallsToJson(response.toolCalls),
+        finishReason: response.finishReason,
+        toolCalls: response.toolCalls,
+        ...(normalizedUsage === undefined ? {} : { usage: normalizedUsage }),
+        ...(response.providerResponseId === undefined
+          ? {}
+          : { providerResponseId: response.providerResponseId }),
       });
       const modelResponseEvent: Extract<AgentRunEvent, { type: "model.response" }> = {
         type: "model.response",
@@ -267,11 +321,11 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
           content: toolContent,
           toolCallId: toolCall.id,
         });
-        await store.appendMessage({
+        await store.recordToolMessage({
           sessionId: session.id,
-          role: "tool",
-          content: toolContent,
           toolCallId: toolCall.id,
+          content: toolContent,
+          resultEventPayload: toolResultEventPayload(toolCall.id, toolResult),
         });
         yield { type: "tool.call.completed", toolCallId: toolCall.id, result: toolResult };
       }
@@ -287,11 +341,12 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       reason: "cancelled",
       iterations,
       toolCalls: toolCallCount,
+      cancellation: cancellationDetails(signal),
     });
     await store.endSession(session.id, "interrupted");
     yield { type: "agent.completed", result: buildCancelledResult() };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     if (session !== undefined) {
       await store.appendEvent(session.id, "agent.loop.error", { message });
       await store.endSession(session.id, "failed");
@@ -313,6 +368,223 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   }
 }
 
+interface NormalizedModelRetryPolicy {
+  maxAttempts: number;
+  initialDelayMs: number;
+  maxDelayMs: number;
+  backoffFactor: number;
+}
+
+const DEFAULT_MODEL_RETRY_POLICY: NormalizedModelRetryPolicy = {
+  maxAttempts: 4,
+  initialDelayMs: 1_000,
+  maxDelayMs: 8_000,
+  backoffFactor: 2,
+};
+
+const RETRYABLE_MODEL_HTTP_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_ERROR_TEXT = [
+  "overloaded",
+  "provider returned error",
+  "rate limit",
+  "too many requests",
+  "service unavailable",
+  "server error",
+  "internal error",
+  "fetch failed",
+  "connection error",
+  "connection refused",
+  "connection reset",
+  "connection failure",
+  "connection lost",
+  "econnreset",
+  "etimedout",
+  "websocket closed",
+  "websocket error",
+  "other side closed",
+  "upstream connect",
+  "reset before headers",
+  "socket hang up",
+  "ended without",
+  "stream ended before message_stop",
+  "http2 request did not get a response",
+  "timed out",
+  "timeout",
+  "terminated",
+  "network error",
+  "retry delay",
+];
+
+function normalizeModelRetryPolicy(
+  input: ModelRetryPolicy | undefined,
+): NormalizedModelRetryPolicy {
+  const maxAttempts = boundedInteger(
+    input?.maxAttempts,
+    DEFAULT_MODEL_RETRY_POLICY.maxAttempts,
+    1,
+    10,
+  );
+  const initialDelayMs = boundedInteger(
+    input?.initialDelayMs,
+    DEFAULT_MODEL_RETRY_POLICY.initialDelayMs,
+    0,
+    60_000,
+  );
+  const maxDelayMs = boundedInteger(
+    input?.maxDelayMs,
+    Math.max(DEFAULT_MODEL_RETRY_POLICY.maxDelayMs, initialDelayMs),
+    0,
+    120_000,
+  );
+  const backoffFactor =
+    typeof input?.backoffFactor === "number" &&
+    Number.isFinite(input.backoffFactor) &&
+    input.backoffFactor >= 1
+      ? Math.min(input.backoffFactor, 10)
+      : DEFAULT_MODEL_RETRY_POLICY.backoffFactor;
+  return {
+    maxAttempts,
+    initialDelayMs,
+    maxDelayMs: Math.max(initialDelayMs, maxDelayMs),
+    backoffFactor,
+  };
+}
+
+function boundedInteger(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function modelRetryDecision(
+  error: unknown,
+  emittedDelta: boolean,
+  attempt: number,
+  policy: NormalizedModelRetryPolicy,
+): { delayMs: number } | undefined {
+  if (emittedDelta || attempt >= policy.maxAttempts || !isRetryableModelError(error)) {
+    return undefined;
+  }
+  return { delayMs: modelRetryDelayMs(attempt, policy) };
+}
+
+function modelRetryDelayMs(attempt: number, policy: NormalizedModelRetryPolicy): number {
+  const rawDelay = policy.initialDelayMs * policy.backoffFactor ** Math.max(0, attempt - 1);
+  return Math.min(policy.maxDelayMs, Math.round(rawDelay));
+}
+
+function isRetryableModelError(error: unknown): boolean {
+  if (error instanceof ModelAdapterError) {
+    if (error.code === "codex_http_error" || error.code === "model_http_error") {
+      const status = httpStatusFromMessage(error.message);
+      return (
+        (status !== undefined && RETRYABLE_MODEL_HTTP_STATUSES.has(status)) ||
+        hasRetryableModelErrorText(error.message)
+      );
+    }
+    return (
+      error.code === "codex_network_error" ||
+      error.code === "model_network_error" ||
+      hasRetryableModelErrorText(error.message)
+    );
+  }
+
+  if (error instanceof Error) {
+    return hasRetryableModelErrorText(error.message);
+  }
+
+  return false;
+}
+
+function hasRetryableModelErrorText(message: string): boolean {
+  const normalized = message.toLowerCase().replace(/[_-]+/g, " ");
+  return (
+    /\b(408|409|429|500|502|503|504)\b/.test(normalized) ||
+    RETRYABLE_NETWORK_ERROR_TEXT.some((text) => normalized.includes(text))
+  );
+}
+
+function httpStatusFromMessage(message: string): number | undefined {
+  const match = /\bHTTP\s+(\d{3})\b/i.exec(message);
+  if (match === null) {
+    return undefined;
+  }
+  const status = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(status) ? status : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function sleepForRetry(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
+  if (delayMs <= 0 || signal?.aborted === true) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let timeout: ReturnType<typeof setTimeout>;
+    const done = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    timeout = setTimeout(done, delayMs);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+function cancellationDetails(signal: AbortSignal | undefined): JsonObject {
+  if (signal === undefined || !signal.aborted) {
+    return { source: "unknown" };
+  }
+  const reason = signal.reason as unknown;
+  if (isCancellationObject(reason)) {
+    return sanitizeCancellationObject(reason);
+  }
+  if (reason instanceof Error) {
+    return {
+      source: "abort_signal",
+      name: reason.name,
+      message: reason.message.slice(0, 500),
+    };
+  }
+  if (typeof reason === "string") {
+    return {
+      source: "abort_signal",
+      message: reason.slice(0, 500),
+    };
+  }
+  return { source: "abort_signal" };
+}
+
+function isCancellationObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { source?: unknown }).source === "string"
+  );
+}
+
+function sanitizeCancellationObject(value: Record<string, unknown>): JsonObject {
+  const details: JsonObject = {
+    source: String(value.source).slice(0, 120),
+  };
+  for (const key of ["runId", "sessionId", "existingRunId", "message"]) {
+    const raw = value[key];
+    if (typeof raw === "string") {
+      details[key] = raw.slice(0, 500);
+    }
+  }
+  return details;
+}
+
 export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResult> {
   let lastResult: AgentRunResult | undefined;
   for await (const event of runAgentLoopEvents(config)) {
@@ -326,27 +598,6 @@ export async function runAgentLoop(config: AgentRunConfig): Promise<AgentRunResu
     throw new Error("Agent loop ended without producing a result");
   }
   return lastResult;
-}
-
-async function persistModelResponse(
-  store: SessionStore,
-  sessionId: string,
-  iteration: number,
-  response: ModelResponse,
-): Promise<void> {
-  const payload: JsonObject = {
-    iteration,
-    content: response.content,
-    finishReason: response.finishReason,
-    toolCalls: toolCallsToJson(response.toolCalls),
-  };
-  if (response.providerResponseId !== undefined) {
-    payload.providerResponseId = response.providerResponseId;
-  }
-  if (response.usage !== undefined) {
-    payload.usage = response.usage;
-  }
-  await store.appendEvent(sessionId, "model.response", payload);
 }
 
 async function appendInitialMessage(
@@ -372,13 +623,13 @@ async function executeToolCall(
   tools: ToolRegistry,
   toolCall: AgentToolCall,
 ): Promise<ToolExecutionResult> {
-  await store.appendEvent(sessionId, "tool.call", {
+  await store.recordToolStart({
+    sessionId,
     toolCallId: toolCall.id,
     toolName: toolCall.name,
     argumentsText: toolCall.argumentsText,
   });
-
-  const result = await tools.safeExecuteText(toolCall.name, toolCall.argumentsText, {
+  return tools.safeExecuteText(toolCall.name, toolCall.argumentsText, {
     repoRoot,
     sessionId,
     toolCallId: toolCall.id,
@@ -390,16 +641,6 @@ async function executeToolCall(
       });
     },
   });
-  await store.appendEvent(sessionId, "tool.result", toolResultEventPayload(toolCall.id, result));
-  return result;
-}
-
-function toolCallsToJson(toolCalls: AgentToolCall[]): JsonValue {
-  return toolCalls.map((toolCall) => ({
-    id: toolCall.id,
-    name: toolCall.name,
-    argumentsText: toolCall.argumentsText,
-  }));
 }
 
 function toolResultEventPayload(toolCallId: string, result: ToolExecutionResult): JsonObject {

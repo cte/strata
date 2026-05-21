@@ -19,6 +19,15 @@ export interface OpenAICodexModelOptions {
   baseUrl?: string;
   name?: string;
   fetchImpl?: typeof fetch;
+  retryPolicy?: OpenAICodexRetryPolicy;
+}
+
+export interface OpenAICodexRetryPolicy {
+  /** Total attempts, including the first request. */
+  maxAttempts?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  backoffFactor?: number;
 }
 
 interface ResponseEvent {
@@ -27,6 +36,15 @@ interface ResponseEvent {
 }
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const DEFAULT_CODEX_RETRY_POLICY: Required<OpenAICodexRetryPolicy> = {
+  maxAttempts: 4,
+  initialDelayMs: 1_000,
+  maxDelayMs: 60_000,
+  backoffFactor: 2,
+};
+const RETRYABLE_CODEX_HTTP_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const RETRYABLE_CODEX_ERROR_TEXT =
+  /rate.?limit|too many requests|overloaded|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?reset|connection.?failure|connection.?lost|econnreset|etimedout|fetch failed|upstream.?connect|reset before headers|socket hang up|other side closed|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated/i;
 
 export class OpenAICodexModelAdapter implements ModelAdapter {
   readonly name: string;
@@ -34,6 +52,7 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryPolicy: Required<OpenAICodexRetryPolicy>;
 
   constructor(options: OpenAICodexModelOptions) {
     this.credentials = options.credentials;
@@ -41,6 +60,7 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
     this.name = options.name ?? `openai-codex:${options.model}`;
     this.baseUrl = (options.baseUrl ?? DEFAULT_CODEX_BASE_URL).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.retryPolicy = normalizeCodexRetryPolicy(options.retryPolicy);
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
@@ -62,7 +82,12 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
     if (request.signal !== undefined) {
       init.signal = request.signal;
     }
-    const response = await this.fetchImpl(resolveCodexResponsesUrl(this.baseUrl), init);
+    const response = await fetchCodexWithRetries(
+      this.fetchImpl,
+      resolveCodexResponsesUrl(this.baseUrl),
+      init,
+      this.retryPolicy,
+    );
 
     if (!response.ok) {
       throw new ModelAdapterError(
@@ -83,6 +108,163 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
       request.onAssistantDelta,
     );
   }
+}
+
+async function fetchCodexWithRetries(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  policy: Required<OpenAICodexRetryPolicy>,
+): Promise<Response> {
+  let lastError: Error | undefined;
+  for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+    if (isAbortSignalAborted(init.signal)) {
+      throw new ModelAdapterError("codex_request_aborted", "Codex request was aborted");
+    }
+
+    try {
+      const response = await fetchImpl(url, init);
+      if (response.ok) {
+        return response;
+      }
+
+      const errorText = await response.text();
+      if (attempt < policy.maxAttempts && isRetryableCodexHttpError(response.status, errorText)) {
+        await sleepForCodexRetry(codexRetryDelayMs(attempt, policy, response.headers), init.signal);
+        continue;
+      }
+
+      throw new ModelAdapterError(
+        "codex_http_error",
+        `Codex request failed with HTTP ${response.status}: ${errorText}`,
+      );
+    } catch (error: unknown) {
+      if (isAbortSignalAborted(init.signal)) {
+        throw new ModelAdapterError("codex_request_aborted", "Codex request was aborted");
+      }
+      if (error instanceof ModelAdapterError) {
+        throw error;
+      }
+
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < policy.maxAttempts && isRetryableCodexFetchError(lastError)) {
+        await sleepForCodexRetry(codexRetryDelayMs(attempt, policy), init.signal);
+        continue;
+      }
+
+      throw new ModelAdapterError(
+        "codex_network_error",
+        `Codex request failed: ${lastError.message}`,
+      );
+    }
+  }
+
+  throw new ModelAdapterError(
+    "codex_network_error",
+    `Codex request failed after retries${lastError === undefined ? "" : `: ${lastError.message}`}`,
+  );
+}
+
+function normalizeCodexRetryPolicy(
+  input: OpenAICodexRetryPolicy | undefined,
+): Required<OpenAICodexRetryPolicy> {
+  return {
+    maxAttempts: boundedInteger(input?.maxAttempts, DEFAULT_CODEX_RETRY_POLICY.maxAttempts, 1, 10),
+    initialDelayMs: boundedInteger(
+      input?.initialDelayMs,
+      DEFAULT_CODEX_RETRY_POLICY.initialDelayMs,
+      0,
+      60_000,
+    ),
+    maxDelayMs: boundedInteger(
+      input?.maxDelayMs,
+      DEFAULT_CODEX_RETRY_POLICY.maxDelayMs,
+      0,
+      120_000,
+    ),
+    backoffFactor:
+      typeof input?.backoffFactor === "number" &&
+      Number.isFinite(input.backoffFactor) &&
+      input.backoffFactor >= 1
+        ? Math.min(input.backoffFactor, 10)
+        : DEFAULT_CODEX_RETRY_POLICY.backoffFactor,
+  };
+}
+
+function boundedInteger(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function isRetryableCodexHttpError(status: number, errorText: string): boolean {
+  return RETRYABLE_CODEX_HTTP_STATUSES.has(status) || RETRYABLE_CODEX_ERROR_TEXT.test(errorText);
+}
+
+function isRetryableCodexFetchError(error: Error): boolean {
+  return RETRYABLE_CODEX_ERROR_TEXT.test(error.message);
+}
+
+function codexRetryDelayMs(
+  attempt: number,
+  policy: Required<OpenAICodexRetryPolicy>,
+  headers?: Headers,
+): number {
+  const serverDelayMs = headers === undefined ? undefined : retryAfterDelayMs(headers);
+  const rawDelay =
+    serverDelayMs ??
+    Math.round(policy.initialDelayMs * policy.backoffFactor ** Math.max(0, attempt - 1));
+  return Math.min(policy.maxDelayMs, Math.max(0, rawDelay));
+}
+
+function retryAfterDelayMs(headers: Headers): number | undefined {
+  const retryAfterMs = headers.get("retry-after-ms");
+  if (retryAfterMs !== null) {
+    const millis = Number(retryAfterMs);
+    if (Number.isFinite(millis)) {
+      return millis;
+    }
+  }
+
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter === null) {
+    return undefined;
+  }
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds)) {
+    return seconds * 1000;
+  }
+  const date = Date.parse(retryAfter);
+  return Number.isNaN(date) ? undefined : date - Date.now();
+}
+
+async function sleepForCodexRetry(
+  delayMs: number,
+  signal: RequestInit["signal"] | undefined,
+): Promise<void> {
+  if (delayMs <= 0 || isAbortSignalAborted(signal)) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let timeout: ReturnType<typeof setTimeout>;
+    const done = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    timeout = setTimeout(done, delayMs);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+function isAbortSignalAborted(signal: RequestInit["signal"] | undefined): boolean {
+  return signal !== undefined && signal !== null && signal.aborted;
 }
 
 function buildCodexRequestBody(

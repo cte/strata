@@ -1,4 +1,6 @@
-import type { JsonObject, JsonValue } from "@strata/core";
+import type { JsonObject, JsonValue } from "@strata/core/types";
+
+export type { ToolRegistry } from "./registry.js";
 
 export type ToolMode = "read" | "write" | "learning" | "dangerous";
 export type ToolProfile = "read-only" | "maintenance" | "learning" | "dangerous";

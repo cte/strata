@@ -1,3 +1,4 @@
+import path from "node:path";
 import process from "node:process";
 import type { ThinkingLevel } from "@strata/agent";
 import {
@@ -60,6 +61,12 @@ export interface StrataAppOptions {
   reasoningEffort?: ThinkingLevel;
 }
 
+interface RetryCountdown {
+  nextAttempt: number;
+  maxAttempts: number;
+  deadlineMs: number;
+}
+
 export class StrataApp implements Component {
   private readonly state: AppState;
   private readonly runtime: TuiRuntime;
@@ -72,6 +79,7 @@ export class StrataApp implements Component {
   private readonly footer: Footer;
   private readonly repoRoot: string;
   private currentRun: AbortController | undefined;
+  private retryCountdown: RetryCountdown | undefined;
   private animationTimer: ReturnType<typeof setInterval> | undefined;
   private exitRequested = false;
   private invalidating = false;
@@ -490,9 +498,9 @@ export class StrataApp implements Component {
     });
   }
 
-  // Pi-style: each user-defined skill in `.strata/skills/` is exposed as a
-  // `/skill:<name>` slash command. Invoking it reads the skill's SKILL.md and
-  // sends its content as a user message. Args after the name are appended.
+  // Pi-style: each discovered `.strata/skills` or `.agents/skills` skill is
+  // exposed as a `/skill:<name>` slash command. Invoking it expands SKILL.md
+  // into a skill block. Args after the name are appended.
   private async registerSkillCommands(): Promise<void> {
     let skills: Awaited<ReturnType<typeof listSkills>>;
     try {
@@ -523,10 +531,15 @@ export class StrataApp implements Component {
       return;
     }
     const trimmedArgs = args.trim();
-    const prompt =
-      trimmedArgs === ""
-        ? `Apply the skill "${name}":\n\n${document.content}`
-        : `Apply the skill "${name}" to: ${trimmedArgs}\n\n${document.content}`;
+    const location = path.resolve(this.repoRoot, document.metadata.path);
+    const skillBlock = [
+      `<skill name="${escapeXmlAttribute(document.metadata.name)}" location="${escapeXmlAttribute(location)}">`,
+      `References are relative to ${path.dirname(location)}.`,
+      "",
+      stripFrontmatter(document.content).trim(),
+      "</skill>",
+    ].join("\n");
+    const prompt = trimmedArgs === "" ? skillBlock : `${skillBlock}\n\n${trimmedArgs}`;
     await this.onSubmit(prompt);
   }
 
@@ -629,6 +642,7 @@ export class StrataApp implements Component {
         content: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      this.clearRetryCountdown();
       this.state.running = false;
       this.currentRun = undefined;
       this.invalidate();
@@ -718,12 +732,23 @@ export class StrataApp implements Component {
         this.state.status = `session ${event.sessionId.slice(0, 12)} · ${sanitizeDisplayText(event.title)}`;
         return;
       case "model.request":
+        this.clearRetryCountdown();
         this.state.status = `thinking (iter ${event.iteration})`;
         return;
+      case "model.retry":
+        this.retryCountdown = {
+          nextAttempt: event.nextAttempt,
+          maxAttempts: event.maxAttempts,
+          deadlineMs: Date.now() + event.delayMs,
+        };
+        this.refreshRetryStatus();
+        return;
       case "assistant.delta":
+        this.clearRetryCountdown();
         appendAssistantDelta(this.state, event.iteration, event.contentDelta);
         return;
       case "model.response":
+        this.clearRetryCountdown();
         recordModelUsage(this.state, event.usage);
         finalizeAssistantStream(this.state, event.iteration, event.content);
         return;
@@ -738,9 +763,11 @@ export class StrataApp implements Component {
         recordToolResult(this.state, event.toolCallId, event.result);
         return;
       case "agent.completed":
+        this.clearRetryCountdown();
         recordCompletion(this.state, event.result);
         return;
       case "agent.failed":
+        this.clearRetryCountdown();
         appendTranscript(this.state, { kind: "error", content: event.message });
         if (event.result !== undefined) {
           recordCompletion(this.state, event.result);
@@ -753,9 +780,7 @@ export class StrataApp implements Component {
 
   private handleCtrlC(): void {
     if (this.currentRun !== undefined) {
-      this.currentRun.abort();
-      appendTranscript(this.state, { kind: "status", content: "interrupting agent…" });
-      this.invalidate();
+      this.interruptCurrentRun();
       return;
     }
     if (this.editor.text !== "") {
@@ -764,6 +789,27 @@ export class StrataApp implements Component {
       return;
     }
     this.requestExit();
+  }
+
+  private interruptCurrentRun(): void {
+    const currentRun = this.currentRun;
+    if (currentRun === undefined) {
+      return;
+    }
+    const retrying = this.retryCountdown !== undefined;
+    this.clearRetryCountdown();
+    if (!currentRun.signal.aborted) {
+      currentRun.abort({
+        source: "tui.interrupt",
+        message: retrying ? "user cancelled model retry" : "user interrupted agent run",
+      });
+    }
+    this.state.status = retrying ? "cancelling retry…" : "interrupting agent…";
+    appendTranscript(this.state, {
+      kind: "status",
+      content: retrying ? "cancelling retry…" : "interrupting agent…",
+    });
+    this.invalidate();
   }
 
   private requestExit(): void {
@@ -793,6 +839,7 @@ export class StrataApp implements Component {
         this.stopAnimationLoop();
         return;
       }
+      this.refreshRetryStatus();
       this.runtime.invalidate();
     }, 80);
   }
@@ -803,6 +850,20 @@ export class StrataApp implements Component {
     }
     clearInterval(this.animationTimer);
     this.animationTimer = undefined;
+  }
+
+  private clearRetryCountdown(): void {
+    this.retryCountdown = undefined;
+  }
+
+  private refreshRetryStatus(): void {
+    const countdown = this.retryCountdown;
+    if (countdown === undefined) {
+      return;
+    }
+    const remainingMs = Math.max(0, countdown.deadlineMs - Date.now());
+    const timing = remainingMs === 0 ? "now" : `in ${formatRetryCountdown(remainingMs)}`;
+    this.state.status = `model unavailable; retry ${countdown.nextAttempt}/${countdown.maxAttempts} ${timing} (Ctrl+C/Esc to cancel)`;
   }
 
   // Pi-aligned escape handler. Mirrors `interactive-mode.ts:onEscape`:
@@ -821,10 +882,8 @@ export class StrataApp implements Component {
     // — which is what made double-Esc look "screwed up" when a run was
     // mid-stream.
     if (this.currentRun !== undefined) {
-      this.currentRun.abort();
+      this.interruptCurrentRun();
       this.lastEscapeAt = 0;
-      appendTranscript(this.state, { kind: "status", content: "interrupting agent…" });
-      this.invalidate();
       return;
     }
     if (this.editor.text.trim() !== "") {
@@ -1152,6 +1211,29 @@ export class StrataApp implements Component {
 
 function sanitizeDisplayText(value: string): string {
   return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
+}
+
+function formatRetryCountdown(delayMs: number): string {
+  return `${Math.max(1, Math.ceil(delayMs / 1000))}s`;
+}
+
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith("---\n")) {
+    return content;
+  }
+  const end = content.indexOf("\n---", 4);
+  if (end === -1) {
+    return content;
+  }
+  return content.slice(end + "\n---".length);
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 export async function buildAppOptions(repoRoot: string): Promise<{
