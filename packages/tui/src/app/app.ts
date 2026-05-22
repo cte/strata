@@ -11,7 +11,13 @@ import {
   shouldAutoCompact,
   THINKING_LEVELS,
 } from "@strata/agent";
-import { getStrataPaths, listSkills, readSkill, SessionStore } from "@strata/core";
+import {
+  getStrataPaths,
+  listSkills,
+  readSkill,
+  type SessionRecord,
+  SessionStore,
+} from "@strata/core";
 import { sanitizeTerminalText } from "../ansi.js";
 import { SlashCommandRegistry } from "../commands.js";
 import type { Component, Frame, RenderContext } from "../component.js";
@@ -59,6 +65,18 @@ export interface StrataAppOptions {
   provider: ProviderName;
   model: string;
   reasoningEffort?: ThinkingLevel;
+  initialSession?: InitialSessionAction;
+}
+
+export type InitialSessionAction =
+  | { type: "continue" }
+  | { type: "resume" }
+  | { type: "session"; selector: string }
+  | { type: "fork"; selector: string };
+
+interface InitialSessionResolution {
+  sessionId: string;
+  forkedFrom?: string;
 }
 
 interface RetryCountdown {
@@ -78,11 +96,13 @@ export class StrataApp implements Component {
   private readonly statusLine: StatusLine;
   private readonly footer: Footer;
   private readonly repoRoot: string;
+  private readonly initialSession: InitialSessionAction | undefined;
   private currentRun: AbortController | undefined;
   private retryCountdown: RetryCountdown | undefined;
   private animationTimer: ReturnType<typeof setInterval> | undefined;
   private exitRequested = false;
   private invalidating = false;
+  private initialSessionStarted = false;
 
   constructor(
     runtime: TuiRuntime,
@@ -91,6 +111,7 @@ export class StrataApp implements Component {
   ) {
     this.runtime = runtime;
     this.repoRoot = options.repoRoot;
+    this.initialSession = options.initialSession;
     this.state = initialAppState(options.provider, options.model, authStatus);
     if (options.reasoningEffort !== undefined) {
       this.state.reasoningEffort = options.reasoningEffort;
@@ -106,7 +127,7 @@ export class StrataApp implements Component {
     });
     void this.loadEditorHistory();
     this.authDialog = new AuthDialog(() => this.invalidate());
-    this.sessionSelector = new SessionSelector();
+    this.sessionSelector = new SessionSelector(() => this.invalidate());
     this.modelSelector = new ModelSelector();
     this.statusLine = new StatusLine(this.state);
     this.footer = new Footer(this.state, this.repoRoot);
@@ -132,6 +153,17 @@ export class StrataApp implements Component {
 
   get running(): boolean {
     return !this.exitRequested;
+  }
+
+  startInitialSession(): void {
+    if (this.initialSessionStarted) {
+      return;
+    }
+    this.initialSessionStarted = true;
+    if (this.initialSession === undefined) {
+      return;
+    }
+    void this.applyInitialSession(this.initialSession);
   }
 
   render(ctx: RenderContext): Frame {
@@ -948,11 +980,95 @@ export class StrataApp implements Component {
           this.sessionSelector.close();
           this.invalidate();
         },
+        async (session) => {
+          const deleteStore = await SessionStore.open(this.repoRoot);
+          try {
+            return await deleteStore.deleteSession(session.id);
+          } finally {
+            deleteStore.close();
+          }
+        },
+        this.state.currentSessionId,
       );
       this.invalidate();
     } finally {
       store.close();
     }
+  }
+
+  private async applyInitialSession(action: InitialSessionAction): Promise<void> {
+    try {
+      if (action.type === "resume") {
+        await this.openSessionPicker("resume");
+        return;
+      }
+
+      const resolution = await this.resolveInitialSession(action);
+      if (resolution === undefined) {
+        return;
+      }
+      await this.resumeSession(resolution.sessionId);
+      if (resolution.forkedFrom !== undefined) {
+        appendTranscript(this.state, {
+          kind: "status",
+          content: `forked from ${resolution.forkedFrom.slice(0, 12)}`,
+        });
+        this.invalidate();
+      }
+    } catch (error: unknown) {
+      appendTranscript(this.state, {
+        kind: "error",
+        content: error instanceof Error ? error.message : String(error),
+      });
+      this.invalidate();
+    }
+  }
+
+  private async resolveInitialSession(
+    action: Exclude<InitialSessionAction, { type: "resume" }>,
+  ): Promise<InitialSessionResolution | undefined> {
+    const store = await SessionStore.open(this.repoRoot);
+    try {
+      if (action.type === "continue") {
+        const session = store.listSessions(1)[0];
+        if (session === undefined) {
+          throw new Error("No sessions found to continue");
+        }
+        return { sessionId: session.id };
+      }
+
+      const session = this.resolveSessionSelector(store, action.selector);
+      if (action.type === "session") {
+        return { sessionId: session.id };
+      }
+
+      const cloned = await store.cloneSession(session.id);
+      return { sessionId: cloned.id, forkedFrom: session.id };
+    } finally {
+      store.close();
+    }
+  }
+
+  private resolveSessionSelector(store: SessionStore, selector: string): SessionRecord {
+    const exact = store.getSession(selector);
+    if (exact !== undefined) {
+      return exact;
+    }
+
+    const matches = store.findSessionsByIdPrefix(selector, 20);
+    if (matches.length === 0) {
+      throw new Error(`No session found matching '${selector}'`);
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Session id prefix is ambiguous: ${selector} (${matches.map((session) => session.id).join(", ")})`,
+      );
+    }
+    const match = matches[0];
+    if (match === undefined) {
+      throw new Error(`No session found matching '${selector}'`);
+    }
+    return match;
   }
 
   private async resumeSession(sessionId: string): Promise<void> {
@@ -968,9 +1084,11 @@ export class StrataApp implements Component {
       clearTranscript(this.state);
       this.state.currentSessionId = sessionId;
       // Re-derive provider/model from the session if possible. The session row
-      // stores only the model name (not provider); keep the current provider.
+      // historically stored adapter names like `openai-codex:gpt-5.5`;
+      // split known provider prefixes so the backend receives the raw model id.
       if (session.model !== null) {
-        setModelSelection(this.state, this.state.provider, session.model);
+        const selection = modelSelectionFromStoredModel(session.model, this.state.provider);
+        setModelSelection(this.state, selection.provider, selection.model);
       } else {
         resetTokenUsage(this.state.usage);
       }
@@ -1213,6 +1331,21 @@ function sanitizeDisplayText(value: string): string {
   return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
 }
 
+function modelSelectionFromStoredModel(
+  storedModel: string,
+  fallbackProvider: ProviderName,
+): { provider: ProviderName; model: string } {
+  const separator = storedModel.indexOf(":");
+  if (separator > 0) {
+    const provider = parseProviderName(storedModel.slice(0, separator));
+    const model = storedModel.slice(separator + 1);
+    if (provider !== undefined && model.trim() !== "") {
+      return { provider, model };
+    }
+  }
+  return { provider: fallbackProvider, model: storedModel };
+}
+
 function formatRetryCountdown(delayMs: number): string {
   return `${Math.max(1, Math.ceil(delayMs / 1000))}s`;
 }
@@ -1258,6 +1391,10 @@ function parseProviderEnv(): ProviderName | undefined {
   if (value === undefined || value === "") {
     return undefined;
   }
+  return parseProviderName(value);
+}
+
+function parseProviderName(value: string): ProviderName | undefined {
   if (value === "openai-codex" || value === "openai-compatible") {
     return value;
   }

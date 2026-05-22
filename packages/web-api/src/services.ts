@@ -7,6 +7,7 @@ import {
 import { createChatService } from "./chat.js";
 import {
   chatModelStatus,
+  deleteChatSession,
   forkChatSession,
   getChatSession,
   listChatFiles,
@@ -51,7 +52,15 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     listChatSessions: (input) => listChatSessions(input, getSessionStore),
     getChatSession: (input) => getChatSession(input, getSessionStore),
     forkChatSession: (input) => forkChatSession(input, getSessionStore),
+    deleteChatSession: (input) => {
+      const activeRun = chat.getActiveRunForSession(input.sessionId);
+      if (activeRun !== undefined) {
+        throw new Error(`Cannot delete a session with an active run: ${input.sessionId}`);
+      }
+      return deleteChatSession(input, getSessionStore);
+    },
     searchChatSessions: (input) => searchChatSessions(input, getSessionStore),
+
     connectorSummaries: () => connectorSummaries(options),
     validateNotion: (config) => validateNotion(config, options),
     runNotionSession: (operation, config) => runNotionSession(operation, config, options),
@@ -67,6 +76,7 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
 
 export {
   chatModelStatus,
+  deleteChatSession,
   forkChatSession,
   getChatSession,
   listChatFiles,

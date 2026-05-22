@@ -286,6 +286,8 @@ Editor v1 requirements:
 
 Add `strata tui` as a CLI command and root script.
 
+Launch flags follow Pi's session ergonomics: `--continue`/`-c` resumes the most recent session, `--resume`/`-r` opens the session picker, `--session <id-prefix>` resumes a specific session, and `--fork <id-prefix>` clones a specific session before opening it.
+
 Initial layout:
 
 ```text
@@ -357,7 +359,7 @@ First slash commands:
 - `/auth`: show auth status.
 - `/model [name]`: set model for current TUI session.
 - `/tools`: list registered tools.
-- `/sessions`: show recent sessions selector.
+- `/sessions`: show recent sessions selector; `Ctrl+D` inside the selector starts delete confirmation.
 - `/clear`: clear visible transcript, not stored history.
 - `/quit`: exit cleanly.
 
@@ -367,7 +369,7 @@ First keymap:
 - `Shift+Enter`: newline if terminal reports it.
 - `\` + `Enter`: newline fallback.
 - `Ctrl+C`: clear editor or interrupt active run; second press exits.
-- `Ctrl+D`: exit if editor is empty.
+- `Ctrl+D`: exit if editor is empty; delete the selected session when the session selector is focused.
 - `Esc`: close overlay/autocomplete; interrupt active run later.
 - `Tab`: autocomplete.
 - `Ctrl+L`: force redraw.

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionStore } from "@strata/core";
 import { stripAnsi } from "../ansi.js";
 import { TuiRuntime } from "../runtime.js";
 import { FakeTerminal } from "../terminal.js";
@@ -12,6 +13,211 @@ function pump(ms = 30): Promise<void> {
 }
 
 describe("StrataApp", () => {
+  test("initial --continue resumes the most recent session", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    const store = await SessionStore.open(repoRoot);
+    try {
+      const oldSession = await store.createSession({ kind: "query", title: "old session" });
+      await store.appendMessage({
+        sessionId: oldSession.id,
+        role: "user",
+        content: "old prompt",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const recentSession = await store.createSession({ kind: "query", title: "recent session" });
+      await store.appendMessage({
+        sessionId: recentSession.id,
+        role: "user",
+        content: "recent prompt",
+      });
+
+      const terminal = new FakeTerminal(80, 20);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new StrataApp(
+        runtime,
+        {
+          repoRoot,
+          provider: "openai-codex",
+          model: "gpt-test",
+          initialSession: { type: "continue" },
+        },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      app.startInitialSession();
+      runtime.start();
+      await pump(100);
+      runtime.stop();
+
+      const output = stripAnsi(terminal.output);
+      expect(output).toContain("recent prompt");
+      expect(output).toContain("resumed recent session");
+      expect(output).not.toContain("old prompt");
+    } finally {
+      store.close();
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("initial --session resumes a session by unique id prefix", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    const store = await SessionStore.open(repoRoot);
+    try {
+      const session = await store.createSession({ kind: "query", title: "prefix session" });
+      await store.appendMessage({
+        sessionId: session.id,
+        role: "user",
+        content: "prefix prompt",
+      });
+
+      const terminal = new FakeTerminal(80, 20);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new StrataApp(
+        runtime,
+        {
+          repoRoot,
+          provider: "openai-codex",
+          model: "gpt-test",
+          initialSession: { type: "session", selector: session.id.slice(0, 12) },
+        },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      app.startInitialSession();
+      runtime.start();
+      await pump(100);
+      runtime.stop();
+
+      const output = stripAnsi(terminal.output);
+      expect(output).toContain("prefix prompt");
+      expect(output).toContain("resumed prefix session");
+    } finally {
+      store.close();
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("initial --session normalizes provider-prefixed stored model names", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    const store = await SessionStore.open(repoRoot);
+    try {
+      const session = await store.createSession({
+        kind: "query",
+        title: "prefixed model session",
+        model: "openai-codex:gpt-5.5",
+      });
+      await store.appendMessage({
+        sessionId: session.id,
+        role: "user",
+        content: "prefixed model prompt",
+      });
+
+      const terminal = new FakeTerminal(80, 20);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new StrataApp(
+        runtime,
+        {
+          repoRoot,
+          provider: "openai-codex",
+          model: "current-good-model",
+          initialSession: { type: "session", selector: session.id.slice(0, 12) },
+        },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      app.startInitialSession();
+      runtime.start();
+      await pump(100);
+      runtime.stop();
+
+      const internal = app as unknown as {
+        state: { provider: string; model: string; currentSessionId: string | undefined };
+      };
+      expect(internal.state.currentSessionId).toBe(session.id);
+      expect(internal.state.provider).toBe("openai-codex");
+      expect(internal.state.model).toBe("gpt-5.5");
+      expect(internal.state.model).not.toBe("openai-codex:gpt-5.5");
+    } finally {
+      store.close();
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("initial --resume opens the session picker", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    try {
+      const terminal = new FakeTerminal(80, 20);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new StrataApp(
+        runtime,
+        {
+          repoRoot,
+          provider: "openai-codex",
+          model: "gpt-test",
+          initialSession: { type: "resume" },
+        },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      app.startInitialSession();
+      runtime.start();
+      await pump(100);
+      runtime.stop();
+
+      const output = stripAnsi(terminal.output);
+      expect(output).toContain("Resume session");
+      expect(output).toContain("(no sessions yet)");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("initial --fork clones a session by unique id prefix and resumes the clone", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    const store = await SessionStore.open(repoRoot);
+    try {
+      const source = await store.createSession({ kind: "query", title: "source session" });
+      await store.appendMessage({
+        sessionId: source.id,
+        role: "user",
+        content: "source prompt",
+      });
+
+      const terminal = new FakeTerminal(80, 20);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new StrataApp(
+        runtime,
+        {
+          repoRoot,
+          provider: "openai-codex",
+          model: "gpt-test",
+          initialSession: { type: "fork", selector: source.id.slice(0, 12) },
+        },
+        { codexLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      app.startInitialSession();
+      runtime.start();
+      await pump(120);
+      runtime.stop();
+
+      const internal = app as unknown as { state: { currentSessionId: string | undefined } };
+      expect(internal.state.currentSessionId).not.toBe(source.id);
+      expect(internal.state.currentSessionId).toBeDefined();
+      const clone = store.getSession(internal.state.currentSessionId ?? "");
+      expect(clone?.title).toBe("Fork of source session");
+      expect(store.listMessages(clone?.id ?? "").map((message) => message.content)).toContain(
+        "source prompt",
+      );
+      const output = stripAnsi(terminal.output);
+      expect(output).toContain("source prompt");
+      expect(output).toContain("forked from");
+    } finally {
+      store.close();
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("renders transcript hint, editor, and footer", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {

@@ -286,7 +286,7 @@ function buildCodexRequestBody(
     stream: true,
     input,
     text: { verbosity: "low" },
-    parallel_tool_calls: false,
+    parallel_tool_calls: true,
   };
   if (instructions !== "") {
     body.instructions = instructions;

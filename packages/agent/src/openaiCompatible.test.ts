@@ -121,7 +121,7 @@ describe("OpenAICompatibleChatModelAdapter", () => {
       },
     ]);
     expect(capturedBody?.stream).toBe(true);
-    expect(capturedBody?.parallel_tool_calls).toBe(false);
+    expect(capturedBody?.parallel_tool_calls).toBe(true);
     expect(JSON.stringify(capturedBody)).toContain("wiki_readPage");
     expect(JSON.stringify(capturedBody)).not.toContain("wiki.readPage");
   });

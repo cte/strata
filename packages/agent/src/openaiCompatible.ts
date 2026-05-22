@@ -68,7 +68,7 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
       ),
       tools: request.tools.map((tool) => toProviderTool(tool, toolNameMap.canonicalToProvider)),
       tool_choice: request.tools.length > 0 ? "auto" : "none",
-      parallel_tool_calls: false,
+      parallel_tool_calls: true,
       // Pi-aligned: stream every request and ask for usage in the trailing
       // chunk so the TUI can render assistant text incrementally.
       stream: true,

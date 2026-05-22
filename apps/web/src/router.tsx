@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createRootRoute,
   createRoute,
@@ -5,11 +6,20 @@ import {
   Link,
   Outlet,
   useMatchRoute,
+  useNavigate,
   useSearch,
 } from "@tanstack/react-router";
-import { Activity, GitPullRequest, LoaderCircle, MessageSquare, Plus, Search } from "lucide-react";
+import {
+  Activity,
+  GitPullRequest,
+  LoaderCircle,
+  MessageSquare,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react";
 import type * as React from "react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { LiveClock } from "@/components/ui/clock";
 import {
   Sidebar,
@@ -30,8 +40,13 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import type { ChatSessionSummary } from "@/lib/api";
+import {
+  deleteChatSession,
+  type ChatSessionDeleteResult,
+  type ChatSessionSummary,
+} from "@/lib/api";
 import { useChatSessions } from "@/lib/useChatSessions";
 import { cn } from "@/lib/utils";
 import { ChatPage } from "@/routes/chat";
@@ -127,8 +142,11 @@ function NavItem({
 
 function ChatNavItem(): React.ReactElement {
   const matchRoute = useMatchRoute();
+  const navigate = useNavigate();
   const isActive = !!matchRoute({ to: "/chat", fuzzy: true });
   const { isMobile, setOpenMobile } = useSidebar();
+  const queryClient = useQueryClient();
+
   const rawSearch = useSearch({ strict: false }) as { session?: string } | undefined;
   const activeSessionId = isActive ? (rawSearch?.session ?? null) : null;
   const { searchQuery, setSearchQuery, sessions, isLoaded } = useChatSessions();
@@ -138,6 +156,19 @@ function ChatNavItem(): React.ReactElement {
       setOpenMobile(false);
     }
   }, [isMobile, setOpenMobile]);
+
+  const handleDeleteSession = useCallback(
+    async (session: ChatSessionSummary): Promise<ChatSessionDeleteResult> => {
+      const result = await deleteChatSession(session.id);
+      queryClient.removeQueries({ queryKey: ["chat", "sessions", "detail", session.id] });
+      await queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+      if (activeSessionId === session.id) {
+        void navigate({ to: "/chat", search: {}, replace: true });
+      }
+      return result;
+    },
+    [activeSessionId, navigate, queryClient],
+  );
 
   return (
     <SidebarMenuItem>
@@ -162,6 +193,7 @@ function ChatNavItem(): React.ReactElement {
       {isActive ? (
         <ChatSessionSubMenu
           activeSessionId={activeSessionId}
+          onDeleteSession={handleDeleteSession}
           onNavigate={closeMobileSidebar}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
@@ -175,6 +207,7 @@ function ChatNavItem(): React.ReactElement {
 
 function ChatSessionSubMenu({
   activeSessionId,
+  onDeleteSession,
   onNavigate,
   searchQuery,
   setSearchQuery,
@@ -182,6 +215,7 @@ function ChatSessionSubMenu({
   sessionsLoaded,
 }: {
   activeSessionId: string | null;
+  onDeleteSession(session: ChatSessionSummary): Promise<ChatSessionDeleteResult>;
   onNavigate(): void;
   searchQuery: string;
   setSearchQuery(value: string): void;
@@ -224,6 +258,7 @@ function ChatSessionSubMenu({
             <ChatSessionSubRow
               key={session.id}
               active={session.id === activeSessionId}
+              onDelete={onDeleteSession}
               onNavigate={onNavigate}
               session={session}
             />
@@ -236,35 +271,165 @@ function ChatSessionSubMenu({
 
 function ChatSessionSubRow({
   active,
+  onDelete,
   onNavigate,
   session,
 }: {
   active: boolean;
+  onDelete(session: ChatSessionSummary): Promise<ChatSessionDeleteResult>;
   onNavigate(): void;
   session: ChatSessionSummary;
 }): React.ReactElement {
   const title = sanitizeDisplayText(session.title);
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const canDelete = session.status !== "running";
+
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (deleting) {
+        return;
+      }
+      setOpen(next);
+      if (!next) {
+        setDeleteError(null);
+      }
+    },
+    [deleting],
+  );
+
+  const confirmDelete = useCallback(() => {
+    if (!canDelete || deleting) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    void onDelete(session).catch((cause: unknown) => {
+      setDeleteError(cause instanceof Error ? cause.message : String(cause));
+      setDeleting(false);
+    });
+  }, [canDelete, deleting, onDelete, session]);
+
   return (
     <SidebarMenuSubItem>
-      <SidebarMenuSubButton
-        asChild
-        isActive={active}
-        size="sm"
-        className="h-auto items-start gap-2 py-1.5 data-[active=true]:bg-[var(--accent-soft)] data-[active=true]:text-[var(--fg)]"
-      >
-        <Link to="/chat" search={{ session: session.id }} onClick={onNavigate}>
-          <span
-            className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", statusDotClass(session.status))}
-          />
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate text-[12px] tracking-tight text-[var(--fg)]">{title}</span>
-            <span className="font-mono text-[10px] text-[var(--fg-mute)]">
-              {formatSessionTime(session.startedAt)}
+      <div className="group/session-row relative min-w-0">
+        <SidebarMenuSubButton
+          asChild
+          isActive={active}
+          size="sm"
+          className="h-auto items-start gap-2 py-1.5 data-[active=true]:bg-[var(--accent-soft)] data-[active=true]:text-[var(--fg)]"
+        >
+          <Link to="/chat" search={{ session: session.id }} onClick={onNavigate}>
+            <span
+              className={cn(
+                "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+                statusDotClass(session.status),
+              )}
+            />
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-[12px] tracking-tight text-[var(--fg)]">{title}</span>
+              <span className="font-mono text-[10px] text-[var(--fg-mute)]">
+                {formatSessionTime(session.startedAt)}
+              </span>
             </span>
-          </span>
-        </Link>
-      </SidebarMenuSubButton>
+          </Link>
+        </SidebarMenuSubButton>
+        {active ? null : (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute top-px right-px bottom-px w-10 rounded-r-md bg-gradient-to-l from-[var(--surface-2)] via-[var(--surface-2)] to-transparent opacity-0 transition-opacity duration-150 group-hover/session-row:opacity-100"
+          />
+        )}
+        <Popover open={open} onOpenChange={handleOpenChange}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Delete ${title}`}
+              title={canDelete ? "Delete session" : "Cannot delete a running session"}
+              disabled={!canDelete}
+              className={cn(
+                "absolute top-1.5 right-1 flex h-6 w-6 items-center justify-center rounded text-[var(--fg-mute)] opacity-0 transition-[opacity,color,background-color] duration-150 hover:bg-[var(--bad)]/10 hover:text-[var(--bad)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-30 group-hover/session-row:opacity-100",
+                open && "bg-[var(--bad)]/10 text-[var(--bad)] opacity-100",
+              )}
+            >
+              <Trash2 size={12} strokeWidth={1.75} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            side="right"
+            align="start"
+            sideOffset={10}
+            collisionPadding={12}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+            }}
+            className="w-64 rounded-lg border border-[var(--hairline)] bg-[var(--bg-elev)] p-3 text-[var(--fg)] shadow-lg"
+          >
+            <ChatSessionDeleteConfirm
+              title={title}
+              deleting={deleting}
+              error={deleteError}
+              onCancel={() => handleOpenChange(false)}
+              onConfirm={confirmDelete}
+            />
+          </PopoverContent>
+        </Popover>
+      </div>
     </SidebarMenuSubItem>
+  );
+}
+
+function ChatSessionDeleteConfirm({
+  title,
+  deleting,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  deleting: boolean;
+  error: string | null;
+  onCancel(): void;
+  onConfirm(): void;
+}): React.ReactElement {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <p className="text-[13px] font-medium tracking-tight text-[var(--fg)]">Delete session?</p>
+        <p className="line-clamp-2 text-[12px] leading-snug text-[var(--fg-dim)]">
+          <span className="text-[var(--fg)]">{title}</span>
+          <span> will be permanently removed.</span>
+        </p>
+      </div>
+      {error ? (
+        <p className="rounded-sm bg-[var(--bad)]/10 px-2 py-1 font-mono text-[10.5px] text-[var(--bad)]">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={deleting}
+          className="h-7 rounded-md border border-[var(--hairline-strong)] bg-transparent px-2.5 text-[11.5px] font-medium text-[var(--fg-dim)] transition-colors duration-150 hover:bg-[var(--surface-2)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          autoFocus
+          onClick={onConfirm}
+          disabled={deleting}
+          className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--bad)] px-2.5 text-[11.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[var(--bad)]/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--bad)]/40 disabled:cursor-not-allowed disabled:opacity-70"
+        >
+          {deleting ? (
+            <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />
+          ) : null}
+          {deleting ? "Deleting" : "Delete"}
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -6,7 +6,7 @@ import {
   type SessionRecord,
   SessionStore,
 } from "@strata/core";
-import type { ToolExecutionResult } from "@strata/tools";
+import type { ToolExecutionMode, ToolExecutionResult } from "@strata/tools";
 import { createDefaultToolRegistry, type ToolRegistry } from "@strata/tools";
 import { ModelAdapterError } from "./model.js";
 import { buildRunContext } from "./runContext.js";
@@ -302,35 +302,48 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         return;
       }
 
-      for (const toolCall of response.toolCalls) {
-        if (isAborted()) {
-          cancelled = true;
+      const batchOptions: ToolCallBatchOptions = {
+        store,
+        sessionId: session.id,
+        repoRoot,
+        tools,
+        toolCalls: response.toolCalls,
+        toolExecution: config.toolExecution ?? "parallel",
+      };
+      if (signal !== undefined) {
+        batchOptions.signal = signal;
+      }
+      const batch = executeToolCallBatch(batchOptions);
+      let toolExecutions: ExecutedToolCall[] = [];
+      while (true) {
+        const next = await batch.next();
+        if (next.done) {
+          toolExecutions = next.value;
           break;
         }
-        toolCallCount += 1;
-        yield {
-          type: "tool.call.started",
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          argumentsText: toolCall.argumentsText,
-        };
-        const toolResult = await executeToolCall(store, session.id, repoRoot, tools, toolCall);
-        const toolContent = JSON.stringify(toolResult);
+        if (next.value.type === "tool.call.started") {
+          toolCallCount += 1;
+        }
+        yield next.value;
+      }
+
+      for (const execution of toolExecutions) {
+        const toolContent = JSON.stringify(execution.result);
         messages.push({
           role: "tool",
           content: toolContent,
-          toolCallId: toolCall.id,
+          toolCallId: execution.toolCall.id,
         });
         await store.recordToolMessage({
           sessionId: session.id,
-          toolCallId: toolCall.id,
+          toolCallId: execution.toolCall.id,
           content: toolContent,
-          resultEventPayload: toolResultEventPayload(toolCall.id, toolResult),
+          resultEventPayload: toolResultEventPayload(execution.toolCall.id, execution.result),
         });
-        yield { type: "tool.call.completed", toolCallId: toolCall.id, result: toolResult };
       }
 
-      if (cancelled) {
+      if (isAborted()) {
+        cancelled = true;
         break;
       }
     }
@@ -616,19 +629,164 @@ async function appendInitialMessage(
   await store.appendMessage(input);
 }
 
-async function executeToolCall(
+interface ToolCallBatchOptions {
+  store: SessionStore;
+  sessionId: string;
+  repoRoot: string;
+  tools: ToolRegistry;
+  toolCalls: AgentToolCall[];
+  toolExecution: ToolExecutionMode;
+  signal?: AbortSignal;
+}
+
+interface ExecutedToolCall {
+  index: number;
+  toolCall: AgentToolCall;
+  result: ToolExecutionResult;
+}
+
+async function* executeToolCallBatch(
+  options: ToolCallBatchOptions,
+): AsyncGenerator<AgentRunEvent, ExecutedToolCall[]> {
+  if (shouldExecuteToolCallsSequential(options.tools, options.toolCalls, options.toolExecution)) {
+    const generator = executeToolCallsSequential(options);
+    return yield* generator;
+  }
+  const generator = executeToolCallsParallel(options);
+  return yield* generator;
+}
+
+async function* executeToolCallsSequential(
+  options: ToolCallBatchOptions,
+): AsyncGenerator<AgentRunEvent, ExecutedToolCall[]> {
+  const executions: ExecutedToolCall[] = [];
+  for (let index = 0; index < options.toolCalls.length; index += 1) {
+    if (isSignalAborted(options.signal)) {
+      break;
+    }
+    const toolCall = options.toolCalls[index];
+    if (toolCall === undefined) {
+      continue;
+    }
+    await recordToolStart(options.store, options.sessionId, toolCall);
+    yield toolStartedEvent(toolCall);
+    const result = await executeToolCall(
+      options.store,
+      options.repoRoot,
+      options.sessionId,
+      options.tools,
+      toolCall,
+    );
+    const execution: ExecutedToolCall = { index, toolCall, result };
+    executions.push(execution);
+    yield toolCompletedEvent(execution);
+  }
+  return executions;
+}
+
+async function* executeToolCallsParallel(
+  options: ToolCallBatchOptions,
+): AsyncGenerator<AgentRunEvent, ExecutedToolCall[]> {
+  const orderedExecutions: Array<ExecutedToolCall | undefined> = [];
+  const pending = new Map<number, Promise<ExecutedToolCall>>();
+
+  for (let index = 0; index < options.toolCalls.length; index += 1) {
+    if (isSignalAborted(options.signal)) {
+      break;
+    }
+    const toolCall = options.toolCalls[index];
+    if (toolCall === undefined) {
+      continue;
+    }
+    await recordToolStart(options.store, options.sessionId, toolCall);
+    pending.set(
+      index,
+      executeToolCall(
+        options.store,
+        options.repoRoot,
+        options.sessionId,
+        options.tools,
+        toolCall,
+      ).then((result): ExecutedToolCall => ({ index, toolCall, result })),
+    );
+    yield toolStartedEvent(toolCall);
+  }
+
+  while (pending.size > 0) {
+    const execution = await Promise.race(pending.values());
+    pending.delete(execution.index);
+    orderedExecutions[execution.index] = execution;
+    yield toolCompletedEvent(execution);
+  }
+
+  return orderedExecutions.filter(
+    (execution): execution is ExecutedToolCall => execution !== undefined,
+  );
+}
+
+function shouldExecuteToolCallsSequential(
+  tools: ToolRegistry,
+  toolCalls: AgentToolCall[],
+  mode: ToolExecutionMode,
+): boolean {
+  if (mode === "sequential") {
+    return true;
+  }
+  return toolCalls.some((toolCall) => toolExecutionModeFor(tools, toolCall.name) === "sequential");
+}
+
+function toolExecutionModeFor(
+  tools: ToolRegistry,
+  toolName: string,
+): ToolExecutionMode | undefined {
+  try {
+    return tools.get(toolName).executionMode;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal !== undefined && signal.aborted;
+}
+
+async function recordToolStart(
   store: SessionStore,
   sessionId: string,
-  repoRoot: string,
-  tools: ToolRegistry,
   toolCall: AgentToolCall,
-): Promise<ToolExecutionResult> {
+): Promise<void> {
   await store.recordToolStart({
     sessionId,
     toolCallId: toolCall.id,
     toolName: toolCall.name,
     argumentsText: toolCall.argumentsText,
   });
+}
+
+function toolStartedEvent(toolCall: AgentToolCall): AgentRunEvent {
+  return {
+    type: "tool.call.started",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    argumentsText: toolCall.argumentsText,
+  };
+}
+
+function toolCompletedEvent(execution: ExecutedToolCall): AgentRunEvent {
+  return {
+    type: "tool.call.completed",
+    toolCallId: execution.toolCall.id,
+    result: execution.result,
+  };
+}
+
+async function executeToolCall(
+  store: SessionStore,
+  repoRoot: string,
+  sessionId: string,
+  tools: ToolRegistry,
+  toolCall: AgentToolCall,
+): Promise<ToolExecutionResult> {
   return tools.safeExecuteText(toolCall.name, toolCall.argumentsText, {
     repoRoot,
     sessionId,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionStore } from "@strata/core";
@@ -133,6 +133,50 @@ describe("tui slash commands", () => {
       expect(ctx.terminal.output).not.toContain("\x1b[99;5u");
       expect(ctx.terminal.output).not.toContain("\x1b]2;owned\x07");
       expect(stripAnsi(ctx.terminal.output)).toContain("bad title ok");
+    } finally {
+      store.close();
+      await ctx.cleanup();
+    }
+  });
+
+  test("/sessions deletes the selected session after Ctrl+D confirmation", async () => {
+    const ctx = await setupApp(120, 24);
+    const store = await SessionStore.open(ctx.repoRoot);
+    try {
+      await store.createSession({
+        kind: "query",
+        title: "keep me",
+        model: "gpt-test",
+      });
+      const session = await store.createSession({
+        kind: "query",
+        title: "delete me",
+        model: "gpt-test",
+      });
+      await store.endSession(session.id, "completed");
+      const tracePath = path.join(store.paths.traceDir, `${session.id}.jsonl`);
+      await access(tracePath);
+
+      ctx.terminal.output = "";
+      ctx.terminal.feed("/sessions\r");
+      await pump();
+      ctx.terminal.feed("\x04");
+      await pump();
+      let frame = stripAnsi(
+        ctx.app.render({ width: ctx.terminal.columns, height: ctx.terminal.rows }).lines.join("\n"),
+      );
+      expect(frame).toContain("Delete session?");
+
+      ctx.terminal.feed("\r");
+      await pump(120);
+
+      expect(store.getSession(session.id)).toBeUndefined();
+      await expect(access(tracePath)).rejects.toThrow();
+      frame = stripAnsi(
+        ctx.app.render({ width: ctx.terminal.columns, height: ctx.terminal.rows }).lines.join("\n"),
+      );
+      expect(frame).toContain("keep me");
+      expect(frame).not.toContain("delete me");
     } finally {
       store.close();
       await ctx.cleanup();

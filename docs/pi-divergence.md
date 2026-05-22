@@ -33,6 +33,19 @@ loop with the same exit conditions. `stoppedReason` is `"final_answer"`,
 `"model_error"`, or `"cancelled"` — no more `"max_iterations"` /
 `"max_tool_calls"`.
 
+### Parallel tool execution
+
+Pi executes multiple tool calls from one assistant message in `parallel` mode
+by default, with a global `toolExecution: "parallel" | "sequential"` override
+and a per-tool `executionMode` override. Strata now matches: start events emit
+in assistant source order, completion events emit as tools finish, and persisted
+tool-result messages stay in assistant source order. If any called tool declares
+`executionMode: "sequential"`, the whole batch executes sequentially. The Codex
+and OpenAI-compatible adapters also request provider-side parallel tool calls.
+File write/edit tools use a same-file mutation queue, matching Pi's protection
+against parallel edits racing the same path while allowing different files to
+mutate concurrently.
+
 ---
 
 ## Pi-shaped, strata's own implementation
@@ -55,7 +68,7 @@ strata.
 | Double-escape session picker | `packages/tui/src/app/app.ts:handleEditorEscape`                              | `interactive-mode.ts` (lastEscapeTime / 500ms threshold)                    | Two Esc presses on an empty editor open the resume picker. Same threshold, same behavior.                                                            |
 | Auto-compaction              | `packages/agent/src/compaction.ts:shouldAutoCompact` (75% threshold)         | Pi auto-compacts in-loop when context fills past a threshold                | Same threshold, slightly different timing — strata runs auto-compact between turns rather than mid-iteration.                                       |
 | Compaction (incremental)     | `packages/agent/src/compaction.ts`                                           | `packages/coding-agent/src/core/compaction/compaction.ts`                   | Same prompts (verbatim) and same incremental-update flow when a previous summary is detected. Pi additionally does turn-prefix summarization and reserves tokens for the next reply; we don't yet (see below). |
-| Session ergonomics          | `packages/tui/src/app/app.ts` `/resume`/`/clone`/`/fork`/`/name`/`/session`  | `packages/coding-agent/src/modes/interactive/...` (multiple)                | Pi has a session tree with branches and forking-at-a-message; we have flat sessions with full clone-and-switch.                                     |
+| Session ergonomics          | `packages/cli/src/index.ts` `tui --continue`/`--resume`/`--session`/`--fork`, `packages/tui/src/app/app.ts` `/resume`/`/clone`/`/fork`/`/name`/`/session`, `packages/tui/src/app/sessionSelector.ts` deletion | `packages/coding-agent/src/cli/args.ts`, `main.ts`, and `modes/interactive/...` | Launch flags follow Pi's meanings (`--continue` most recent, `--resume` picker, `--session` direct resume, `--fork` clone first), adapted to Strata's SQLite session ids instead of Pi's session file paths/global session dirs. Deletion follows Pi's selector flow: `Ctrl+D`/`Ctrl+Backspace`, Enter confirmation, trash first with unlink fallback, and no deleting the active session. Pi still has a session tree with branches and forking-at-a-message; we have flat sessions with full clone-and-switch. |
 | Persistent prompt history    | `packages/tui/src/app/history.ts` (`<runtimeDir>/history.jsonl`, capped at 100, stop-at-edge cycling) | In-memory only (pi's `editor.history`), with stop-at-edge cycling           | Strata *exceeds* pi here on persistence (pi's history evaporates between launches); strata matches pi's stop-at-edge behavior (Up at the oldest entry is a no-op rather than wrapping). |
 | Skills as slash commands    | `/skill:<name>` auto-discovered from `.strata/skills/` and `.agents/skills/**/SKILL.md` at startup | `/skill:<name>` auto-discovered from configured skill sources               | Close to Pi for local project skills: `.strata` wins collisions, `.agents` root markdown is ignored, recursive `SKILL.md` dirs are discovered, and skill invocations expand into Pi-style skill blocks. Pi still has packages, global/user skill directories, settings/CLI skill flags, diagnostics UI, and `/reload`; Strata does not yet. |
 | Startup header              | `packages/tui/src/app/header.ts` `buildStartupHeader()` pushed as a `header` transcript item at App construction | `interactive-mode.ts:566` logo + compact key-hint line + onboarding pointer in `headerContainer` | Same compact shape (`logo` / ` · `-separated key hints / dim onboarding) and same once-at-launch print. Strata emits the lines into the transcript so they scroll naturally into native terminal scrollback (pi-style scrollback model). Pi's `Ctrl+O` expanded-header toggle and update-banner are not ported. |

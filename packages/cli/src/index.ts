@@ -22,7 +22,7 @@ import {
 } from "@strata/ingest/connectors";
 import { runSlackSocketModeListener } from "@strata/ingest/slack-socket-mode";
 import { createDefaultToolRegistry, type ToolProfile } from "@strata/tools";
-import { runTui } from "@strata/tui";
+import { type RunTuiOptions, runTui } from "@strata/tui";
 
 type CommandResult = number;
 
@@ -41,16 +41,22 @@ commands:
   learn reflect [options] <id>  reflect on a completed session trace
   maintain list                list maintenance jobs
   maintain run <job>           run one maintenance job and persist a trace
-  tui                          launch the interactive Strata TUI
+  tui [options]                launch the interactive Strata TUI
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions
   sessions search <query>      search sessions using the current simple index
+  sessions delete <id> [--yes] delete a session and its trace
   tools list [--profile P]     list registered harness tools
   tools call [--profile P] <name> [json]
 `;
 }
 
 type ProviderName = ModelProviderName;
+
+interface TuiCliOptions {
+  help?: boolean;
+  initialSession?: RunTuiOptions["initialSession"];
+}
 
 interface ModelOptions {
   provider?: ProviderName;
@@ -127,6 +133,17 @@ function parseLimit(args: string[], fallback = 20): number {
   return parsed;
 }
 
+function consumeBooleanFlag(args: string[], ...names: string[]): boolean {
+  let found = false;
+  for (let index = args.length - 1; index >= 0; index -= 1) {
+    if (names.includes(args[index] ?? "")) {
+      args.splice(index, 1);
+      found = true;
+    }
+  }
+  return found;
+}
+
 function printSessions(sessions: SessionRecord[]): void {
   if (sessions.length === 0) {
     console.log("No sessions found.");
@@ -138,6 +155,44 @@ function printSessions(sessions: SessionRecord[]): void {
     console.log(
       `${session.startedAt}  ${session.status.padEnd(11)}  ${session.kind.padEnd(7)}  ${session.id}  ${session.title}  (${ended})`,
     );
+  }
+}
+
+function resolveSessionSelector(store: SessionStore, selector: string): SessionRecord {
+  const exact = store.getSession(selector);
+  if (exact !== undefined) {
+    return exact;
+  }
+
+  const matches = store.findSessionsByIdPrefix(selector, 20);
+  if (matches.length === 0) {
+    throw new Error(`Session not found: ${selector}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Session id prefix is ambiguous: ${selector} (${matches.map((session) => session.id).join(", ")})`,
+    );
+  }
+  const match = matches[0];
+  if (match === undefined) {
+    throw new Error(`Session not found: ${selector}`);
+  }
+  return match;
+}
+
+async function confirmSessionDeletion(session: SessionRecord): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    throw new Error("sessions delete requires --yes when stdin is not a TTY");
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(
+      `Delete session ${session.id} "${session.title || session.kind}"? [y/N] `,
+    );
+    return answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes";
+  } finally {
+    rl.close();
   }
 }
 
@@ -378,7 +433,7 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
 async function cmdSessions(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: strata sessions <list|search>`);
+    console.log(`usage: strata sessions <list|search|delete>`);
     return 0;
   }
 
@@ -401,6 +456,36 @@ async function cmdSessions(args: string[]): Promise<CommandResult> {
     }
     return withStore((store) => {
       printSessions(store.searchSessions(query, limit));
+      return 0;
+    });
+  }
+
+  if (subcommand === "delete" || subcommand === "rm") {
+    const assumeYes = consumeBooleanFlag(args, "--yes", "-y");
+    const selector = args.shift();
+    if (selector === undefined || selector.trim() === "") {
+      throw new Error("sessions delete requires a session id or unique id prefix");
+    }
+    if (args.length !== 0) {
+      throw new Error(`Unknown sessions delete argument: ${args.join(" ")}`);
+    }
+    return withStore(async (store) => {
+      const session = resolveSessionSelector(store, selector);
+      if (!assumeYes) {
+        const confirmed = await confirmSessionDeletion(session);
+        if (!confirmed) {
+          console.log("cancelled");
+          return 1;
+        }
+      }
+      const result = await store.deleteSession(session.id);
+      const traceSummary =
+        result.traceMethod === "trash"
+          ? "trace moved to trash"
+          : result.traceMethod === "unlink"
+            ? "trace deleted"
+            : "trace already missing";
+      console.log(`deleted session ${result.id} (${traceSummary})`);
       return 0;
     });
   }
@@ -482,6 +567,65 @@ async function cmdMaintain(args: string[]): Promise<CommandResult> {
   throw new Error(`Unknown maintain subcommand: ${subcommand}`);
 }
 
+function tuiUsage(): string {
+  return `usage: strata tui [options]
+
+options:
+  --continue, -c        continue the most recent session
+  --resume, -r          select a session to resume
+  --session <id>        resume a specific session by id or unique id prefix
+  --fork <id>           fork a specific session by id or unique id prefix
+  --help, -h            show this help
+`;
+}
+
+function parseTuiOptions(args: string[]): TuiCliOptions {
+  let showHelp = false;
+  let continueRequested = false;
+  let resumeRequested = false;
+  let sessionSelector: string | undefined;
+  let forkSelector: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--help" || arg === "-h") {
+      showHelp = true;
+    } else if (arg === "--continue" || arg === "-c") {
+      continueRequested = true;
+    } else if (arg === "--resume" || arg === "-r") {
+      resumeRequested = true;
+    } else if (arg === "--session") {
+      sessionSelector = requireArgValue(args[++index], "--session requires a session id");
+    } else if (arg === "--fork") {
+      forkSelector = requireArgValue(args[++index], "--fork requires a session id");
+    } else {
+      throw new Error(`Unknown tui argument: ${arg}`);
+    }
+  }
+
+  if (
+    forkSelector !== undefined &&
+    (sessionSelector !== undefined || resumeRequested || continueRequested)
+  ) {
+    throw new Error("--fork cannot be combined with --session, --resume, or --continue");
+  }
+
+  const parsed: TuiCliOptions = {};
+  if (showHelp) {
+    parsed.help = true;
+  }
+  if (forkSelector !== undefined) {
+    parsed.initialSession = { type: "fork", selector: forkSelector };
+  } else if (sessionSelector !== undefined) {
+    parsed.initialSession = { type: "session", selector: sessionSelector };
+  } else if (resumeRequested) {
+    parsed.initialSession = { type: "resume" };
+  } else if (continueRequested) {
+    parsed.initialSession = { type: "continue" };
+  }
+  return parsed;
+}
+
 async function cmdTools(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
 
@@ -549,7 +693,16 @@ async function main(argv: string[]): Promise<CommandResult> {
     return cmdMaintain(argv);
   }
   if (command === "tui") {
-    await runTui({ repoRoot: getStrataPaths().repoRoot });
+    const options = parseTuiOptions(argv);
+    if (options.help) {
+      console.log(tuiUsage());
+      return 0;
+    }
+    const runOptions: RunTuiOptions = { repoRoot: getStrataPaths().repoRoot };
+    if (options.initialSession !== undefined) {
+      runOptions.initialSession = options.initialSession;
+    }
+    await runTui(runOptions);
     return 0;
   }
   if (command === "trace") {
