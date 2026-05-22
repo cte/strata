@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionStore } from "./sessionStore.js";
@@ -127,6 +127,37 @@ describe("SessionStore.backfillAssistantUsage", () => {
 
       expect(outcome.messagesUpdated).toBe(0);
       expect(store.listMessages(session.id)[0]?.usage).toEqual(usage);
+    });
+  });
+});
+
+describe("SessionStore.deleteSession", () => {
+  test("deletes the session row, cascades messages/events, and removes the trace file", async () => {
+    await withTempStore(async (store) => {
+      const session = await store.createSession({ kind: "chat", title: "Delete me" });
+      await store.appendMessage({
+        sessionId: session.id,
+        role: "user",
+        content: "remove this",
+      });
+      const tracePath = path.join(store.paths.traceDir, `${session.id}.jsonl`);
+      await access(tracePath);
+
+      const result = await store.deleteSession(session.id);
+
+      expect(result.id).toBe(session.id);
+      expect(store.getSession(session.id)).toBeUndefined();
+      expect(store.listMessages(session.id)).toEqual([]);
+      await expect(access(tracePath)).rejects.toThrow();
+    });
+  });
+
+  test("finds sessions by id prefix for CLI ergonomics", async () => {
+    await withTempStore(async (store) => {
+      const session = await store.createSession({ kind: "query", title: "Prefix target" });
+
+      expect(store.findSessionsByIdPrefix(session.id.slice(0, 12))).toEqual([session]);
+      expect(store.findSessionsByIdPrefix("does-not-exist")).toEqual([]);
     });
   });
 });

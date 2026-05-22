@@ -1,11 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { stripAnsi, visibleWidth } from "./ansi.js";
 import { SlashCommandRegistry } from "./commands.js";
-import { Editor } from "./editor.js";
+import { Editor, wordWrapLine } from "./editor.js";
 
 function feed(editor: Editor, text: string): void {
   for (const ch of text) {
     editor.handleInput({ type: "text", text: ch, raw: ch });
   }
+}
+
+function editorContentLines(editor: Editor, width: number): string[] {
+  return editor
+    .render({ width, height: 10 })
+    .lines.map((line) => stripAnsi(line).slice(2).trimEnd());
 }
 
 describe("Editor", () => {
@@ -148,5 +155,51 @@ describe("Editor", () => {
     expect(parsed?.args).toBe("now");
     parsed?.command.run(parsed.args);
     expect(invoked).toBe("now");
+  });
+
+  test("wordWrapLine wraps at word boundaries", () => {
+    expect(wordWrapLine("hello world test", 11).map((chunk) => chunk.text)).toEqual([
+      "hello ",
+      "world test",
+    ]);
+  });
+
+  test("renders wrapped input at word boundaries", () => {
+    const editor = new Editor();
+    editor.setText("hello world test");
+
+    expect(editorContentLines(editor, 13)).toEqual(["hello", "world test"]);
+  });
+
+  test("places the cursor using word-wrapped rows", () => {
+    const editor = new Editor();
+    editor.setText("hello world test");
+
+    const frame = editor.render({ width: 13, height: 10 });
+
+    expect(frame.cursor).toEqual({ row: 1, col: 12 });
+  });
+
+  test("does not start wrapped content rows with whitespace", () => {
+    const editor = new Editor();
+    editor.setText("Word1 Word2 Word3 Word4 Word5");
+
+    for (const line of editorContentLines(editor, 16)) {
+      if (line.trim().length > 0) {
+        expect(line.startsWith(" ")).toBe(false);
+      }
+    }
+  });
+
+  test("force-breaks long tokens without exceeding editor width", () => {
+    const width = 20;
+    const editor = new Editor();
+    editor.setText("Check https://example.com/very/long/path here");
+
+    const frame = editor.render({ width, height: 10 });
+
+    for (const line of frame.lines) {
+      expect(visibleWidth(stripAnsi(line))).toBeLessThanOrEqual(width);
+    }
   });
 });

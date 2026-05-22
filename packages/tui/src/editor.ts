@@ -9,6 +9,112 @@ import {
 import type { Component, Frame, RenderContext } from "./component.js";
 import type { InputEvent, KeyId } from "./keys.js";
 
+const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+export interface TextChunk {
+  text: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+interface LayoutLine {
+  text: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+function isWhitespaceChar(char: string): boolean {
+  return /\s/u.test(char);
+}
+
+/**
+ * Split one logical editor line into visual chunks.
+ *
+ * This mirrors Pi's prompt-editor behavior: prefer word boundaries, keep the
+ * original text indices for cursor mapping, and only force-break long tokens.
+ */
+export function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
+  if (line === "" || maxWidth <= 0) {
+    return [{ text: "", startIndex: 0, endIndex: 0 }];
+  }
+
+  if (visibleWidth(line) <= maxWidth) {
+    return [{ text: line, startIndex: 0, endIndex: line.length }];
+  }
+
+  const chunks: TextChunk[] = [];
+  const segments = [...segmenter.segment(line)];
+  let currentWidth = 0;
+  let chunkStart = 0;
+  let wrapOppIndex = -1;
+  let wrapOppWidth = 0;
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i];
+    if (segment === undefined) {
+      continue;
+    }
+
+    const grapheme = segment.segment;
+    const graphemeWidth = visibleWidth(grapheme);
+    const charIndex = segment.index;
+    const isWhitespace = isWhitespaceChar(grapheme);
+
+    if (currentWidth + graphemeWidth > maxWidth) {
+      if (wrapOppIndex >= 0 && currentWidth - wrapOppWidth + graphemeWidth <= maxWidth) {
+        chunks.push({
+          text: line.slice(chunkStart, wrapOppIndex),
+          startIndex: chunkStart,
+          endIndex: wrapOppIndex,
+        });
+        chunkStart = wrapOppIndex;
+        currentWidth -= wrapOppWidth;
+      } else if (chunkStart < charIndex) {
+        chunks.push({
+          text: line.slice(chunkStart, charIndex),
+          startIndex: chunkStart,
+          endIndex: charIndex,
+        });
+        chunkStart = charIndex;
+        currentWidth = 0;
+      }
+      wrapOppIndex = -1;
+    }
+
+    if (graphemeWidth > maxWidth) {
+      if (chunkStart < charIndex) {
+        chunks.push({
+          text: line.slice(chunkStart, charIndex),
+          startIndex: chunkStart,
+          endIndex: charIndex,
+        });
+      }
+      chunks.push({
+        text: grapheme,
+        startIndex: charIndex,
+        endIndex: charIndex + grapheme.length,
+      });
+      chunkStart = charIndex + grapheme.length;
+      currentWidth = 0;
+      wrapOppIndex = -1;
+      continue;
+    }
+
+    currentWidth += graphemeWidth;
+
+    const next = segments[i + 1];
+    if (isWhitespace && next !== undefined && !isWhitespaceChar(next.segment)) {
+      wrapOppIndex = next.index;
+      wrapOppWidth = currentWidth;
+    }
+  }
+
+  if (chunkStart < line.length || chunks.length === 0) {
+    chunks.push({ text: line.slice(chunkStart), startIndex: chunkStart, endIndex: line.length });
+  }
+  return chunks;
+}
+
 export interface AutocompleteItem {
   label: string;
   value: string;
@@ -93,15 +199,17 @@ export class Editor implements Component {
 
   render(ctx: RenderContext): Frame {
     const promptWidth = visibleWidth(this.prompt);
-    const innerWidth = Math.max(1, ctx.width - promptWidth);
+    const innerWidth = Math.max(1, ctx.width - promptWidth - 1);
     const display =
       this.text === "" && !this.focused && this.placeholder !== ""
         ? theme.muted(this.placeholder)
         : this.text;
-    const wrapped = wrapText(display === "" ? " " : display, innerWidth);
+    const wrapped =
+      display !== this.text
+        ? wrapText(display === "" ? " " : display, innerWidth)
+        : this.layoutText(display, innerWidth).map((line) => line.text);
 
-    const cursorRow = this.computeRow(innerWidth);
-    const cursorCol = this.computeCol(innerWidth);
+    const cursor = this.computeCursor(innerWidth);
     const lines: string[] = [];
     for (let i = 0; i < wrapped.length; i += 1) {
       const text = wrapped[i] ?? "";
@@ -141,8 +249,8 @@ export class Editor implements Component {
     const frame: Frame = { lines };
     if (this.focused && !this.disabled) {
       frame.cursor = {
-        row: cursorRow,
-        col: (cursorRow === 0 ? promptWidth : promptWidth) + cursorCol,
+        row: cursor.row,
+        col: promptWidth + cursor.col,
       };
     }
     return frame;
@@ -361,17 +469,55 @@ export class Editor implements Component {
     this.cursor = value.length;
   }
 
-  private computeRow(innerWidth: number): number {
-    const before = this.text.slice(0, this.cursor);
-    const lines = wrapText(before === "" ? " " : before, innerWidth);
-    return Math.max(0, lines.length - 1);
+  private layoutText(text: string, width: number): LayoutLine[] {
+    if (text === "") {
+      return [{ text: "", startIndex: 0, endIndex: 0 }];
+    }
+
+    const layoutLines: LayoutLine[] = [];
+    let offset = 0;
+    for (const logicalLine of text.split("\n")) {
+      for (const chunk of wordWrapLine(logicalLine, width)) {
+        layoutLines.push({
+          text: chunk.text,
+          startIndex: offset + chunk.startIndex,
+          endIndex: offset + chunk.endIndex,
+        });
+      }
+      offset += logicalLine.length + 1;
+    }
+    return layoutLines;
   }
 
-  private computeCol(innerWidth: number): number {
-    const before = this.text.slice(0, this.cursor);
-    const lines = wrapText(before === "" ? "" : before, innerWidth);
-    const last = lines.at(-1) ?? "";
-    return visibleWidth(last);
+  private computeCursor(innerWidth: number): { row: number; col: number } {
+    const layoutLines = this.layoutText(this.text, innerWidth);
+
+    for (let row = 0; row < layoutLines.length; row += 1) {
+      const line = layoutLines[row];
+      if (line === undefined) {
+        continue;
+      }
+
+      const next = layoutLines[row + 1];
+      const wrapsIntoNext = next !== undefined && next.startIndex === line.endIndex;
+      const isLast = row === layoutLines.length - 1;
+      const cursorAtLineEnd = this.cursor === line.endIndex && (!wrapsIntoNext || isLast);
+      const cursorInsideLine = this.cursor >= line.startIndex && this.cursor < line.endIndex;
+
+      if (cursorInsideLine || cursorAtLineEnd) {
+        const cursorIndex = Math.max(line.startIndex, Math.min(this.cursor, line.endIndex));
+        return {
+          row,
+          col: visibleWidth(this.text.slice(line.startIndex, cursorIndex)),
+        };
+      }
+    }
+
+    const last = layoutLines.at(-1) ?? { startIndex: 0, endIndex: 0 };
+    return {
+      row: Math.max(0, layoutLines.length - 1),
+      col: visibleWidth(this.text.slice(last.startIndex, last.endIndex)),
+    };
   }
 }
 

@@ -1,5 +1,7 @@
 import { Database } from "bun:sqlite";
-import { appendFile, mkdir } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { appendFile, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { asc, desc, eq, or, sql } from "drizzle-orm";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
@@ -11,6 +13,7 @@ import { events, messages, sessions } from "./schema.js";
 import { normalizeModelUsage } from "./tokenUsage.js";
 import type {
   CreateSessionInput,
+  DeleteSessionResult,
   JsonObject,
   JsonValue,
   MessageInput,
@@ -283,6 +286,39 @@ export class SessionStore {
     return rows.map(rowToSession);
   }
 
+  findSessionsByIdPrefix(prefix: string, limit = 20): SessionRecord[] {
+    const pattern = `${escapeLike(prefix)}%`;
+    const rows = this.drizzle
+      .select()
+      .from(sessions)
+      .where(sql`${sessions.id} like ${pattern} escape '\\'`)
+      .orderBy(desc(sessions.startedAt))
+      .limit(limit)
+      .all();
+    return rows.map(rowToSession);
+  }
+
+  async deleteSession(sessionId: string): Promise<DeleteSessionResult> {
+    const session = this.getSession(sessionId);
+    if (session === undefined) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const tracePath = path.join(this.paths.traceDir, `${sessionId}.jsonl`);
+    const traceMethod = await deleteTraceFile(tracePath);
+    const result = this.db.query("delete from sessions where id = ?").run(sessionId);
+    if (Number(result.changes) === 0) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    return {
+      id: session.id,
+      title: session.title,
+      tracePath,
+      traceMethod,
+    };
+  }
+
   deleteMessages(sessionId: string): number {
     // Drizzle's bun-sqlite adapter types `.run()` as void even though the
     // underlying call returns a Changes object, so reach for the raw handle
@@ -486,4 +522,39 @@ function messageRowToRecord(row: schema.MessageRow): MessageRecord {
 
 function escapeLike(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+async function deleteTraceFile(tracePath: string): Promise<DeleteSessionResult["traceMethod"]> {
+  if (!existsSync(tracePath)) {
+    return "missing";
+  }
+
+  const trashArgs = tracePath.startsWith("-") ? ["--", tracePath] : [tracePath];
+  const trashResult = spawnSync("trash", trashArgs, { encoding: "utf8" });
+  if (trashResult.status === 0 || !existsSync(tracePath)) {
+    return "trash";
+  }
+
+  try {
+    await unlink(tracePath);
+    return "unlink";
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const trashHint = formatTrashError(trashResult);
+    throw new Error(
+      `Failed to delete trace file ${tracePath}: ${trashHint ? `${message} (${trashHint})` : message}`,
+    );
+  }
+}
+
+function formatTrashError(result: ReturnType<typeof spawnSync>): string | undefined {
+  const parts: string[] = [];
+  if (result.error !== undefined) {
+    parts.push(result.error.message);
+  }
+  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+  if (stderr !== "") {
+    parts.push(stderr.split("\n")[0] ?? stderr);
+  }
+  return parts.length === 0 ? undefined : `trash: ${parts.join(" · ").slice(0, 200)}`;
 }

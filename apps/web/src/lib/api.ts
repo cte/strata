@@ -26,6 +26,7 @@ export type ChatActiveRunSummary = RouterOutput["chat"]["runs"]["active"]["runs"
 export type ChatRunSummary = NonNullable<RouterOutput["chat"]["runs"]["get"]["run"]>;
 export type ChatSessionSummary = RouterOutput["chat"]["sessions"]["list"]["sessions"][number];
 export type ChatSessionDetail = NonNullable<RouterOutput["chat"]["sessions"]["get"]>;
+export type ChatSessionDeleteResult = RouterOutput["chat"]["sessions"]["delete"];
 export type ChatMessageSummary = ChatSessionDetail["messages"][number];
 
 export interface ChatImageAttachment {
@@ -124,6 +125,10 @@ export async function getChatSession(sessionId: string): Promise<ChatSessionDeta
 
 export async function forkChatSession(sessionId: string): Promise<ChatSessionDetail> {
   return trpc.chat.sessions.fork.mutate({ sessionId });
+}
+
+export async function deleteChatSession(sessionId: string): Promise<ChatSessionDeleteResult> {
+  return trpc.chat.sessions.delete.mutate({ sessionId });
 }
 
 export async function searchChatSessions(query: string, limit = 20): Promise<ChatSessionSummary[]> {

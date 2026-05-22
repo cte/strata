@@ -16,6 +16,8 @@ import type {
   ChatModelStatus,
   ChatModelSummary,
   ChatModelsListInput,
+  ChatSessionDeleteInput,
+  ChatSessionDeleteResult,
   ChatSessionDetail,
   ChatSessionForkInput,
   ChatSessionGetInput,
@@ -116,6 +118,26 @@ export async function forkChatSession(
   return {
     session: sessionToChatSummary(cloned),
     messages: store.listMessages(cloned.id).map(messageToChatSummary),
+  };
+}
+
+export async function deleteChatSession(
+  input: ChatSessionDeleteInput,
+  getSessionStore: SessionStoreGetter,
+): Promise<ChatSessionDeleteResult> {
+  const store = await getSessionStore();
+  const source = store.getSession(input.sessionId);
+  if (source === undefined || !isChatSessionKind(source.kind)) {
+    throw new Error(`Session not found: ${input.sessionId}`);
+  }
+  if (source.status === "running") {
+    throw new Error(`Cannot delete a running session: ${input.sessionId}`);
+  }
+  const result = await store.deleteSession(input.sessionId);
+  return {
+    id: result.id,
+    title: result.title,
+    traceMethod: result.traceMethod,
   };
 }
 

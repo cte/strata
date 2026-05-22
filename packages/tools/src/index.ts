@@ -1,3 +1,4 @@
+export * from "./fileMutationQueue.js";
 export * from "./fsTools.js";
 export * from "./memoryTools.js";
 export * from "./policy.js";

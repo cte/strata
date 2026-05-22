@@ -1,5 +1,10 @@
 import type { JsonObject, JsonValue, SessionStatus } from "@strata/core/types";
-import type { ToolExecutionResult, ToolMetadata, ToolRegistry } from "@strata/tools/types";
+import type {
+  ToolExecutionMode,
+  ToolExecutionResult,
+  ToolMetadata,
+  ToolRegistry,
+} from "@strata/tools/types";
 
 export type AgentMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -94,6 +99,12 @@ export interface AgentRunConfig {
    * Attempts are total attempts, including the first request.
    */
   modelRetryPolicy?: ModelRetryPolicy;
+  /**
+   * Pi-compatible execution strategy for multiple tool calls in one assistant
+   * message. Defaults to `parallel`; any called tool with
+   * `executionMode: "sequential"` forces the whole batch sequential.
+   */
+  toolExecution?: ToolExecutionMode;
 }
 
 export interface AgentRunResult {

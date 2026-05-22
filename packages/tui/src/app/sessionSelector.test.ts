@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SessionRecord } from "@strata/core";
+import type { DeleteSessionResult, SessionRecord } from "@strata/core";
 import { stripAnsi } from "../ansi.js";
 import { SessionSelector } from "./sessionSelector.js";
 
@@ -19,6 +19,19 @@ function makeSession(id: string, title: string): SessionRecord {
 function renderSelector(selector: SessionSelector, width: number, height: number): string[] {
   const frame = selector.render({ width, height });
   return frame.lines.map((line) => stripAnsi(line));
+}
+
+function deleted(session: SessionRecord): DeleteSessionResult {
+  return {
+    id: session.id,
+    title: session.title,
+    tracePath: `/tmp/${session.id}.jsonl`,
+    traceMethod: "unlink",
+  };
+}
+
+function flushPromises(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 describe("SessionSelector", () => {
@@ -111,5 +124,56 @@ describe("SessionSelector", () => {
     expect(rendered).not.toContain("\x1b[99;5u");
     expect(rendered).not.toContain("\x1b]2;owned\x07");
     expect(stripAnsi(rendered)).toContain("bad title ok");
+  });
+
+  test("Ctrl+D asks for confirmation and Enter deletes the selected session", async () => {
+    const sessions = [makeSession("s1", "first"), makeSession("s2", "second")];
+    const selector = new SessionSelector();
+    const deletedIds: string[] = [];
+    selector.open(
+      sessions,
+      () => {},
+      () => {},
+      async (session) => {
+        deletedIds.push(session.id);
+        return deleted(session);
+      },
+    );
+
+    selector.handleInput({ type: "key", key: "ctrl+d", raw: "\x04" });
+    expect(renderSelector(selector, 80, 24).join("\n")).toContain("Delete session?");
+
+    selector.handleInput({ type: "key", key: "enter", raw: "\r" });
+    await flushPromises();
+
+    expect(deletedIds).toEqual(["s1"]);
+    expect(selector.sessions.map((session) => session.id)).toEqual(["s2"]);
+    expect(renderSelector(selector, 80, 24).join("\n")).toContain("Session deleted");
+  });
+
+  test("does not delete the currently active session", async () => {
+    const sessions = [makeSession("s1", "first")];
+    const selector = new SessionSelector();
+    let deleteCalls = 0;
+    selector.open(
+      sessions,
+      () => {},
+      () => {},
+      async (session) => {
+        deleteCalls += 1;
+        return deleted(session);
+      },
+      "s1",
+    );
+
+    selector.handleInput({ type: "key", key: "ctrl+d", raw: "\x04" });
+    selector.handleInput({ type: "key", key: "enter", raw: "\r" });
+    await flushPromises();
+
+    expect(deleteCalls).toBe(0);
+    expect(selector.sessions).toEqual(sessions);
+    expect(renderSelector(selector, 80, 24).join("\n")).toContain(
+      "Cannot delete the currently active session",
+    );
   });
 });

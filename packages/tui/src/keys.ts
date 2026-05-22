@@ -31,6 +31,7 @@ export type KeyId =
   | "ctrl+d"
   | "ctrl+e"
   | "ctrl+f"
+  | "ctrl+backspace"
   | "ctrl+k"
   | "ctrl+l"
   | "ctrl+n"
@@ -67,6 +68,7 @@ const RECOGNIZED_KEY_IDS = new Set<string>([
   "ctrl+d",
   "ctrl+e",
   "ctrl+f",
+  "ctrl+backspace",
   "ctrl+k",
   "ctrl+l",
   "ctrl+n",

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -274,6 +274,21 @@ describe("web api", () => {
         expect(forkedLoad?.messages).toHaveLength(2);
         await expect(
           client.chat.sessions.fork.mutate({ sessionId: ingestSessionId }),
+        ).rejects.toThrow("Session not found");
+
+        const deleted = await client.chat.sessions.delete.mutate({ sessionId: chatSessionId });
+        expect(deleted).toMatchObject({
+          id: chatSessionId,
+          title: "Browser chat",
+        });
+        await expect(
+          client.chat.sessions.get.query({ sessionId: chatSessionId }),
+        ).resolves.toBeNull();
+        await expect(
+          access(path.join(repoRoot, ".strata", "traces", `${chatSessionId}.jsonl`)),
+        ).rejects.toThrow();
+        await expect(
+          client.chat.sessions.delete.mutate({ sessionId: ingestSessionId }),
         ).rejects.toThrow("Session not found");
       } finally {
         close();

@@ -174,10 +174,15 @@ strata chat
 strata query "<question>"
 strata ingest wiki/raw/granola/<file>.md
 strata lint
+strata tui --continue
+strata tui --resume
+strata tui --session <id-prefix>
+strata tui --fork <id-prefix>
 strata learn reflect <session-id>
 strata learn curator
 strata sessions list
 strata sessions search "<query>"
+strata sessions delete <id> --yes
 ```
 
 Implementation target:
@@ -197,19 +202,20 @@ Responsibilities:
 - Call the configured model adapter.
 - Normalize model responses into `{content, toolCalls, finishReason, usage}`.
 - Validate tool names and JSON arguments.
-- Execute tool calls through the registry.
-- Append tool result messages.
-- Stop on final answer, max iterations, max tool calls, model error, or guardrail halt.
+- Execute tool calls through the registry in Pi-style parallel mode by default.
+- Append tool result messages in assistant source order, even when completion events arrive in completion order.
+- Stop on final answer, cancellation, model error, or guardrail halt.
 - Persist events throughout the run.
 - Trigger the post-run reflection loop.
 
-First version constraints:
+Current execution constraints:
 
-- Max iterations default: 12.
-- Max tool calls per run default: 40.
-- Tool calls execute sequentially at first.
+- No hard iteration/tool-call ceiling: the loop runs until final answer, cancellation, or failure.
+- `AgentRunConfig.toolExecution` can force `"sequential"`, but defaults to `"parallel"`.
+- A called `ToolDefinition` with `executionMode: "sequential"` forces the whole batch sequential.
+- In parallel mode, `tool.call.started` events emit in assistant source order, `tool.call.completed` events emit as tools finish, and persisted tool messages remain in assistant source order.
 - Tool results above a size threshold are summarized or persisted to trace files and replaced with a preview.
-- No streaming in the first version.
+- Model adapters request provider-side parallel tool calls when supported.
 
 ### 6.3 Model Adapter
 
@@ -243,6 +249,7 @@ Each tool has:
 - `handler(args, context)`
 - `mode`: `read`, `write`, `learning`, `dangerous`
 - `maxResultChars`
+- optional `executionMode`: `parallel` or `sequential`
 - optional `available()`
 
 The registry must:

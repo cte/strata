@@ -3,6 +3,7 @@ import type { Stats } from "node:fs";
 import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@strata/core";
+import { withFileMutationQueue } from "./fileMutationQueue.js";
 import {
   assertReadAllowed,
   assertWriteAllowed,
@@ -602,39 +603,43 @@ export async function writeTextFile(
   await rejectSymlinkPathSegments(resolved.repoRoot, resolved.relativePath, {
     allowMissing: true,
   });
-  const existing = await optionalLstat(resolved.absolutePath);
   let before: string | null = null;
 
-  if (existing !== undefined) {
-    rejectUnreadableEntry(resolved.relativePath, existing);
-    if (!input.overwrite) {
-      throw new PolicyViolationError(
-        "file_exists",
-        `File already exists; set overwrite: true to replace it: ${resolved.relativePath}`,
-      );
+  return withFileMutationQueue(resolved.absolutePath, async () => {
+    const currentExisting = await optionalLstat(resolved.absolutePath);
+    if (currentExisting !== undefined) {
+      rejectUnreadableEntry(resolved.relativePath, currentExisting);
+      if (!input.overwrite) {
+        throw new PolicyViolationError(
+          "file_exists",
+          `File already exists; set overwrite: true to replace it: ${resolved.relativePath}`,
+        );
+      }
+      before = decodeText(await readFile(resolved.absolutePath), resolved.relativePath);
+    } else {
+      before = null;
     }
-    before = decodeText(await readFile(resolved.absolutePath), resolved.relativePath);
-  }
 
-  await ensureWritableParent(resolved.repoRoot, resolved.relativePath, resolved.absolutePath, {
-    createDirs: input.createDirs,
-  });
-  await writeFile(resolved.absolutePath, input.content, "utf8");
-  const changeType = before === null ? "create" : (input.changeType ?? "update");
-  const change = await recordTextFileChange(context, {
-    path: resolved.relativePath,
-    changeType,
-    before,
-    after: input.content,
-  });
+    await ensureWritableParent(resolved.repoRoot, resolved.relativePath, resolved.absolutePath, {
+      createDirs: input.createDirs,
+    });
+    await writeFile(resolved.absolutePath, input.content, "utf8");
+    const changeType = before === null ? "create" : (input.changeType ?? "update");
+    const change = await recordTextFileChange(context, {
+      path: resolved.relativePath,
+      changeType,
+      before,
+      after: input.content,
+    });
 
-  return {
-    path: resolved.relativePath,
-    changeType,
-    bytes: change.afterBytes,
-    hash: change.afterHash,
-    overwritten: before !== null,
-  };
+    return {
+      path: resolved.relativePath,
+      changeType,
+      bytes: change.afterBytes,
+      hash: change.afterHash,
+      overwritten: before !== null,
+    };
+  });
 }
 
 export async function editTextFile(
@@ -646,90 +651,92 @@ export async function editTextFile(
   }
 
   const resolved = assertWriteAllowed(context.repoRoot, input.path);
-  await rejectSymlinkPathSegments(resolved.repoRoot, resolved.relativePath);
-  const before = await readEditableTextFile(resolved.absolutePath, resolved.relativePath, {
-    maxFileBytes: input.maxFileBytes,
+  return withFileMutationQueue(resolved.absolutePath, async () => {
+    await rejectSymlinkPathSegments(resolved.repoRoot, resolved.relativePath);
+    const before = await readEditableTextFile(resolved.absolutePath, resolved.relativePath, {
+      maxFileBytes: input.maxFileBytes,
+    });
+
+    // Pi's semantics: each edit matches against the ORIGINAL content. Pre-compute
+    // every match position, validate (no overlap, exactly one match per edit
+    // unless replaceAll), then apply right-to-left so positions don't shift.
+    type EditMatch = { editIndex: number; start: number; end: number };
+    const allMatches: EditMatch[] = [];
+    let totalReplacements = 0;
+    for (let editIndex = 0; editIndex < input.edits.length; editIndex += 1) {
+      const edit = input.edits[editIndex];
+      if (edit === undefined) continue;
+      const positions = findAllOccurrences(before, edit.oldText);
+      if (positions.length === 0) {
+        throw new PolicyViolationError(
+          "no_match",
+          `edits[${editIndex}].oldText was not found in ${resolved.relativePath}`,
+        );
+      }
+      if (positions.length > 1 && !input.replaceAll) {
+        throw new PolicyViolationError(
+          "ambiguous_match",
+          `edits[${editIndex}].oldText matched ${positions.length} times; set replaceAll: true or use a more specific oldText`,
+        );
+      }
+      for (const start of positions) {
+        allMatches.push({ editIndex, start, end: start + edit.oldText.length });
+        totalReplacements += 1;
+      }
+    }
+
+    // Detect overlapping match regions across edits.
+    const sorted = allMatches.slice().sort((a, b) => a.start - b.start);
+    for (let i = 1; i < sorted.length; i += 1) {
+      const prev = sorted[i - 1];
+      const cur = sorted[i];
+      if (prev !== undefined && cur !== undefined && cur.start < prev.end) {
+        throw new PolicyViolationError(
+          "edit_overlap",
+          `edits[${prev.editIndex}] and edits[${cur.editIndex}] match overlapping regions; merge them into a single edit`,
+        );
+      }
+    }
+
+    // Apply right-to-left so left-side positions remain valid.
+    let after = before;
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      const m = sorted[i];
+      if (m === undefined) continue;
+      const edit = input.edits[m.editIndex];
+      if (edit === undefined) continue;
+      after = after.slice(0, m.start) + edit.newText + after.slice(m.end);
+    }
+    await writeFile(resolved.absolutePath, after, "utf8");
+    const change = await recordTextFileChange(context, {
+      path: resolved.relativePath,
+      changeType: "update",
+      before,
+      after,
+    });
+
+    // Generate a unified-diff hunk per edit (first match only) and concatenate.
+    // Keeps the LLM's view tidy while showing what changed.
+    const firstEdit = input.edits[0];
+    const diff =
+      firstEdit === undefined
+        ? ""
+        : buildEditDiffString({
+            before,
+            oldText: firstEdit.oldText,
+            newText: firstEdit.newText,
+            path: resolved.relativePath,
+          });
+
+    return {
+      path: resolved.relativePath,
+      changeType: "update",
+      replacements: totalReplacements,
+      bytes: change.afterBytes,
+      hash: change.afterHash,
+      diff,
+    };
   });
-
-  // Pi's semantics: each edit matches against the ORIGINAL content. Pre-compute
-  // every match position, validate (no overlap, exactly one match per edit
-  // unless replaceAll), then apply right-to-left so positions don't shift.
-  type EditMatch = { editIndex: number; start: number; end: number };
-  const allMatches: EditMatch[] = [];
-  let totalReplacements = 0;
-  for (let editIndex = 0; editIndex < input.edits.length; editIndex += 1) {
-    const edit = input.edits[editIndex];
-    if (edit === undefined) continue;
-    const positions = findAllOccurrences(before, edit.oldText);
-    if (positions.length === 0) {
-      throw new PolicyViolationError(
-        "no_match",
-        `edits[${editIndex}].oldText was not found in ${resolved.relativePath}`,
-      );
-    }
-    if (positions.length > 1 && !input.replaceAll) {
-      throw new PolicyViolationError(
-        "ambiguous_match",
-        `edits[${editIndex}].oldText matched ${positions.length} times; set replaceAll: true or use a more specific oldText`,
-      );
-    }
-    for (const start of positions) {
-      allMatches.push({ editIndex, start, end: start + edit.oldText.length });
-      totalReplacements += 1;
-    }
-  }
-
-  // Detect overlapping match regions across edits.
-  const sorted = allMatches.slice().sort((a, b) => a.start - b.start);
-  for (let i = 1; i < sorted.length; i += 1) {
-    const prev = sorted[i - 1];
-    const cur = sorted[i];
-    if (prev !== undefined && cur !== undefined && cur.start < prev.end) {
-      throw new PolicyViolationError(
-        "edit_overlap",
-        `edits[${prev.editIndex}] and edits[${cur.editIndex}] match overlapping regions; merge them into a single edit`,
-      );
-    }
-  }
-
-  // Apply right-to-left so left-side positions remain valid.
-  let after = before;
-  for (let i = sorted.length - 1; i >= 0; i -= 1) {
-    const m = sorted[i];
-    if (m === undefined) continue;
-    const edit = input.edits[m.editIndex];
-    if (edit === undefined) continue;
-    after = after.slice(0, m.start) + edit.newText + after.slice(m.end);
-  }
-  await writeFile(resolved.absolutePath, after, "utf8");
-  const change = await recordTextFileChange(context, {
-    path: resolved.relativePath,
-    changeType: "update",
-    before,
-    after,
-  });
-
-  // Generate a unified-diff hunk per edit (first match only) and concatenate.
-  // Keeps the LLM's view tidy while showing what changed.
-  const firstEdit = input.edits[0];
-  const diff =
-    firstEdit === undefined
-      ? ""
-      : buildEditDiffString({
-          before,
-          oldText: firstEdit.oldText,
-          newText: firstEdit.newText,
-          path: resolved.relativePath,
-        });
-
-  return {
-    path: resolved.relativePath,
-    changeType: "update",
-    replacements: totalReplacements,
-    bytes: change.afterBytes,
-    hash: change.afterHash,
-    diff,
-  };
 }
 
 function findAllOccurrences(haystack: string, needle: string): number[] {

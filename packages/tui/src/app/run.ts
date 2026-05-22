@@ -1,10 +1,19 @@
 import { ensureRuntimeDirs, getStrataPaths } from "@strata/core";
 import { TuiRuntime } from "../runtime.js";
 import { ProcessTerminal } from "../terminal.js";
-import { buildAppOptions, StrataApp, shutdownOnExit } from "./app.js";
+import {
+  buildAppOptions,
+  type InitialSessionAction,
+  StrataApp,
+  type StrataAppOptions,
+  shutdownOnExit,
+} from "./app.js";
+
+export type { InitialSessionAction } from "./app.js";
 
 export interface RunTuiOptions {
   repoRoot?: string;
+  initialSession?: InitialSessionAction;
 }
 
 export async function runTui(options: RunTuiOptions = {}): Promise<void> {
@@ -21,8 +30,13 @@ export async function runTui(options: RunTuiOptions = {}): Promise<void> {
       fatal = error;
     },
   });
-  const app = new StrataApp(runtime, appOptions, authStatus);
+  const optionsForApp: StrataAppOptions = { ...appOptions };
+  if (options.initialSession !== undefined) {
+    optionsForApp.initialSession = options.initialSession;
+  }
+  const app = new StrataApp(runtime, optionsForApp, authStatus);
   runtime.setRoot(app);
+  app.startInitialSession();
   shutdownOnExit(runtime);
   runtime.start();
   await new Promise<void>((resolve) => {

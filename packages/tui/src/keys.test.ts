@@ -32,6 +32,7 @@ describe("parseKey", () => {
     expect(parseKey("\x1b[9;2u")).toBe("shift+tab");
     expect(parseKey("\x1b[99;5u")).toBe("ctrl+c");
     expect(parseKey("\x1b[100;5u")).toBe("ctrl+d");
+    expect(parseKey("\x1b[127;5u")).toBe("ctrl+backspace");
   });
 
   test("decodes xterm modifyOtherKeys form", () => {
@@ -81,6 +82,11 @@ describe("sequenceToInputEvent", () => {
       type: "key",
       key: "shift+enter",
       raw: "\x1b[13;2u",
+    });
+    expect(sequenceToInputEvent("\x1b[127;5u")).toEqual({
+      type: "key",
+      key: "ctrl+backspace",
+      raw: "\x1b[127;5u",
     });
   });
 

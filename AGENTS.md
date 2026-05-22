@@ -92,7 +92,7 @@ bun run web:dev
 bun run build
 ```
 
-The CLI currently exposes `auth status|login|logout`, `init`, `query`, `tui`, `trace`, `sessions list|search`, and `tools list|call`. Use `bun run strata --help` for the source of truth.
+The CLI currently exposes `auth status|login|logout`, `init`, `query`, `tui` with Pi-style session launch flags, `trace`, `sessions list|search|delete`, and `tools list|call`. Use `bun run strata --help` for the source of truth.
 
 ## Workspace Layout
 
@@ -116,11 +116,11 @@ Workspace dependencies use `workspace:*`. Cross-package imports use `@strata/<pk
 
 ## Architecture Invariants
 
-The agent loop is the source of truth. `runAgentLoopEvents()` in `packages/agent/src/agentLoop.ts` drives a single run, owns session creation, seeds messages, enforces iteration/tool budgets, honors abort signals, emits lifecycle events, and persists state. `runAgentLoop()` is a thin consumer. Do not duplicate loop logic.
+The agent loop is the source of truth. `runAgentLoopEvents()` in `packages/agent/src/agentLoop.ts` drives a single run, owns session creation, seeds messages, counts iterations/tool calls, honors abort signals, emits lifecycle events, and persists state. `runAgentLoop()` is a thin consumer. Do not duplicate loop logic.
 
 Cancellation is end-to-end. `AgentRunConfig.signal` and `ModelRequest.signal` flow into model adapters and are checked by the loop at iteration and tool-call boundaries. Cancelled runs should end as `interrupted` with `stoppedReason: "cancelled"`.
 
-Session storage is centralized. Use `SessionStore.open(repoRoot?)`; runs persist to `.strata/state.sqlite` and `.strata/traces/<sessionId>.jsonl`.
+Session storage is centralized. Use `SessionStore.open(repoRoot?)`; runs persist to `.strata/state.sqlite` and `.strata/traces/<sessionId>.jsonl`. Delete sessions through `SessionStore.deleteSession()` so SQLite state and the matching trace file are removed together.
 
 Web chat runs are server-side jobs, not HTTP request lifetimes. `packages/web-api/src/chat.ts` owns active-run state and an abort controller per run; browser SSE streams are subscribers. A dropped browser/proxy stream must not cancel the agent. Only explicit run cancellation should abort the run signal.
 
@@ -132,7 +132,7 @@ Web chat lifecycle diagnostics are durable trace events. Run start, browser stre
 
 Run context includes durable local guidance. `packages/agent/src/runContext.ts` injects root `AGENTS.md`, memory, active todos, and the prompt-visible skill index on every run, including continued sessions.
 
-Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), and optional `maxResultChars`. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values.
+Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), optional `maxResultChars`, and optional `executionMode` (`parallel` or `sequential`). The agent loop executes multiple tool calls in Pi-style `parallel` mode by default: starts are emitted in assistant source order, completions are emitted as tools finish, and persisted tool-result messages remain in assistant source order. Any called tool with `executionMode: "sequential"` forces the whole batch sequential. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values.
 
 TUI rendering is pi-style scrollback, not alt-screen. `TuiRuntime` writes to the main terminal buffer and must not enable alt-screen. Width/height changes clear the visible viewport but must not wipe terminal scrollback.
 

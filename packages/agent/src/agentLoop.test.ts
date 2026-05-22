@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionStore } from "@strata/core";
-import { createDefaultToolRegistry } from "@strata/tools";
-import { runAgentLoop } from "./agentLoop.js";
+import { createDefaultToolRegistry, ToolRegistry } from "@strata/tools";
+import { runAgentLoop, runAgentLoopEvents } from "./agentLoop.js";
 import { ModelAdapterError } from "./model.js";
-import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
+import type { AgentRunEvent, ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
 class SequenceModelAdapter implements ModelAdapter {
   readonly name = "sequence-test";
@@ -102,6 +102,214 @@ describe("runAgentLoop", () => {
       expect(trace).toContain("tool.call");
       expect(trace).toContain("tool.result");
     } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("executes multiple tool calls in parallel by default while preserving source-order tool messages", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-parallel-"));
+    let releaseFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstResolved = false;
+    let parallelObserved = false;
+    try {
+      const tools = new ToolRegistry();
+      tools.register({
+        name: "test.echo",
+        description: "Echo a value.",
+        mode: "read",
+        inputSchema: { type: "object" },
+        async handler(args) {
+          const value = String(args.value);
+          if (value === "first") {
+            await firstDone;
+            firstResolved = true;
+          }
+          if (value === "second" && !firstResolved) {
+            parallelObserved = true;
+            setTimeout(() => releaseFirst?.(), 0);
+          }
+          return { value };
+        },
+      });
+      const model = new SequenceModelAdapter([
+        {
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_1",
+              name: "test.echo",
+              argumentsText: JSON.stringify({ value: "first" }),
+            },
+            {
+              id: "call_2",
+              name: "test.echo",
+              argumentsText: JSON.stringify({ value: "second" }),
+            },
+          ],
+        },
+        { content: "done", finishReason: "stop", toolCalls: [] },
+      ]);
+      const releaseTimer = setTimeout(() => releaseFirst?.(), 1_000);
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "Echo twice.",
+        model,
+        repoRoot,
+        tools,
+      })) {
+        events.push(event);
+      }
+      clearTimeout(releaseTimer);
+
+      expect(parallelObserved).toBe(true);
+      expect(
+        events.flatMap((event) => (event.type === "tool.call.completed" ? [event.toolCallId] : [])),
+      ).toEqual(["call_2", "call_1"]);
+      expect(
+        (model.requests[1]?.messages ?? [])
+          .filter((message) => message.role === "tool")
+          .map((message) => message.toolCallId),
+      ).toEqual(["call_1", "call_2"]);
+    } finally {
+      releaseFirst?.();
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("toolExecution sequential forces multiple tool calls to run one by one", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-sequential-"));
+    let releaseFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstResolved = false;
+    let parallelObserved = false;
+    try {
+      const tools = new ToolRegistry();
+      tools.register({
+        name: "test.echo",
+        description: "Echo a value.",
+        mode: "read",
+        inputSchema: { type: "object" },
+        async handler(args) {
+          const value = String(args.value);
+          if (value === "first") {
+            await firstDone;
+            firstResolved = true;
+          }
+          if (value === "second" && !firstResolved) {
+            parallelObserved = true;
+          }
+          return { value };
+        },
+      });
+      const model = new SequenceModelAdapter([
+        {
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_1",
+              name: "test.echo",
+              argumentsText: JSON.stringify({ value: "first" }),
+            },
+            {
+              id: "call_2",
+              name: "test.echo",
+              argumentsText: JSON.stringify({ value: "second" }),
+            },
+          ],
+        },
+        { content: "done", finishReason: "stop", toolCalls: [] },
+      ]);
+      const releaseTimer = setTimeout(() => releaseFirst?.(), 20);
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "Echo twice.",
+        model,
+        repoRoot,
+        tools,
+        toolExecution: "sequential",
+      })) {
+        events.push(event);
+      }
+      clearTimeout(releaseTimer);
+
+      expect(parallelObserved).toBe(false);
+      expect(
+        events.flatMap((event) => (event.type === "tool.call.completed" ? [event.toolCallId] : [])),
+      ).toEqual(["call_1", "call_2"]);
+    } finally {
+      releaseFirst?.();
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("a tool executionMode sequential override forces the whole batch sequential", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-tool-sequential-"));
+    let releaseFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstResolved = false;
+    let parallelObserved = false;
+    try {
+      const tools = new ToolRegistry();
+      tools.register({
+        name: "test.echo",
+        description: "Echo a value.",
+        mode: "read",
+        inputSchema: { type: "object" },
+        executionMode: "sequential",
+        async handler(args) {
+          const value = String(args.value);
+          if (value === "first") {
+            await firstDone;
+            firstResolved = true;
+          }
+          if (value === "second" && !firstResolved) {
+            parallelObserved = true;
+          }
+          return { value };
+        },
+      });
+      const model = new SequenceModelAdapter([
+        {
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_1",
+              name: "test.echo",
+              argumentsText: JSON.stringify({ value: "first" }),
+            },
+            {
+              id: "call_2",
+              name: "test.echo",
+              argumentsText: JSON.stringify({ value: "second" }),
+            },
+          ],
+        },
+        { content: "done", finishReason: "stop", toolCalls: [] },
+      ]);
+      const releaseTimer = setTimeout(() => releaseFirst?.(), 20);
+      for await (const _event of runAgentLoopEvents({
+        question: "Echo twice.",
+        model,
+        repoRoot,
+        tools,
+      })) {
+        // consume
+      }
+      clearTimeout(releaseTimer);
+
+      expect(parallelObserved).toBe(false);
+    } finally {
+      releaseFirst?.();
       await rm(repoRoot, { force: true, recursive: true });
     }
   });

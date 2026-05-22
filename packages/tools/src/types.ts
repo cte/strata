@@ -4,6 +4,7 @@ export type { ToolRegistry } from "./registry.js";
 
 export type ToolMode = "read" | "write" | "learning" | "dangerous";
 export type ToolProfile = "read-only" | "maintenance" | "learning" | "dangerous";
+export type ToolExecutionMode = "sequential" | "parallel";
 
 export interface ToolRegistryOptions {
   profile?: ToolProfile;
@@ -36,6 +37,12 @@ export interface ToolDefinition<
   mode: ToolMode;
   inputSchema: JsonObject;
   maxResultChars?: number;
+  /**
+   * Per-tool execution mode override for batches containing multiple tool calls.
+   * `sequential` forces the whole batch to run one at a time; `parallel`
+   * allows this tool to run concurrently when the agent loop is in parallel mode.
+   */
+  executionMode?: ToolExecutionMode;
   handler: (args: TArgs, context: ToolContext) => TResult | Promise<TResult>;
 }
 

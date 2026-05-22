@@ -30,6 +30,13 @@ export interface SessionRecord {
   gitCommit: string | null;
 }
 
+export interface DeleteSessionResult {
+  id: string;
+  title: string;
+  tracePath: string;
+  traceMethod: "trash" | "unlink" | "missing";
+}
+
 export interface CreateSessionInput {
   title?: string;
   kind: SessionKind;

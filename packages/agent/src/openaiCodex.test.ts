@@ -66,6 +66,7 @@ describe("OpenAICodexModelAdapter", () => {
     expect(capturedHeaders?.get("authorization")).toBe("Bearer access");
     expect(capturedHeaders?.get("chatgpt-account-id")).toBe("acct");
     expect(capturedHeaders?.get("openai-beta")).toBe("responses=experimental");
+    expect(capturedBody?.parallel_tool_calls).toBe(true);
     expect(JSON.stringify(capturedBody)).toContain("wiki_readPage");
     expect(JSON.stringify(capturedBody)).not.toContain("wiki.readPage");
     expect(response).toMatchObject({

@@ -104,6 +104,12 @@ export interface ChatSessionDetail {
   messages: ChatMessageSummary[];
 }
 
+export interface ChatSessionDeleteResult {
+  id: string;
+  title: string;
+  traceMethod: "trash" | "unlink" | "missing";
+}
+
 export interface ChatActiveRunSummary {
   runId: string;
   startedAt: string;
@@ -156,6 +162,12 @@ export const chatSessionForkInput = z.object({
 
 export type ChatSessionForkInput = z.output<typeof chatSessionForkInput>;
 
+export const chatSessionDeleteInput = z.object({
+  sessionId: z.string().min(1),
+});
+
+export type ChatSessionDeleteInput = z.output<typeof chatSessionDeleteInput>;
+
 export const chatSessionsSearchInput = z.object({
   query: z.string().min(1),
   limit: z.number().int().min(1).max(100).default(20),
@@ -192,7 +204,9 @@ export interface WebApiServices {
   listChatSessions(input: ChatSessionsListInput): Promise<{ sessions: ChatSessionSummary[] }>;
   getChatSession(input: ChatSessionGetInput): Promise<ChatSessionDetail | null>;
   forkChatSession(input: ChatSessionForkInput): Promise<ChatSessionDetail>;
+  deleteChatSession(input: ChatSessionDeleteInput): Promise<ChatSessionDeleteResult>;
   searchChatSessions(input: ChatSessionsSearchInput): Promise<{ sessions: ChatSessionSummary[] }>;
+
   connectorSummaries(): ConnectorSummary[];
   validateNotion(config: NotionConnectorInput): Promise<ConnectorStatus>;
   runNotionSession(
@@ -244,6 +258,9 @@ export const appRouter = t.router({
       fork: t.procedure
         .input(chatSessionForkInput)
         .mutation(({ ctx, input }) => ctx.services.forkChatSession(input)),
+      delete: t.procedure
+        .input(chatSessionDeleteInput)
+        .mutation(({ ctx, input }) => ctx.services.deleteChatSession(input)),
       search: t.procedure
         .input(chatSessionsSearchInput)
         .query(({ ctx, input }) => ctx.services.searchChatSessions(input)),

@@ -4,6 +4,7 @@ import {
   sanitizeTerminalText,
   sliceByWidth,
   stripAnsi,
+  theme,
   truncateToWidth,
   visibleWidth,
   wrapText,
@@ -53,6 +54,25 @@ describe("ansi", () => {
 
   test("wrapText breaks long lines", () => {
     expect(wrapText("abcdef", 3)).toEqual(["abc", "def"]);
+  });
+
+  test("wrapText prefers word boundaries", () => {
+    expect(wrapText("alpha beta gamma delta", 12)).toEqual(["alpha beta", "gamma delta"]);
+  });
+
+  test("wrapText does not start wrapped rows with whitespace", () => {
+    expect(wrapText("alpha beta gamma", 10)).toEqual(["alpha beta", "gamma"]);
+  });
+
+  test("wrapText preserves ANSI style across wrapped rows without empty control rows", () => {
+    const wrapped = wrapText(theme.accent("alpha supercalifragilistic"), 5);
+    expect(wrapped.map((line) => stripAnsi(line))).toEqual([
+      "alpha",
+      "super",
+      "calif",
+      "ragil",
+      "istic",
+    ]);
   });
 
   test("wrapText preserves blank lines", () => {
