@@ -77,7 +77,7 @@ Run state:
 - Each run owns exactly one agent-loop invocation.
 - The persisted Strata session remains the durable conversation record.
 - Web chat run metadata remains durable too: final status, cancellation, stopped reason, error message, associated session ID, and last event ID are persisted independently of the original HTTP stream.
-- Server startup marks abandoned running web chat rows as failed with `stoppedReason: "server_restarted"` so stale active runs are visible instead of silently hanging forever.
+- Server startup marks abandoned running web chat rows and their linked Strata sessions as failed with `stoppedReason: "server_restarted"` so stale active runs are visible instead of silently hanging forever.
 - Web chat run lifecycle diagnostics are appended to the persisted session trace, including run start, browser stream close reason, explicit cancel requests, and run finish.
 
 Concurrency rules:
@@ -316,6 +316,7 @@ Current implementation:
 - Browser/proxy disconnect closes only that SSE subscription; the run continues server-side.
 - The browser stores the latest SSE event ID and can reconnect through `GET /api/chat/runs/:runId/events`.
 - If reconnects fail or disconnected-state polling sees the run finish, the browser loads `chat.runs.get` plus `chat.sessions.get` to show the persisted terminal state.
+- When a session route loads while a run is still active, the browser checks active runs for that session and attaches to the replay stream after the latest stored event ID.
 - Server emits a final interrupted completion event when cancellation reaches the agent loop.
 
 ## Security And Locality
@@ -361,7 +362,7 @@ Later, a `strata --mode rpc` JSONL mode may still be useful for external embeddi
 9. Make web chat runs independent of the original HTTP request lifetime, persist run/event state, and add replayable reconnects.
 10. Add token/context metrics and model/thinking controls. Status: complete.
 11. Add richer specialized tool renderers. Status: complete for wiki/file/shell/learning tools.
-12. Browser-verify reconnect edge cases and finish responsive polish.
+12. Browser-verify reconnect edge cases and finish responsive polish. Status: reconnect verification complete; responsive polish remains.
 
 ## Acceptance Criteria
 

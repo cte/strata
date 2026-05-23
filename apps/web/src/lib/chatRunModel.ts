@@ -242,15 +242,34 @@ function mergeToolCalls(
 // updates that follow.
 // ---------------------------------------------------------------------------
 
-export function messagesToTranscript(messages: ChatMessageSummary[]): ChatMessageView[] {
+/**
+ * Convert the server's persisted message list into the in-memory transcript.
+ *
+ * When `existing` is supplied (the current in-flight transcript), persisted
+ * entries are aligned to the existing streaming entries by ordered role-match.
+ * Aligned entries inherit the streaming entry's id AND its `runId`/`iteration`
+ * metadata. The id alignment keeps React keys stable across a streaming →
+ * loaded transition; carrying `runId`/`iteration` forward means subsequent SSE
+ * deltas for that turn still find the entry via `appendAssistantDelta` instead
+ * of creating a duplicate alongside the just-loaded persisted message.
+ */
+export function messagesToTranscript(
+  messages: ChatMessageSummary[],
+  existing?: ChatMessageView[],
+): ChatMessageView[] {
   const transcript: ChatMessageView[] = [];
+  const existingByRole = {
+    user: collectByRole(existing, "user"),
+    assistant: collectByRole(existing, "assistant"),
+  };
   for (const message of messages) {
     if (message.role === "system") {
       continue;
     }
     if (message.role === "user") {
+      const matched = existingByRole.user.shift();
       transcript.push({
-        id: `stored-user-${message.id}`,
+        id: matched?.id ?? `stored-user-${message.id}`,
         role: "user",
         content: message.content,
         status: "complete",
@@ -259,9 +278,12 @@ export function messagesToTranscript(messages: ChatMessageSummary[]): ChatMessag
       continue;
     }
     if (message.role === "assistant") {
+      const matched = existingByRole.assistant.shift();
       transcript.push({
-        id: `stored-assistant-${message.id}`,
+        id: matched?.id ?? `stored-assistant-${message.id}`,
         role: "assistant",
+        ...(matched?.runId === undefined ? {} : { runId: matched.runId }),
+        ...(matched?.iteration === undefined ? {} : { iteration: matched.iteration }),
         content: message.content,
         status: "complete",
         toolCalls: storedToolCalls(message.toolCalls),
@@ -274,6 +296,16 @@ export function messagesToTranscript(messages: ChatMessageSummary[]): ChatMessag
     }
   }
   return transcript;
+}
+
+function collectByRole(
+  transcript: ChatMessageView[] | undefined,
+  role: "user" | "assistant",
+): ChatMessageView[] {
+  if (transcript === undefined) {
+    return [];
+  }
+  return transcript.filter((message) => message.role === role);
 }
 
 function attachStoredToolResult(
@@ -409,10 +441,10 @@ export function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-export function agentCompletionMessage(status: string, stoppedReason?: string): string {
+export function agentCompletionMessage(status: string, stoppedReason?: string): string | null {
   if (status === "interrupted") {
     return stoppedReason === "cancelled"
-      ? "Run was interrupted before it finished."
+      ? null
       : `Run was interrupted${stoppedReason === undefined ? "" : ` (${stoppedReason})`}.`;
   }
   if (status === "failed") {

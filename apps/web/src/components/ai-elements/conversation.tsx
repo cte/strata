@@ -5,6 +5,13 @@ import type { ComponentProps } from "react";
 import { useCallback } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
@@ -45,25 +52,24 @@ export const ConversationEmptyState = ({
   children,
   ...props
 }: ConversationEmptyStateProps) => (
-  <div
-    className={cn(
-      "grid min-h-[280px] place-items-center border border-dashed border-[var(--hairline)] bg-[var(--surface)]/40 p-6 text-center",
-      className,
-    )}
+  <Empty
+    className={cn("min-h-[280px] border-0 bg-transparent px-4 py-10 text-center", className)}
     {...props}
   >
     {children ?? (
-      <div className="space-y-2">
-        {icon ? (
-          <div className="mx-auto flex h-9 w-9 items-center justify-center border border-[var(--hairline-strong)] bg-[var(--surface-2)] text-[var(--accent)]">
-            {icon}
-          </div>
+      <EmptyHeader>
+        {icon ? <EmptyMedia className="mb-1 text-[var(--fg-mute)]">{icon}</EmptyMedia> : null}
+        <EmptyTitle className="text-[13px] font-medium tracking-tight text-[var(--fg)]">
+          {title}
+        </EmptyTitle>
+        {description ? (
+          <EmptyDescription className="text-[12px] leading-normal text-[var(--fg-mute)]">
+            {description}
+          </EmptyDescription>
         ) : null}
-        <p className="text-[13px] font-medium tracking-tight text-[var(--fg)]">{title}</p>
-        {description ? <p className="text-[12px] text-[var(--fg-mute)]">{description}</p> : null}
-      </div>
+      </EmptyHeader>
     )}
-  </div>
+  </Empty>
 );
 
 export type ConversationScrollButtonProps = ComponentProps<typeof Button>;
@@ -89,7 +95,7 @@ export const ConversationScrollButton = ({
       onClick={handleScrollToBottom}
       aria-label="Scroll to latest"
       className={cn(
-        "absolute bottom-24 left-1/2 z-10 h-8 w-8 -translate-x-1/2 rounded-full border-[var(--hairline-strong)] bg-[var(--bg-elev)] text-[var(--fg-dim)] shadow-md shadow-black/30 hover:bg-[var(--surface-2)] hover:text-[var(--fg)]",
+        "absolute bottom-24 left-1/2 z-10 h-8 w-8 -translate-x-1/2 rounded-full border-[var(--hairline-strong)] bg-[var(--bg-elev)] text-[var(--fg-dim)] shadow-md shadow-black/30 hover:bg-[var(--surface-2)] hover:text-[var(--fg)] [&>svg]:!size-3.5",
         className,
       )}
       {...props}

@@ -80,6 +80,13 @@ body {
 }
 
 @layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop {
+    border-color: var(--color-border, currentColor);
+  }
+
   button,
   input,
   textarea,
@@ -126,6 +133,70 @@ body {
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--fg-mute);
+}
+
+.chat-surface {
+  --chat-text: 13px;
+  --chat-text-leading: 1.5rem;
+  --chat-compact-leading: 1.25rem;
+  --chat-secondary: 12px;
+  --chat-meta: 11.5px;
+  --chat-micro: 10.5px;
+  --chat-icon: 13px;
+  --chat-control-icon: 14px;
+}
+
+.chat-surface [data-streamdown="inline-code"] {
+  font-size: var(--chat-secondary);
+  line-height: var(--chat-compact-leading);
+}
+
+.chat-surface [data-streamdown="heading-1"] {
+  font-size: 16px;
+  line-height: var(--chat-text-leading);
+}
+
+.chat-surface [data-streamdown="heading-2"] {
+  font-size: 15px;
+  line-height: var(--chat-text-leading);
+}
+
+.chat-surface [data-streamdown="heading-3"] {
+  font-size: 14px;
+  line-height: var(--chat-text-leading);
+}
+
+.chat-surface [data-streamdown="heading-4"],
+.chat-surface [data-streamdown="heading-5"],
+.chat-surface [data-streamdown="heading-6"],
+.chat-surface [data-streamdown="table-header-cell"],
+.chat-surface [data-streamdown="table-cell"] {
+  font-size: var(--chat-text);
+  line-height: var(--chat-text-leading);
+}
+
+.chat-surface [data-streamdown="code-block-header"],
+.chat-surface [data-streamdown="code-block-body"] {
+  font-size: var(--chat-meta);
+  line-height: var(--chat-compact-leading);
+}
+
+.chat-surface [data-streamdown="code-block-body"] pre,
+.chat-surface [data-streamdown="code-block-body"] code,
+.chat-surface [data-streamdown="code-block-body"] span {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.chat-surface [data-streamdown="code-block-body"] span::before {
+  font-size: var(--chat-meta);
+  line-height: var(--chat-compact-leading);
+}
+
+.chat-surface [data-streamdown="code-block-copy-button"] svg,
+.chat-surface [data-streamdown="code-block-download-button"] svg {
+  width: var(--chat-icon);
+  height: var(--chat-icon);
 }
 
 .hairline {

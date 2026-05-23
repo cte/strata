@@ -60,7 +60,7 @@ export function AutocompletePopover({
                 {item.label}
               </span>
               {item.description === undefined ? null : (
-                <span className="block truncate font-mono text-[11px] leading-4 text-[var(--fg-mute)]">
+                <span className="block truncate font-mono text-[11.5px] leading-5 text-[var(--fg-mute)]">
                   {item.description}
                 </span>
               )}

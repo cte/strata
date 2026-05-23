@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { getStrataPaths, type JsonObject, type JsonValue } from "@strata/core";
+import { getStrataPaths, type JsonObject, type JsonValue, type StrataPaths } from "@strata/core";
 import { nowIso, safeJsonStringify } from "@strata/core/events";
 
 export type ChatRunStatus = "running" | "completed" | "failed" | "interrupted";
@@ -41,12 +41,13 @@ export interface FinishChatRunInput {
 }
 
 export class ChatRunStore {
+  private readonly paths: StrataPaths;
   private readonly db: Database;
 
   constructor(repoRoot?: string) {
-    const paths = getStrataPaths(repoRoot);
-    mkdirSync(path.dirname(paths.stateDbPath), { recursive: true });
-    this.db = new Database(paths.stateDbPath, { create: true });
+    this.paths = getStrataPaths(repoRoot);
+    mkdirSync(path.dirname(this.paths.stateDbPath), { recursive: true });
+    this.db = new Database(this.paths.stateDbPath, { create: true });
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.run("PRAGMA foreign_keys = ON");
     this.ensureSchema();
@@ -208,8 +209,9 @@ export class ChatRunStore {
     return rows.map(rowToEvent);
   }
 
-  recoverAbandonedRuns(): void {
+  recoverAbandonedRuns(): ChatRunRecord[] {
     const abandoned = this.listRuns("running");
+    const recovered: ChatRunRecord[] = [];
     for (const run of abandoned) {
       const event = {
         type: "agent.failed",
@@ -222,7 +224,16 @@ export class ChatRunStore {
         errorMessage: event.message,
         cancelled: run.cancelled,
       });
+      if (run.sessionId !== undefined) {
+        this.failAbandonedSession(run.sessionId, event.message);
+      }
+      const failedRun = this.getRun(run.runId);
+      if (failedRun !== undefined) {
+        recovered.push(failedRun);
+      }
     }
+    this.failRestartedSessionsStillMarkedRunning();
+    return recovered;
   }
 
   private requiredRun(runId: string): ChatRunRecord {
@@ -269,6 +280,85 @@ export class ChatRunStore {
       create index if not exists idx_web_chat_run_events_run_id
       on web_chat_run_events(run_id, id)
     `);
+  }
+
+  private failAbandonedSession(sessionId: string, message: string): void {
+    if (!this.tableExists("sessions") || !this.tableExists("events")) {
+      return;
+    }
+    const existing = this.db.query("select status from sessions where id = ?").get(sessionId) as {
+      status: string;
+    } | null;
+    if (existing === null || existing.status !== "running") {
+      return;
+    }
+
+    const endedAt = nowIso();
+    this.db
+      .query(
+        "update sessions set status = 'failed', ended_at = ? where id = ? and status = 'running'",
+      )
+      .run(endedAt, sessionId);
+    this.appendSessionTraceEvent(sessionId, "session.ended", {
+      status: "failed",
+      endedAt,
+      stoppedReason: "server_restarted",
+      message,
+    });
+  }
+
+  private failRestartedSessionsStillMarkedRunning(): void {
+    if (!this.tableExists("sessions")) {
+      return;
+    }
+    const rows = this.db
+      .query(
+        `
+          select distinct r.session_id as sessionId, r.error_message as errorMessage
+          from web_chat_runs r
+          join sessions s on s.id = r.session_id
+          where r.status = 'failed'
+            and r.stopped_reason = 'server_restarted'
+            and s.status = 'running'
+            and r.session_id is not null
+        `,
+      )
+      .all() as Array<{ sessionId: string; errorMessage: string | null }>;
+    for (const row of rows) {
+      this.failAbandonedSession(
+        row.sessionId,
+        row.errorMessage ?? "Server restarted while this run was active.",
+      );
+    }
+  }
+
+  private tableExists(name: string): boolean {
+    return (
+      this.db
+        .query("select name from sqlite_master where type = 'table' and name = ?")
+        .get(name) !== null
+    );
+  }
+
+  private appendSessionTraceEvent(sessionId: string, type: string, payload: JsonObject): void {
+    const ts = nowIso();
+    const payloadJson = safeJsonStringify(payload);
+    const [row] = this.db
+      .query(
+        `
+          insert into events (session_id, ts, type, payload_json)
+          values (?, ?, ?, ?)
+          returning id
+        `,
+      )
+      .all(sessionId, ts, type, payloadJson) as Array<{ id: number }>;
+    const id = row?.id ?? 0;
+    mkdirSync(this.paths.traceDir, { recursive: true });
+    appendFileSync(
+      path.join(this.paths.traceDir, `${sessionId}.jsonl`),
+      `${safeJsonStringify({ id, sessionId, ts, type, payload })}\n`,
+      "utf8",
+    );
   }
 }
 

@@ -50,7 +50,7 @@ Near-term work is focused on deepening the now-usable web chat surface before re
 
 1. Keep Slack ingestion running and continue connector validation in parallel.
 2. Treat [web-feature-parity-plan.md](./web-feature-parity-plan.md) as complete: `listModels` lives in `@strata/agent`, repo-file enumeration lives in `@strata/core` as `findRepoFiles`, `chat.files.list` / `chat.models.list` expose those data sources through tRPC, and the web composer now has file `@`-mentions, a persisted model/reasoning picker, slash commands, and prompt history.
-3. Resume deeper web chat polish: dropped-stream reconnect edge-case verification and responsive polish now that context/token metrics and learning-tool renderers are present.
+3. Finish the remaining web chat polish: dropped-stream reconnect edge cases are verified, so the remaining deferred browser work is responsive polish.
 4. Return to connector UI depth and raw-to-wiki proposal generation after web chat polish is usable.
 
 Use [status.md](./status.md) for the exact handoff and next concrete implementation step.

@@ -197,7 +197,7 @@ export const Attachment = ({ data, onRemove, className, children, ...props }: At
           variant === "inline" && [
             "flex h-8 cursor-pointer select-none items-center gap-1.5",
             "rounded-md border border-border px-1.5",
-            "font-medium text-sm transition-all",
+            "font-medium text-[13px] transition-all",
             "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
           ],
           variant === "list" && [
@@ -229,7 +229,7 @@ export const AttachmentPreview = ({
 }: AttachmentPreviewProps) => {
   const { data, mediaCategory, variant } = useAttachmentContext();
 
-  const iconSize = variant === "inline" ? "size-3" : "size-4";
+  const iconSize = variant === "inline" ? "size-3" : "size-3.5";
 
   const renderIcon = (Icon: typeof ImageIcon) => (
     <Icon className={cn(iconSize, "text-muted-foreground")} />
@@ -288,7 +288,7 @@ export const AttachmentInfo = ({
     <div className={cn("min-w-0 flex-1", className)} {...props}>
       <span className="block truncate">{label}</span>
       {showMediaType && data.mediaType && (
-        <span className="block truncate text-muted-foreground text-xs">{data.mediaType}</span>
+        <span className="block truncate text-[11.5px] text-muted-foreground">{data.mediaType}</span>
       )}
     </div>
   );
@@ -331,14 +331,14 @@ export const AttachmentRemove = ({
           "bg-background/80 backdrop-blur-sm",
           "opacity-0 transition-opacity group-hover:opacity-100",
           "hover:bg-background",
-          "[&>svg]:size-3",
+          "[&>svg]:!size-3",
         ],
         variant === "inline" && [
           "size-5 rounded p-0",
           "opacity-0 transition-opacity group-hover:opacity-100",
-          "[&>svg]:size-2.5",
+          "[&>svg]:!size-2.5",
         ],
-        variant === "list" && ["size-8 shrink-0 rounded p-0", "[&>svg]:size-4"],
+        variant === "list" && ["size-8 shrink-0 rounded p-0", "[&>svg]:!size-3.5"],
         className,
       )}
       onClick={handleClick}
@@ -390,7 +390,10 @@ export type AttachmentEmptyProps = HTMLAttributes<HTMLDivElement>;
 
 export const AttachmentEmpty = ({ className, children, ...props }: AttachmentEmptyProps) => (
   <div
-    className={cn("flex items-center justify-center p-4 text-muted-foreground text-sm", className)}
+    className={cn(
+      "flex items-center justify-center p-4 text-[13px] text-muted-foreground",
+      className,
+    )}
     {...props}
   >
     {children ?? "No attachments"}
