@@ -124,7 +124,7 @@ Session storage is centralized. Use `SessionStore.open(repoRoot?)`; runs persist
 
 Web chat runs are server-side jobs, not HTTP request lifetimes. `packages/web-api/src/chat.ts` owns active-run state and an abort controller per run; browser SSE streams are subscribers. A dropped browser/proxy stream must not cancel the agent. Only explicit run cancellation should abort the run signal.
 
-Web chat run state is write-through durable. `packages/web-api/src/chatRunStore.ts` persists web chat run metadata and SSE event payloads in `.strata/state.sqlite`; SSE frames include event IDs; `GET /api/chat/runs/:runId/events` replays events after a given ID for reconnects; and server startup marks abandoned running rows failed with `stoppedReason: "server_restarted"`. Do not make the browser depend only on the in-memory active-run map or the original `POST /api/chat/runs` response stream.
+Web chat run state is write-through durable. `packages/web-api/src/chatRunStore.ts` persists web chat run metadata and SSE event payloads in `.strata/state.sqlite`; SSE frames include event IDs; `GET /api/chat/runs/:runId/events` replays events after a given ID for reconnects; and server startup marks abandoned running rows plus their linked sessions failed with `stoppedReason: "server_restarted"`. Do not make the browser depend only on the in-memory active-run map or the original `POST /api/chat/runs` response stream.
 
 Web chat SSE streams must stay alive while the model is thinking. `packages/web-api/src/server.ts` sends heartbeat comments during quiet periods and configures Bun's server idle timeout above the default, so long model requests do not look like hung or cancelled browser runs.
 

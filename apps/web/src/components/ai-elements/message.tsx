@@ -4,9 +4,21 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
+import {
+  CheckIcon,
+  CopyIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  Loader2Icon,
+  Maximize2Icon,
+  RotateCcwIcon,
+  XIcon,
+  ZoomInIcon,
+  ZoomOutIcon,
+} from "lucide-react";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { memo } from "react";
-import { Streamdown } from "streamdown";
+import { type IconMap, Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -37,7 +49,7 @@ export const MessageContent = ({ className, ...props }: MessageContentProps) => 
   <div
     className={cn(
       "min-w-0 max-w-[min(760px,100%)] text-[13px] leading-6",
-      "group-data-[from=user]/message:rounded-lg group-data-[from=user]/message:border group-data-[from=user]/message:border-[var(--accent)]/35 group-data-[from=user]/message:bg-[var(--accent-soft)] group-data-[from=user]/message:px-3.5 group-data-[from=user]/message:py-3 group-data-[from=user]/message:text-[var(--fg)]",
+      "group-data-[from=user]/message:rounded-md group-data-[from=user]/message:border group-data-[from=user]/message:border-[var(--accent)]/35 group-data-[from=user]/message:bg-[var(--accent-soft)] group-data-[from=user]/message:px-3.5 group-data-[from=user]/message:py-3 group-data-[from=user]/message:text-[var(--fg)]",
       "group-data-[from=user]/message:whitespace-pre-wrap group-data-[from=user]/message:break-words",
       "group-data-[from=assistant]/message:text-[var(--fg)]",
       "group-data-[status=error]/message:border-[var(--bad)]/45 group-data-[status=error]/message:bg-[var(--bad)]/[0.06]",
@@ -52,7 +64,7 @@ export type MessageAvatarProps = HTMLAttributes<HTMLDivElement>;
 export const MessageAvatar = ({ className, children, ...props }: MessageAvatarProps) => (
   <div
     className={cn(
-      "mt-1 flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--hairline-strong)] bg-[var(--surface-2)] font-mono text-[11px] text-[var(--fg-dim)]",
+      "mt-1 flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--hairline-strong)] bg-[var(--surface-2)] font-mono text-[11.5px] text-[var(--fg-dim)]",
       className,
     )}
     {...props}
@@ -94,7 +106,10 @@ export const MessageAction = ({
       size={size}
       type="button"
       variant={variant}
-      className={cn("h-7 w-7 text-[var(--fg-mute)] hover:text-[var(--fg)]", className)}
+      className={cn(
+        "!h-6 !w-6 rounded-md border border-transparent p-0 text-[var(--fg-mute)] hover:!border-[var(--hairline)] hover:!bg-[var(--surface-2)] hover:!text-[var(--fg)] [&>svg]:!size-[13px]",
+        className,
+      )}
       {...props}
     >
       {children}
@@ -120,6 +135,18 @@ export const MessageAction = ({
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { cjk, code, math, mermaid };
+const streamdownIcons = {
+  CheckIcon,
+  CopyIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  Loader2Icon,
+  Maximize2Icon,
+  RotateCcwIcon,
+  XIcon,
+  ZoomInIcon,
+  ZoomOutIcon,
+} satisfies Partial<IconMap>;
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
@@ -128,6 +155,7 @@ export const MessageResponse = memo(
         "size-full text-[13px] leading-6 [&_a]:text-[var(--accent)] [&_a]:underline [&_a]:underline-offset-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className,
       )}
+      icons={streamdownIcons}
       plugins={streamdownPlugins}
       {...props}
     />

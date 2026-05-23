@@ -281,9 +281,18 @@ describe("chat service", () => {
 
   test("marks abandoned durable runs as failed on service startup", async () => {
     const repoRoot = testRepoRoot();
+    const sessionStore = await SessionStore.open(repoRoot);
+    const session = await sessionStore.createSession({
+      kind: "query",
+      title: "Abandoned session",
+      model: fakeModel.name,
+    });
+    sessionStore.close();
+
     const store = new ChatRunStore(repoRoot);
     try {
       store.createRun({ runId: "run-1" });
+      store.bindSession("run-1", session.id);
       store.appendEvent("run-1", "run.started", { type: "run.started", runId: "run-1" });
     } finally {
       store.close();
@@ -298,10 +307,62 @@ describe("chat service", () => {
       stoppedReason: "server_restarted",
       errorMessage: "Server restarted while this run was active.",
     });
+    const recoveredSessionStore = await SessionStore.open(repoRoot);
+    const recoveredSession = recoveredSessionStore.getSession(session.id);
+    recoveredSessionStore.close();
+    expect(recoveredSession).toMatchObject({
+      id: session.id,
+      status: "failed",
+    });
+    expect(recoveredSession?.endedAt).toEqual(expect.any(String));
+    const traceEvents = await readTraceEvents(repoRoot, session.id);
+    expect(traceEvents.find((event) => event.type === "session.ended")?.payload).toMatchObject({
+      status: "failed",
+      stoppedReason: "server_restarted",
+    });
     await expect(collect(requiredEvents(service.subscribeRunEvents("run-1")))).resolves.toEqual([
       { type: "run.started", runId: "run-1" },
       { type: "agent.failed", message: "Server restarted while this run was active." },
     ]);
+  });
+
+  test("recovers sessions left running by older server restart handling", async () => {
+    const repoRoot = testRepoRoot();
+    const sessionStore = await SessionStore.open(repoRoot);
+    const session = await sessionStore.createSession({
+      kind: "query",
+      title: "Already failed web run",
+      model: fakeModel.name,
+    });
+    sessionStore.close();
+
+    const store = new ChatRunStore(repoRoot);
+    try {
+      store.createRun({ runId: "run-1" });
+      store.bindSession("run-1", session.id);
+      store.appendEvent("run-1", "agent.failed", {
+        type: "agent.failed",
+        message: "Server restarted while this run was active.",
+      });
+      store.finishRun("run-1", {
+        status: "failed",
+        stoppedReason: "server_restarted",
+        errorMessage: "Server restarted while this run was active.",
+      });
+    } finally {
+      store.close();
+    }
+
+    createChatService({ ...baseOptions(), repoRoot });
+
+    const recoveredSessionStore = await SessionStore.open(repoRoot);
+    const recoveredSession = recoveredSessionStore.getSession(session.id);
+    recoveredSessionStore.close();
+    expect(recoveredSession).toMatchObject({
+      id: session.id,
+      status: "failed",
+    });
+    expect(recoveredSession?.endedAt).toEqual(expect.any(String));
   });
 });
 

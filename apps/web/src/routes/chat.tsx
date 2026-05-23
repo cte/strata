@@ -1,4 +1,5 @@
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import type { LanguageModelUsage } from "ai";
 import {
   AlertCircle,
   BookOpen,
@@ -11,14 +12,30 @@ import {
   MessageSquare,
   PencilLine,
   Search,
-  Terminal,
+  Terminal as TerminalIcon,
   Wrench,
   X,
 } from "lucide-react";
 import type * as React from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AttachmentData } from "@/components/ai-elements/attachments";
-import { Attachment, AttachmentPreview, Attachments } from "@/components/ai-elements/attachments";
+import {
+  Attachment,
+  AttachmentPreview,
+  AttachmentRemove,
+  Attachments,
+} from "@/components/ai-elements/attachments";
+import {
+  Context,
+  ContextCacheUsage,
+  ContextContent,
+  ContextContentBody,
+  ContextContentFooter,
+  ContextContentHeader,
+  ContextInputUsage,
+  ContextOutputUsage,
+  ContextTrigger,
+} from "@/components/ai-elements/context";
 import {
   Conversation,
   ConversationContent,
@@ -32,8 +49,32 @@ import {
   MessageContent,
   MessageResponse,
 } from "@/components/ai-elements/message";
-import { PromptInput } from "@/components/ai-elements/prompt-input";
+import {
+  PromptInput,
+  PromptInputActionAddAttachments,
+  PromptInputActionAddScreenshot,
+  PromptInputActionMenu,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuTrigger,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputHeader,
+  type PromptInputMessage,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+  usePromptInputAttachments,
+} from "@/components/ai-elements/prompt-input";
+import {
+  TerminalActions,
+  TerminalContent,
+  TerminalCopyButton,
+  TerminalHeader,
+  Terminal as TerminalOutput,
+  TerminalTitle,
+} from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool";
+import { AutocompletePopover } from "@/components/autocomplete-popover";
 import { ChatModelPicker } from "@/components/chat-model-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,15 +82,13 @@ import {
   type ChatMessageView,
   type ChatRunState,
   type ChatToolCallView,
-  errorMessage,
+  clientId,
   MAX_ATTACHMENT_BYTES,
-  readFileAsAttachment,
 } from "@/lib/chatRunModel";
 import {
   contextUsagePercent,
   contextWindowForModel,
   formatTokens,
-  hasTokenUsage,
   type TokenUsage,
   type TokenUsageTotals,
 } from "@/lib/chatUsage";
@@ -60,6 +99,7 @@ import {
   slashCommandDefinitions,
 } from "@/lib/slashCommandProvider";
 import type { AutocompleteItem } from "@/lib/useAutocomplete";
+import { useAutocomplete } from "@/lib/useAutocomplete";
 import { useChatModelChoice } from "@/lib/useChatModelChoice";
 import { useChatPromptHistory } from "@/lib/useChatPromptHistory";
 import { useChatRun } from "@/lib/useChatRun";
@@ -67,12 +107,17 @@ import { cn } from "@/lib/utils";
 
 export function ChatPage(): React.ReactElement {
   const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const params = useParams({ strict: false }) as { sessionId?: string } | undefined;
   const search = useSearch({ strict: false }) as { session?: string } | undefined;
-  const urlSessionId = search?.session ?? null;
+  const routeSessionId = params?.sessionId ?? null;
+  const legacySessionId =
+    typeof search?.session === "string" && search.session.length > 0 ? search.session : null;
+  const urlSessionId = routeSessionId ?? legacySessionId;
   const [prompt, setPrompt] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentData[]>([]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [showCommandHelp, setShowCommandHelp] = useState(false);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const autocompleteProviders = useMemo(
     () => [createSlashCommandProvider(), createFileMentionProvider()],
     [],
@@ -86,11 +131,36 @@ export function ChatPage(): React.ReactElement {
   const { record: recordPromptHistory, onKeyDown: onPromptHistoryKeyDown } =
     useChatPromptHistory(setPrompt);
 
+  useEffect(() => {
+    if (routeSessionId !== null || legacySessionId === null) {
+      return;
+    }
+    void navigate({
+      to: "/chat/$sessionId",
+      params: { sessionId: legacySessionId },
+      replace: true,
+    });
+  }, [legacySessionId, navigate, routeSessionId]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      promptInputRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [pathname, urlSessionId]);
+
   const handleSessionChange = useCallback(
     (newSessionId: string | null, options?: { replace?: boolean }) => {
+      if (newSessionId === null) {
+        void navigate({
+          to: "/chat",
+          replace: options?.replace ?? false,
+        });
+        return;
+      }
       void navigate({
-        to: "/chat",
-        search: newSessionId === null ? {} : { session: newSessionId },
+        to: "/chat/$sessionId",
+        params: { sessionId: newSessionId },
         replace: options?.replace ?? false,
       });
     },
@@ -103,8 +173,6 @@ export function ChatPage(): React.ReactElement {
     onSessionChange: handleSessionChange,
   });
   const {
-    sessionId,
-    sessionTitle,
     transcript,
     runState,
     activeRunId,
@@ -170,57 +238,62 @@ export function ChatPage(): React.ReactElement {
     [handleSlashCommand, recordPromptHistory],
   );
 
+  const autocomplete = useAutocomplete(promptInputRef, {
+    value: prompt,
+    providers: autocompleteProviders,
+    onValueChange: setPrompt,
+    disabled: runState === "cancelling",
+    onCommit: handleAutocompleteCommit,
+  });
+
   const handlePromptUnhandledKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => onPromptHistoryKeyDown(event, prompt),
-    [onPromptHistoryKeyDown, prompt],
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (autocomplete.onKeyDown(event)) {
+        return;
+      }
+      onPromptHistoryKeyDown(event, prompt);
+    },
+    [autocomplete, onPromptHistoryKeyDown, prompt],
   );
 
-  const handleSubmit = useCallback(() => {
-    const message = prompt.trim();
-    const hasAttachments = attachments.length > 0;
-    if ((message === "" && !hasAttachments) || isRunning) {
-      return;
-    }
-    if (!hasAttachments && message.startsWith("/")) {
+  const handleSubmit = useCallback(
+    (input: PromptInputMessage) => {
+      const message = input.text.trim();
+      const attachments: AttachmentData[] = input.files.map((file) => ({
+        ...file,
+        id: clientId("att"),
+      }));
+      const hasAttachments = attachments.length > 0;
+      if ((message === "" && !hasAttachments) || isRunning) {
+        return;
+      }
+      if (!hasAttachments && message.startsWith("/")) {
+        recordPromptHistory(message);
+        setPrompt("");
+        handleSlashCommand(message);
+        return;
+      }
       recordPromptHistory(message);
       setPrompt("");
-      handleSlashCommand(message);
-      return;
-    }
-    recordPromptHistory(message);
-    setPrompt("");
-    setAttachments([]);
-    setShowCommandHelp(false);
-    setModelPickerOpen(false);
-    submit({ message, attachments });
-  }, [attachments, handleSlashCommand, isRunning, prompt, recordPromptHistory, submit]);
+      setShowCommandHelp(false);
+      setModelPickerOpen(false);
+      submit({ message, attachments });
+    },
+    [handleSlashCommand, isRunning, recordPromptHistory, submit],
+  );
 
-  const handleAddFiles = useCallback(
-    (files: FileList) => {
-      const incoming = Array.from(files);
-      void Promise.all(incoming.map(readFileAsAttachment))
-        .then((results) => {
-          const successes = results.filter((value): value is AttachmentData => value !== null);
-          const oversized = incoming.filter((file) => file.size > MAX_ATTACHMENT_BYTES);
-          if (oversized.length > 0) {
-            setError(
-              `Skipped ${oversized.length} file(s) larger than ${(MAX_ATTACHMENT_BYTES / (1024 * 1024)).toFixed(0)}MB.`,
-            );
-          }
-          if (successes.length > 0) {
-            setAttachments((current) => [...current, ...successes]);
-          }
-        })
-        .catch((cause: unknown) => {
-          setError(errorMessage(cause));
-        });
+  const handlePromptInputError = useCallback(
+    (inputError: { code: string; message: string }) => {
+      if (inputError.code === "max_file_size") {
+        setError(
+          `Files must be ${(MAX_ATTACHMENT_BYTES / (1024 * 1024)).toFixed(0)}MB or smaller.`,
+        );
+        return;
+      }
+      setError(inputError.message);
     },
     [setError],
   );
-
-  const handleRemoveAttachment = useCallback((id: string) => {
-    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
-  }, []);
 
   const handleCancel = useCallback(() => cancel(), [cancel]);
 
@@ -237,40 +310,20 @@ export function ChatPage(): React.ReactElement {
 
   // Below this point: the original return JSX is preserved verbatim.
   return (
-    <div className="-mx-6 -my-8 flex h-[calc(100dvh-2.75rem)] flex-col overflow-hidden bg-[var(--bg)] md:-mx-10 md:-my-10">
+    <div className="chat-surface -mx-6 -my-8 flex h-[calc(100dvh-2.75rem)] flex-col overflow-hidden bg-[var(--bg)] md:-mx-10 md:-my-10">
       <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--hairline)] bg-[var(--bg-elev)] px-4 py-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <MessageSquare size={15} strokeWidth={1.75} className="text-[var(--accent)]" />
-              <h1 className="text-[14px] font-medium tracking-tight text-[var(--fg)]">
-                {sessionTitle ?? "Chat"}
-              </h1>
-            </div>
-            <p className="mt-1 flex min-w-0 items-center font-mono text-[11px] text-[var(--fg-mute)]">
-              {sessionId === null ? (
-                <span className="truncate">new session</span>
-              ) : (
-                <SessionIdCopy sessionId={sessionId} />
-              )}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <UsageMetrics usage={usageTotals} contextWindow={contextWindow} />
-            <RunStatusBadge runState={runState} runId={activeRunId} />
-          </div>
-        </header>
-
         {error === null ? null : <InlineError message={error} />}
         {showCommandHelp ? <CommandHelp onClose={() => setShowCommandHelp(false)} /> : null}
 
         <Conversation className="min-h-0 flex-1">
-          <ConversationContent>
+          <ConversationContent
+            className={cn(transcript.length === 0 ? "min-h-full pb-32" : "pb-56 md:pb-52")}
+          >
             {transcript.length === 0 ? (
               <ConversationEmptyState
                 title="Ready."
                 description={modelLine}
-                icon={<MessageSquare size={16} strokeWidth={1.75} />}
+                icon={<MessageSquare size={14} strokeWidth={1.75} />}
               />
             ) : (
               transcript.map((message) => <TranscriptMessage key={message.id} message={message} />)
@@ -279,34 +332,65 @@ export function ChatPage(): React.ReactElement {
           <ConversationScrollButton />
         </Conversation>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)] to-transparent px-3 pt-10 pb-3 md:px-6 md:pb-4">
-          <div className="pointer-events-auto mx-auto w-full max-w-3xl">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-3 md:px-6 md:pb-4">
+          <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
+            <div className="flex justify-end px-1">
+              <RunStatusBadge runState={runState} runId={activeRunId} />
+            </div>
             <PromptInput
-              value={prompt}
-              running={isRunning}
-              disabled={runState === "cancelling"}
-              attachments={attachments}
-              onValueChange={setPrompt}
+              accept="image/*"
+              globalDrop
+              maxFileSize={MAX_ATTACHMENT_BYTES}
+              multiple
+              onError={handlePromptInputError}
               onSubmit={handleSubmit}
-              onCancel={handleCancel}
-              onAddFiles={handleAddFiles}
-              onRemoveAttachment={handleRemoveAttachment}
-              autocompleteProviders={autocompleteProviders}
-              onAutocompleteCommit={handleAutocompleteCommit}
-              onUnhandledKeyDown={handlePromptUnhandledKeyDown}
-              toolbar={
-                <ChatModelPicker
-                  choice={selectedModelChoice}
-                  providerStates={modelProviderStates}
-                  open={modelPickerOpen}
-                  onOpenChange={setModelPickerOpen}
-                  onSelect={setModelChoice}
-                  onReasoningEffortChange={setModelReasoningEffort}
+              className="rounded-md bg-[var(--bg-elev)] [&_[data-slot=input-group]]:rounded-md [&_[data-slot=input-group]]:border-[var(--hairline)] [&_[data-slot=input-group]]:bg-[var(--bg-elev)] [&_[data-slot=input-group]]:shadow-none"
+            >
+              <AutocompletePopover
+                open={autocomplete.open}
+                items={autocomplete.items}
+                selectedIndex={autocomplete.selectedIndex}
+                anchorRect={autocomplete.anchorRect}
+                onAccept={autocomplete.accept}
+                onSelect={autocomplete.select}
+              />
+              <ChatPromptAttachments />
+              <PromptInputBody>
+                <PromptInputTextarea
+                  inputRef={promptInputRef}
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.currentTarget.value)}
+                  onFocus={autocomplete.refresh}
+                  onKeyDown={handlePromptUnhandledKeyDown}
                   disabled={runState === "cancelling"}
+                  className="min-h-12 text-[13px] leading-5 md:text-[13px]"
                 />
-              }
-              className="rounded-xl border border-[var(--hairline)] bg-[var(--bg-elev)] p-2 shadow-lg shadow-black/30"
-            />
+              </PromptInputBody>
+              <PromptInputFooter>
+                <PromptInputTools>
+                  <PromptInputActionMenu>
+                    <PromptInputActionMenuTrigger disabled={runState === "cancelling"} />
+                    <PromptInputActionMenuContent>
+                      <PromptInputActionAddAttachments label="Attach image" />
+                      <PromptInputActionAddScreenshot />
+                    </PromptInputActionMenuContent>
+                  </PromptInputActionMenu>
+                  <ChatModelPicker
+                    choice={selectedModelChoice}
+                    providerStates={modelProviderStates}
+                    open={modelPickerOpen}
+                    onOpenChange={setModelPickerOpen}
+                    onSelect={setModelChoice}
+                    onReasoningEffortChange={setModelReasoningEffort}
+                    disabled={runState === "cancelling"}
+                  />
+                </PromptInputTools>
+                <PromptInputTools className="shrink-0 justify-end gap-2">
+                  <ContextUsageIndicator usage={usageTotals} contextWindow={contextWindow} />
+                  <ChatPromptSubmit prompt={prompt} runState={runState} onStop={handleCancel} />
+                </PromptInputTools>
+              </PromptInputFooter>
+            </PromptInput>
           </div>
         </div>
       </section>
@@ -314,9 +398,69 @@ export function ChatPage(): React.ReactElement {
   );
 }
 
+function ChatPromptAttachments(): React.ReactElement | null {
+  const attachments = usePromptInputAttachments();
+  if (attachments.files.length === 0) {
+    return null;
+  }
+  return (
+    <PromptInputHeader>
+      <Attachments variant="grid" className="ml-0 self-start">
+        {attachments.files.map((attachment) => (
+          <Attachment
+            key={attachment.id}
+            data={attachment}
+            onRemove={() => attachments.remove(attachment.id)}
+          >
+            <AttachmentPreview />
+            <AttachmentRemove />
+          </Attachment>
+        ))}
+      </Attachments>
+    </PromptInputHeader>
+  );
+}
+
+function ChatPromptSubmit({
+  prompt,
+  runState,
+  onStop,
+}: {
+  prompt: string;
+  runState: ChatRunState;
+  onStop(): void;
+}): React.ReactElement {
+  const attachments = usePromptInputAttachments();
+  const isRunning = runState !== "idle";
+  const disabled =
+    runState === "cancelling" ||
+    (!isRunning && prompt.trim() === "" && attachments.files.length === 0);
+  const status = promptSubmitStatus(runState);
+  return (
+    <PromptInputSubmit
+      disabled={disabled}
+      onStop={onStop}
+      className="size-7 [&>svg]:!size-3.5"
+      {...(status ? { status } : {})}
+    />
+  );
+}
+
+function promptSubmitStatus(runState: ChatRunState): "submitted" | "streaming" | undefined {
+  if (runState === "starting") {
+    return "submitted";
+  }
+  if (runState === "streaming" || runState === "disconnected" || runState === "cancelling") {
+    return "streaming";
+  }
+  return undefined;
+}
+
 function TranscriptMessage({ message }: { message: ChatMessageView }): React.ReactElement {
   const showActions =
-    message.role === "assistant" && message.status === "complete" && message.content !== "";
+    (message.role === "assistant" || message.role === "user") &&
+    message.status === "complete" &&
+    message.content !== "";
   const showUsage =
     message.role === "assistant" && message.status === "complete" && message.usage !== undefined;
   return (
@@ -384,39 +528,10 @@ function MessageUsageBadge({ usage }: { usage: TokenUsage }): React.ReactElement
   return (
     <span
       title={full}
-      className="ml-1 inline-flex items-center gap-1 font-mono text-[10px] text-[var(--fg-mute)]"
+      className="ml-1 inline-flex items-center gap-1 font-mono text-[10.5px] leading-4 text-[var(--fg-mute)]"
     >
       {compact}
     </span>
-  );
-}
-
-function SessionIdCopy({ sessionId }: { sessionId: string }): React.ReactElement {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    void navigator.clipboard.writeText(sessionId).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
-  }, [sessionId]);
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      title={copied ? "Copied" : "Copy session id"}
-      className="group inline-flex min-w-0 items-center gap-1.5 truncate text-left text-[var(--fg-mute)] transition-colors duration-150 hover:text-[var(--fg)]"
-    >
-      <span className="truncate">{sessionId}</span>
-      {copied ? (
-        <Check size={11} strokeWidth={1.75} className="shrink-0 text-[var(--good)]" />
-      ) : (
-        <Copy
-          size={11}
-          strokeWidth={1.75}
-          className="shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
-        />
-      )}
-    </button>
   );
 }
 
@@ -429,7 +544,7 @@ function CopyMessageAction({ text }: { text: string }): React.ReactElement {
     });
   }, [text]);
   return (
-    <MessageAction tooltip={copied ? "Copied" : "Copy message"} onClick={handleCopy}>
+    <MessageAction label={copied ? "Copied" : "Copy message"} onClick={handleCopy}>
       {copied ? (
         <Check size={13} strokeWidth={1.75} className="text-[var(--good)]" />
       ) : (
@@ -477,7 +592,7 @@ function ToolPanel({ tool }: { tool: ChatToolCallView }): React.ReactElement {
 function ToolIcon({ name }: { name: string }): React.ReactElement {
   const className = "shrink-0 text-[var(--accent)]";
   if (name === "shell.run") {
-    return <Terminal size={13} strokeWidth={1.75} className={className} />;
+    return <TerminalIcon size={13} strokeWidth={1.75} className={className} />;
   }
   if (name === "wiki.search" || name === "fs.grep" || name === "sessions.search") {
     return <Search size={13} strokeWidth={1.75} className={className} />;
@@ -607,7 +722,7 @@ function SearchToolView({
             <SearchMatchRow key={searchMatchKey(entry, index)} entry={entry} />
           ))}
           {matches.length > 8 ? (
-            <div className="border-t border-[var(--hairline)] px-2 py-1.5 text-[11px] text-[var(--fg-mute)]">
+            <div className="border-t border-[var(--hairline)] px-2 py-1.5 text-[11.5px] text-[var(--fg-mute)]">
               {matches.length - 8} more match(es) omitted from the panel.
             </div>
           ) : null}
@@ -625,9 +740,9 @@ function SearchMatchRow({ entry }: { entry: unknown }): React.ReactElement {
   return (
     <div className="border-t border-[var(--hairline)] px-2 py-2 first:border-t-0">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="truncate font-mono text-[11px] text-[var(--fg)]">{path}</span>
+        <span className="truncate font-mono text-[11.5px] text-[var(--fg)]">{path}</span>
         {line === null ? null : (
-          <span className="shrink-0 font-mono text-[10.5px] text-[var(--fg-mute)]">:{line}</span>
+          <span className="shrink-0 font-mono text-[11.5px] text-[var(--fg-mute)]">:{line}</span>
         )}
       </div>
       <p className="mt-1 line-clamp-2 text-[11.5px] leading-5 text-[var(--fg-dim)]">{preview}</p>
@@ -736,16 +851,55 @@ function ShellToolView({
           value={timedOut ? "yes" : "no"}
           tone={timedOut ? "bad" : "default"}
         />
-        <ToolMetric label="truncated" value={truncated ? "yes" : "no"} />
+        <ToolMetric
+          label="truncated"
+          value={truncated || stdout.truncated || stderr.truncated ? "yes" : "no"}
+          tone={truncated || stdout.truncated || stderr.truncated ? "bad" : "default"}
+        />
       </ToolMetricGrid>
       <PreviewBlock label="command" value={command} />
       <ToolMetric label="cwd" value={cwd} />
-      {stdout === "" ? null : <PreviewBlock label="stdout" value={clipPreview(stdout, 1800)} />}
-      {stderr === "" ? null : <PreviewBlock label="stderr" value={clipPreview(stderr, 1800)} />}
-      {stdout === "" && stderr === "" ? (
+      {stdout.text === "" ? null : (
+        <ShellOutputTerminal label="stdout" output={stdout.text} truncated={stdout.truncated} />
+      )}
+      {stderr.text === "" ? null : (
+        <ShellOutputTerminal label="stderr" output={stderr.text} truncated={stderr.truncated} />
+      )}
+      {stdout.text === "" && stderr.text === "" ? (
         <p className="text-[12px] text-[var(--fg-mute)]">No stdout or stderr output.</p>
       ) : null}
     </div>
+  );
+}
+
+function ShellOutputTerminal({
+  label,
+  output,
+  truncated,
+}: {
+  label: "stdout" | "stderr";
+  output: string;
+  truncated: boolean;
+}): React.ReactElement {
+  return (
+    <TerminalOutput
+      autoScroll={false}
+      output={output}
+      className="rounded-md border-[var(--hairline)] bg-zinc-950 text-zinc-100"
+    >
+      <TerminalHeader className="border-zinc-800 px-3 py-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <TerminalTitle>{label}</TerminalTitle>
+          {truncated ? (
+            <span className="font-mono text-[10.5px] leading-4 text-[var(--bad)]">truncated</span>
+          ) : null}
+        </div>
+        <TerminalActions>
+          <TerminalCopyButton aria-label={`Copy ${label}`} title={`Copy ${label}`} />
+        </TerminalActions>
+      </TerminalHeader>
+      <TerminalContent className="max-h-80 p-3" />
+    </TerminalOutput>
   );
 }
 
@@ -840,7 +994,7 @@ function SkillsListToolView({
             <SkillRow key={skillRowKey(entry, index)} entry={entry} />
           ))}
           {skills.length > 10 ? (
-            <div className="border-t border-[var(--hairline)] px-2 py-1.5 text-[11px] text-[var(--fg-mute)]">
+            <div className="border-t border-[var(--hairline)] px-2 py-1.5 text-[11.5px] text-[var(--fg-mute)]">
               {skills.length - 10} more skill(s) omitted from the panel.
             </div>
           ) : null}
@@ -890,8 +1044,8 @@ function SkillRow({ entry }: { entry: unknown }): React.ReactElement {
   return (
     <div className="border-t border-[var(--hairline)] px-2 py-2 first:border-t-0">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="truncate font-mono text-[11px] text-[var(--fg)]">{name}</span>
-        <span className="shrink-0 font-mono text-[10.5px] text-[var(--fg-mute)]">
+        <span className="truncate font-mono text-[11.5px] text-[var(--fg)]">{name}</span>
+        <span className="shrink-0 font-mono text-[11.5px] text-[var(--fg-mute)]">
           {source}
           {status === "" ? "" : `/${status}`}
         </span>
@@ -940,83 +1094,104 @@ function PreviewBlock({ label, value }: { label: string; value: string }): React
   return (
     <div className="min-w-0">
       <div className="label-eyebrow mb-1 text-[var(--fg-mute)]">{label}</div>
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-[var(--surface)] p-2 text-[11px] leading-5 text-[var(--fg-dim)]">
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-[var(--surface)] p-2 text-[11.5px] leading-5 text-[var(--fg-dim)]">
         {value}
       </pre>
     </div>
   );
 }
 
-function UsageMetrics({
+function ContextUsageIndicator({
   usage,
   contextWindow,
 }: {
   usage: TokenUsageTotals;
   contextWindow: number | undefined;
 }): React.ReactElement | null {
-  if (!hasTokenUsage(usage) && contextWindow === undefined) {
+  if (contextWindow === undefined || contextWindow <= 0) {
     return null;
   }
-  const contextPercent = contextUsagePercent(usage.latestContextTokens, contextWindow);
-  const contextValue =
-    contextWindow === undefined
-      ? null
-      : contextPercent === undefined
-        ? `?/${formatTokens(contextWindow)}`
-        : `${contextPercent.toFixed(1)}%/${formatTokens(contextWindow)}`;
+  const latestContextTokens = usage.latestContextTokens ?? 0;
+  const usedTokens = Math.max(0, Math.min(latestContextTokens, contextWindow));
+  const contextPercent = contextUsagePercent(latestContextTokens, contextWindow);
+  const hasBreakdown =
+    usage.input > 0 || usage.output > 0 || usage.cacheRead > 0 || usage.cacheWrite > 0;
   return (
-    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-      {usage.input > 0 ? <MetricPill label="in" value={formatTokens(usage.input)} /> : null}
-      {usage.output > 0 ? <MetricPill label="out" value={formatTokens(usage.output)} /> : null}
-      {usage.cacheRead > 0 ? (
-        <MetricPill label="read" value={formatTokens(usage.cacheRead)} />
-      ) : null}
-      {usage.cacheWrite > 0 ? (
-        <MetricPill label="write" value={formatTokens(usage.cacheWrite)} />
-      ) : null}
-      {usage.cost > 0 ? <MetricPill label="cost" value={`$${usage.cost.toFixed(3)}`} /> : null}
-      {contextValue === null ? null : (
-        <MetricPill
-          label="ctx"
-          value={contextValue}
-          tone={
-            contextPercent === undefined
-              ? "default"
-              : contextPercent > 90
-                ? "bad"
-                : contextPercent > 70
-                  ? "warn"
-                  : "default"
-          }
-        />
-      )}
+    <Context maxTokens={contextWindow} usedTokens={usedTokens} usage={toLanguageModelUsage(usage)}>
+      <ContextTrigger
+        className={cn(
+          "h-7 gap-1.5 rounded-md border border-[var(--hairline)] bg-[var(--surface)] px-2 py-0 font-mono text-[11.5px]",
+          contextPercent !== undefined &&
+            contextPercent > 70 &&
+            "border-[var(--warn)]/45 text-[var(--warn)] hover:text-[var(--warn)]",
+          contextPercent !== undefined &&
+            contextPercent > 90 &&
+            "border-[var(--bad)]/45 text-[var(--bad)] hover:text-[var(--bad)]",
+        )}
+      />
+      <ContextContent
+        align="end"
+        className="w-72 border-[var(--hairline-strong)] bg-[var(--surface)] text-[var(--fg)]"
+      >
+        <ContextContentHeader />
+        {hasBreakdown ? (
+          <ContextContentBody className="space-y-2">
+            {usage.input > 0 ? (
+              <ContextInputUsage>
+                <ContextUsageRow label="Input" value={formatTokens(usage.input)} />
+              </ContextInputUsage>
+            ) : null}
+            {usage.output > 0 ? (
+              <ContextOutputUsage>
+                <ContextUsageRow label="Output" value={formatTokens(usage.output)} />
+              </ContextOutputUsage>
+            ) : null}
+            {usage.cacheRead > 0 ? (
+              <ContextCacheUsage>
+                <ContextUsageRow label="Cache read" value={formatTokens(usage.cacheRead)} />
+              </ContextCacheUsage>
+            ) : null}
+            {usage.cacheWrite > 0 ? (
+              <ContextUsageRow label="Cache write" value={formatTokens(usage.cacheWrite)} />
+            ) : null}
+          </ContextContentBody>
+        ) : null}
+        {usage.cost > 0 ? (
+          <ContextContentFooter className="bg-[var(--surface-2)]">
+            <span className="text-[var(--fg-mute)]">Total cost</span>
+            <span>${usage.cost.toFixed(3)}</span>
+          </ContextContentFooter>
+        ) : null}
+      </ContextContent>
+    </Context>
+  );
+}
+
+function ContextUsageRow({ label, value }: { label: string; value: string }): React.ReactElement {
+  return (
+    <div className="flex items-center justify-between gap-3 text-[12px]">
+      <span className="text-[var(--fg-mute)]">{label}</span>
+      <span className="font-mono text-[var(--fg)]">{value}</span>
     </div>
   );
 }
 
-function MetricPill({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  tone?: "default" | "warn" | "bad";
-}): React.ReactElement {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-6 items-center gap-1 rounded border border-[var(--hairline)] bg-[var(--surface)] px-1.5 font-mono text-[10.5px]",
-        tone === "default" && "text-[var(--fg-mute)]",
-        tone === "warn" && "border-[var(--warn)]/45 text-[var(--warn)]",
-        tone === "bad" && "border-[var(--bad)]/45 text-[var(--bad)]",
-      )}
-      title={`${label}: ${value}`}
-    >
-      <span className="text-[var(--fg-dim)]">{label}</span>
-      <span className={tone === "default" ? "text-[var(--fg)]" : undefined}>{value}</span>
-    </span>
-  );
+function toLanguageModelUsage(usage: TokenUsageTotals): LanguageModelUsage {
+  return {
+    inputTokens: usage.input,
+    inputTokenDetails: {
+      noCacheTokens: usage.input,
+      cacheReadTokens: usage.cacheRead,
+      cacheWriteTokens: usage.cacheWrite,
+    },
+    outputTokens: usage.output,
+    outputTokenDetails: {
+      textTokens: usage.output,
+      reasoningTokens: undefined,
+    },
+    totalTokens: usage.total,
+    cachedInputTokens: usage.cacheRead,
+  };
 }
 
 function RunStatusBadge({
@@ -1048,8 +1223,8 @@ function RunStatusBadge({
 
 function InlineError({ message }: { message: string }): React.ReactElement {
   return (
-    <div className="flex items-start gap-2 border-b border-[var(--bad)]/35 bg-[var(--bad)]/[0.06] px-4 py-2 text-[12.5px] text-[var(--fg-dim)]">
-      <AlertCircle size={14} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--bad)]" />
+    <div className="flex items-start gap-2 border-b border-[var(--bad)]/35 bg-[var(--bad)]/[0.06] px-4 py-2 text-[12px] text-[var(--fg-dim)]">
+      <AlertCircle size={13} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--bad)]" />
       <span className="min-w-0 break-words">{message}</span>
     </div>
   );
@@ -1059,7 +1234,11 @@ function CommandHelp({ onClose }: { onClose(): void }): React.ReactElement {
   return (
     <div className="border-b border-[var(--hairline)] bg-[var(--surface)] px-4 py-3">
       <div className="mx-auto flex max-w-3xl items-start gap-3">
-        <Terminal size={14} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+        <TerminalIcon
+          size={13}
+          strokeWidth={1.75}
+          className="mt-0.5 shrink-0 text-[var(--accent)]"
+        />
         <div className="min-w-0 flex-1">
           <div className="mb-2 text-[12px] font-medium text-[var(--fg)]">Chat commands</div>
           <div className="grid gap-1.5 sm:grid-cols-2">
@@ -1080,7 +1259,7 @@ function CommandHelp({ onClose }: { onClose(): void }): React.ReactElement {
           size="icon"
           aria-label="Close command help"
           title="Close"
-          className="h-7 w-7 shrink-0"
+          className="h-7 w-7 shrink-0 [&>svg]:!size-[13px]"
           onClick={onClose}
         >
           <X size={13} strokeWidth={1.75} />
@@ -1217,11 +1396,19 @@ function arrayStrings(value: unknown): string[] {
     : [];
 }
 
-function outputText(value: unknown): string {
+interface OutputPreviewView {
+  text: string;
+  truncated: boolean;
+}
+
+function outputText(value: unknown): OutputPreviewView {
   if (!isRecord(value)) {
-    return "";
+    return { text: "", truncated: false };
   }
-  return stringValue(value.text) ?? "";
+  return {
+    text: stringValue(value.text) ?? "",
+    truncated: booleanValue(value.truncated),
+  };
 }
 
 function searchMatchKey(entry: unknown, index: number): string {

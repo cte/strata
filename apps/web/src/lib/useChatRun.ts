@@ -133,7 +133,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
         void getChatSession(runSessionId).then(
           (detail) => {
             if (detail !== null) {
-              setTranscript(messagesToTranscript(detail.messages));
+              setTranscript((current) => messagesToTranscript(detail.messages, current));
               setUsageTotals(usageTotalsFromMessages(detail.messages));
             }
             const status = run?.status ?? detail?.session.status;
@@ -142,8 +142,11 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
               setError("Live stream disconnected, but the server-side run finished.");
               return;
             }
-            setError(agentCompletionMessage(status ?? "unknown", stoppedReason));
-            setTranscript(markPendingMessagesErrored);
+            const message = agentCompletionMessage(status ?? "unknown", stoppedReason);
+            setError(message);
+            setTranscript(
+              message === null ? markPendingMessagesComplete : markPendingMessagesErrored,
+            );
           },
           (cause: unknown) => {
             setError(errorMessage(cause));
@@ -172,8 +175,13 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
   }, [activeRunId, activeRunsQuery.data, loadFinishedRun, refreshSessions, runState]);
 
   // --- URL ?session=<id>  →  in-memory transcript ------------------------
+  // Driven by `urlSessionId` only. Reads `sessionIdRef.current` for the
+  // equality check rather than depending on `sessionId`, so that when the SSE
+  // stream's `session.started` event sets `sessionId` (before the matching
+  // `navigate()` lands and updates `urlSessionId`), this effect doesn't fire
+  // and wipe the in-flight optimistic transcript.
   useEffect(() => {
-    if (urlSessionId === sessionId) {
+    if (urlSessionId === sessionIdRef.current) {
       return;
     }
     if (urlSessionId === null) {
@@ -181,6 +189,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
       setTranscript([]);
       setError(null);
       setSessionId(null);
+      sessionIdRef.current = null;
       setUsageTotals(createTokenUsageTotals());
       return;
     }
@@ -199,10 +208,28 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
             setError(`Session not found: ${urlSessionId}`);
             return;
           }
+          const previousSessionId = sessionIdRef.current;
           setSessionId(detail.session.id);
+          sessionIdRef.current = detail.session.id;
           setSessionTitle(sanitizeDisplayText(detail.session.title));
-          setTranscript(messagesToTranscript(detail.messages));
+          setTranscript((current) => {
+            // Only align ids with the existing transcript when it belongs to
+            // the same session we're loading — otherwise stale entries from a
+            // previous session would bleed into the new one.
+            const alignment = previousSessionId === detail.session.id ? current : undefined;
+            const storedTranscript = messagesToTranscript(detail.messages, alignment);
+            if (detail.session.status === "failed" || detail.session.status === "interrupted") {
+              return markPendingMessagesErrored(storedTranscript);
+            }
+            if (detail.session.status === "completed") {
+              return markPendingMessagesComplete(storedTranscript);
+            }
+            return storedTranscript;
+          });
           setUsageTotals(usageTotalsFromMessages(detail.messages));
+          if (detail.session.status === "failed" || detail.session.status === "interrupted") {
+            setError(agentCompletionMessage(detail.session.status));
+          }
         },
         (cause: unknown) => {
           if (!cancelled) {
@@ -213,7 +240,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     return () => {
       cancelled = true;
     };
-  }, [urlSessionId, sessionId, queryClient]);
+  }, [urlSessionId, queryClient]);
 
   // --- SSE event reducer ---------------------------------------------------
   const handleStreamEvent = useCallback(
@@ -229,6 +256,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
           setRunState("streaming");
           break;
         case "session.started":
+          sessionIdRef.current = event.sessionId;
           setSessionId(event.sessionId);
           setSessionTitle(sanitizeDisplayText(event.title));
           onSessionChange(event.sessionId, { replace: true });
@@ -275,11 +303,15 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
           setActiveRunId(null);
           runIdRef.current = null;
           if (event.result.sessionId !== "") {
+            sessionIdRef.current = event.result.sessionId;
             setSessionId(event.result.sessionId);
           }
           if (event.result.status !== "completed") {
-            setError(agentCompletionMessage(event.result.status, event.result.stoppedReason));
-            setTranscript(markPendingMessagesErrored);
+            const message = agentCompletionMessage(event.result.status, event.result.stoppedReason);
+            setError(message);
+            setTranscript(
+              message === null ? markPendingMessagesComplete : markPendingMessagesErrored,
+            );
           }
           break;
         case "agent.failed":
@@ -339,6 +371,51 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     },
     [handleStreamEvent, refreshSessions],
   );
+
+  useEffect(() => {
+    if (sessionId === null || runState !== "idle") {
+      return;
+    }
+
+    let cancelled = false;
+    void listActiveChatRuns().then(
+      (runs) => {
+        if (cancelled || sessionIdRef.current !== sessionId || abortRef.current !== null) {
+          return;
+        }
+        const activeRun = runs.find(
+          (run) => run.sessionId === sessionId || run.continueSessionId === sessionId,
+        );
+        if (activeRun === undefined) {
+          return;
+        }
+
+        const controller = new AbortController();
+        abortRef.current = controller;
+        runIdRef.current = activeRun.runId;
+        lastEventIdRef.current = activeRun.lastEventId ?? 0;
+        reconnectAttemptsRef.current = 0;
+        runTerminalRef.current = false;
+        setActiveRunId(activeRun.runId);
+        if (!resumeRunStream(activeRun.runId, controller)) {
+          abortRef.current = null;
+          setRunState("disconnected");
+          setError(
+            "Live stream disconnected before the run finished. The server-side agent may still be running; use Stop to cancel it. The session list will refresh when it finishes.",
+          );
+        }
+      },
+      (cause: unknown) => {
+        if (!cancelled) {
+          setError(errorMessage(cause));
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeRunStream, runState, sessionId]);
 
   // --- Submit / cancel / clear / fork --------------------------------------
   const submit = useCallback(
