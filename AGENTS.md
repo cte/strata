@@ -31,7 +31,7 @@ The detailed plans are subordinate to the roadmap:
 
 When plans conflict, update `docs/roadmap.md` first, then reconcile `docs/status.md` and the relevant detailed plan.
 
-The current implementation focus is documented in `docs/status.md`. At the time this file was last updated, the next milestone was the web chat foundation over the shared agent loop.
+The current implementation focus is documented in `docs/status.md`. At the time this file was last updated, raw-to-wiki indexing could automatically create curated meeting/entity wiki pages from Granola, Notion, and material Slack raw snapshots, and the next milestone was improving classification quality, entity consolidation, and curated-first retrieval/indexing depth.
 
 If you change the core roadmap path, milestone sequencing, package boundaries, runtime architecture, agent-loop behavior, tool architecture, connector architecture, or any other load-bearing design decision, use `$maintain-documentation` and update the relevant docs in the same change.
 

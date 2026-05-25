@@ -20,6 +20,15 @@ import {
   type ConnectorSessionResult,
   runConnectorOperation,
 } from "@strata/ingest/connectors";
+import {
+  type GranolaRawToWikiIndexResult,
+  type GranolaRawToWikiResult,
+  type RawToWikiIndexResult,
+  type RawToWikiSourceFilter,
+  runGranolaRawToWikiIndex,
+  runGranolaRawToWikiProposals,
+  runRawToWikiIndex,
+} from "@strata/ingest/raw-to-wiki";
 import { runSlackSocketModeListener } from "@strata/ingest/slack-socket-mode";
 import { createDefaultToolRegistry, type ToolProfile } from "@strata/tools";
 import { type RunTuiOptions, runTui } from "@strata/tui";
@@ -34,8 +43,11 @@ commands:
   auth login openai-codex      sign in with ChatGPT for Codex model access
   auth logout openai-codex     remove stored ChatGPT credentials
   init                         initialize .strata runtime directories
+  ingest raw index              index raw source snapshots into wiki pages
   ingest notion --page-id ID    snapshot a Notion page or URL into wiki/raw/notion
   ingest granola [options]      snapshot Granola meetings into wiki/raw/granola
+  ingest granola index          index raw Granola snapshots into wiki pages
+  ingest granola propose        stage wiki proposals from raw Granola snapshots
   ingest slack [options]        snapshot an explicit Slack thread into wiki/raw/slack
   query [options] <question>   run an agent query using the default dangerous tool profile
   learn reflect [options] <id>  reflect on a completed session trace
@@ -74,18 +86,36 @@ interface ReflectOptions extends ModelOptions {
 interface NotionIngestOptions {
   pageId: string;
   dryRun: boolean;
+  index: boolean;
 }
 
 interface GranolaIngestOptions {
   dryRun: boolean;
   fixture?: string;
+  index: boolean;
+  maxPages?: string;
   meetingsUrl?: string;
+  pageSize?: string;
   since?: string;
   transcriptUrlTemplate?: string;
 }
 
+interface GranolaProposalOptions {
+  limit?: number;
+  rawPaths: string[];
+}
+
+interface GranolaIndexOptions extends GranolaProposalOptions {
+  dryRun: boolean;
+}
+
+interface RawIndexOptions extends GranolaIndexOptions {
+  source: RawToWikiSourceFilter;
+}
+
 interface SlackIngestOptions {
   dryRun: boolean;
+  index: boolean;
   allHistory?: boolean;
   appToken?: string;
   botToken?: string;
@@ -109,14 +139,17 @@ interface SlackIngestOptions {
 }
 
 const INGEST_USAGE = `usage:
-  strata ingest notion --page-id PAGE_ID_OR_URL [--dry-run]
-  strata ingest granola [--since ISO] [--fixture FILE] [--meetings-url URL] [--transcript-url-template URL] [--dry-run]
-  strata ingest slack thread [--channel CHANNEL --thread-ts TS | --from-json FILE] [--title TITLE] [--dry-run]
+  strata ingest raw index [--source all|granola|notion|slack] [--raw-path FILE] [--limit N] [--dry-run]
+  strata ingest notion --page-id PAGE_ID_OR_URL [--index] [--dry-run]
+  strata ingest granola [--since ISO] [--fixture FILE] [--meetings-url URL] [--page-size N] [--max-pages N] [--transcript-url-template URL] [--index] [--dry-run]
+  strata ingest granola index [--raw-path FILE] [--limit N] [--dry-run]
+  strata ingest granola propose [--raw-path FILE] [--limit N]
+  strata ingest slack thread [--channel CHANNEL --thread-ts TS | --from-json FILE] [--title TITLE] [--index] [--dry-run]
   strata ingest slack sync [--since ISO | --all-history] [--channels LIST | --channel-regex REGEX]
                            [--include-private | --no-private] [--include-dms]
                            [--include-bot-messages] [--lookback-minutes N]
                            [--max-channels N] [--max-messages-per-channel N] [--max-threads N]
-                           [--dry-run]
+                           [--index] [--dry-run]
   strata ingest slack listen [--include-bot-messages]`;
 
 function parseLimit(args: string[], fallback = 20): number {
@@ -258,6 +291,27 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
     return 0;
   }
 
+  if (source === "raw") {
+    if (args.includes("--help") || args.includes("-h")) {
+      console.log(INGEST_USAGE);
+      return 0;
+    }
+    if (args[0] !== "index") {
+      throw new Error("Unknown ingest raw command. Expected: ingest raw index");
+    }
+    args.shift();
+    const options = parseRawIndexOptions(args);
+    const result = await runRawToWikiIndex({
+      repoRoot: getStrataPaths().repoRoot,
+      source: options.source,
+      rawPaths: options.rawPaths,
+      dryRun: options.dryRun,
+      ...(options.limit === undefined ? {} : { limit: options.limit }),
+    });
+    printRawIndexResult(result);
+    return 0;
+  }
+
   if (source === "notion") {
     if (args.includes("--help") || args.includes("-h")) {
       console.log(INGEST_USAGE);
@@ -279,6 +333,14 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
       title: `Ingest Notion page ${options.pageId}`,
     });
     printConnectorResult(result);
+    if (options.index && !options.dryRun) {
+      const indexed = await runRawToWikiIndex({
+        repoRoot,
+        source: "notion",
+        rawPaths: [result.rawPath],
+      });
+      printRawIndexResult(indexed);
+    }
     return 0;
   }
 
@@ -287,22 +349,56 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
       console.log(INGEST_USAGE);
       return 0;
     }
+    if (args[0] === "propose") {
+      args.shift();
+      const options = parseGranolaProposalOptions(args);
+      const result = await runGranolaRawToWikiProposals({
+        repoRoot: getStrataPaths().repoRoot,
+        rawPaths: options.rawPaths,
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      });
+      printRawToWikiResult(result);
+      return 0;
+    }
+    if (args[0] === "index") {
+      args.shift();
+      const options = parseGranolaIndexOptions(args);
+      const result = await runGranolaRawToWikiIndex({
+        repoRoot: getStrataPaths().repoRoot,
+        rawPaths: options.rawPaths,
+        dryRun: options.dryRun,
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      });
+      printGranolaIndexResult(result);
+      return 0;
+    }
     const options = parseGranolaIngestOptions(args);
     await loadDotenv();
+    const repoRoot = getStrataPaths().repoRoot;
     const result = await runConnectorOperation({
       name: "granola",
       operation: options.dryRun ? "dry_run" : "pull",
       config: compactConfig({
         fixture: options.fixture,
+        maxPages: options.maxPages,
         meetingsUrl: options.meetingsUrl,
+        pageSize: options.pageSize,
         since: options.since,
         transcriptUrlTemplate: options.transcriptUrlTemplate,
       }),
-      repoRoot: getStrataPaths().repoRoot,
+      repoRoot,
       env: Bun.env,
       title: "Ingest Granola meetings",
     });
     printConnectorResult(result);
+    if (options.index && !options.dryRun) {
+      const rawPaths = (result.items ?? [result]).map((item) => item.rawPath);
+      const indexed = await runGranolaRawToWikiIndex({
+        repoRoot,
+        rawPaths,
+      });
+      printGranolaIndexResult(indexed);
+    }
     return 0;
   }
 
@@ -359,6 +455,15 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
       title: options.mode === "sync" ? "Sync Slack conversations" : "Ingest Slack thread",
     });
     printConnectorResult(result);
+    if (options.index && !options.dryRun) {
+      const rawPaths = (result.items ?? [result]).map((item) => item.rawPath);
+      const indexed = await runRawToWikiIndex({
+        repoRoot: getStrataPaths().repoRoot,
+        source: "slack",
+        rawPaths,
+      });
+      printRawIndexResult(indexed);
+    }
     return 0;
   }
 
@@ -782,7 +887,7 @@ function parseReflectOptions(args: string[]): ReflectOptions {
 }
 
 function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
-  const parsed: Partial<NotionIngestOptions> = { dryRun: false };
+  const parsed: Partial<NotionIngestOptions> = { dryRun: false, index: false };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--page-id") {
@@ -794,6 +899,8 @@ function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
       index += 1;
     } else if (arg === "--dry-run") {
       parsed.dryRun = true;
+    } else if (arg === "--index") {
+      parsed.index = true;
     } else {
       throw new Error(`Unknown ingest notion argument: ${arg}`);
     }
@@ -804,11 +911,12 @@ function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
   return {
     pageId: parsed.pageId,
     dryRun: parsed.dryRun ?? false,
+    index: parsed.index ?? false,
   };
 }
 
 function parseGranolaIngestOptions(args: string[]): GranolaIngestOptions {
-  const parsed: GranolaIngestOptions = { dryRun: false };
+  const parsed: GranolaIngestOptions = { dryRun: false, index: false };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--since") {
@@ -817,11 +925,17 @@ function parseGranolaIngestOptions(args: string[]): GranolaIngestOptions {
       parsed.fixture = requireArgValue(args[++index], "--fixture requires a value");
     } else if (arg === "--meetings-url") {
       parsed.meetingsUrl = requireArgValue(args[++index], "--meetings-url requires a value");
+    } else if (arg === "--page-size") {
+      parsed.pageSize = requireArgValue(args[++index], "--page-size requires a value");
+    } else if (arg === "--max-pages") {
+      parsed.maxPages = requireArgValue(args[++index], "--max-pages requires a value");
     } else if (arg === "--transcript-url-template") {
       parsed.transcriptUrlTemplate = requireArgValue(
         args[++index],
         "--transcript-url-template requires a value",
       );
+    } else if (arg === "--index") {
+      parsed.index = true;
     } else if (arg === "--dry-run") {
       parsed.dryRun = true;
     } else {
@@ -829,6 +943,66 @@ function parseGranolaIngestOptions(args: string[]): GranolaIngestOptions {
     }
   }
   return parsed;
+}
+
+function parseGranolaProposalOptions(args: string[]): GranolaProposalOptions {
+  const parsed: GranolaProposalOptions = { rawPaths: [] };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--raw-path") {
+      parsed.rawPaths.push(requireArgValue(args[++index], "--raw-path requires a value"));
+    } else if (arg === "--limit") {
+      parsed.limit = parsePositiveIntegerArg(args[++index], "--limit requires a positive integer");
+    } else {
+      throw new Error(`Unknown ingest granola propose argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+function parseGranolaIndexOptions(args: string[]): GranolaIndexOptions {
+  const parsed: GranolaIndexOptions = { rawPaths: [], dryRun: false };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--raw-path") {
+      parsed.rawPaths.push(requireArgValue(args[++index], "--raw-path requires a value"));
+    } else if (arg === "--limit") {
+      parsed.limit = parsePositiveIntegerArg(args[++index], "--limit requires a positive integer");
+    } else if (arg === "--dry-run") {
+      parsed.dryRun = true;
+    } else {
+      throw new Error(`Unknown ingest granola index argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+function parseRawIndexOptions(args: string[]): RawIndexOptions {
+  const parsed: RawIndexOptions = { rawPaths: [], dryRun: false, source: "all" };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--raw-path") {
+      parsed.rawPaths.push(requireArgValue(args[++index], "--raw-path requires a value"));
+    } else if (arg === "--limit") {
+      parsed.limit = parsePositiveIntegerArg(args[++index], "--limit requires a positive integer");
+    } else if (arg === "--source") {
+      parsed.source = parseRawToWikiSource(
+        requireArgValue(args[++index], "--source requires a value"),
+      );
+    } else if (arg === "--dry-run") {
+      parsed.dryRun = true;
+    } else {
+      throw new Error(`Unknown ingest raw index argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+function parseRawToWikiSource(value: string): RawToWikiSourceFilter {
+  if (value === "all" || value === "granola" || value === "notion" || value === "slack") {
+    return value;
+  }
+  throw new Error("--source must be one of: all, granola, notion, slack");
 }
 
 function parseSlackIngestOptions(args: string[]): SlackIngestOptions {
@@ -843,7 +1017,7 @@ function parseSlackIngestOptions(args: string[]): SlackIngestOptions {
     args.shift();
     mode = first;
   }
-  const parsed: SlackIngestOptions = { dryRun: false, mode };
+  const parsed: SlackIngestOptions = { dryRun: false, index: false, mode };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--channel") {
@@ -900,6 +1074,8 @@ function parseSlackIngestOptions(args: string[]): SlackIngestOptions {
       parsed.workspaceUrl = requireArgValue(args[++index], "--workspace-url requires a value");
     } else if (arg === "--dry-run") {
       parsed.dryRun = true;
+    } else if (arg === "--index") {
+      parsed.index = true;
     } else {
       throw new Error(`Unknown ingest slack argument: ${arg}`);
     }
@@ -976,6 +1152,75 @@ function printConnectorResult(result: ConnectorSessionResult): void {
     console.log(`skipped existing ${result.rawPath}`);
   }
   console.log(`session: ${result.sessionId}`);
+}
+
+function printRawToWikiResult(result: GranolaRawToWikiResult): void {
+  console.log(`session: ${result.sessionId}`);
+  console.log(`scanned: ${result.scanned}`);
+  console.log(`proposals: ${result.proposals.length}`);
+  for (const proposal of result.proposals) {
+    console.log(`proposal: ${proposal.path}`);
+  }
+  for (const skipped of result.skipped) {
+    console.log(`skipped: ${skipped.rawPath} (${skipped.reason})`);
+  }
+}
+
+function printGranolaIndexResult(result: GranolaRawToWikiIndexResult): void {
+  console.log(`index session: ${result.sessionId}`);
+  console.log(`scanned: ${result.scanned}`);
+  console.log(`${result.dryRun ? "would index" : "indexed"}: ${result.indexed.length}`);
+  for (const item of result.indexed) {
+    console.log(`${result.dryRun ? "would write" : "wrote"} ${item.meetingPath}`);
+    if (item.peoplePaths.length > 0) {
+      console.log(`  people: ${item.peoplePaths.length}`);
+    }
+    if (item.projectPaths.length > 0) {
+      console.log(`  projects: ${item.projectPaths.length}`);
+    }
+    if (item.decisionPaths.length > 0) {
+      console.log(`  decisions: ${item.decisionPaths.length}`);
+    }
+    if (item.threadPaths.length > 0) {
+      console.log(`  threads: ${item.threadPaths.length}`);
+    }
+    if (item.actionCount > 0) {
+      console.log(`  actions: ${item.actionCount}`);
+    }
+  }
+  for (const skipped of result.skipped) {
+    console.log(`skipped: ${skipped.rawPath} (${skipped.reason})`);
+  }
+}
+
+function printRawIndexResult(result: RawToWikiIndexResult): void {
+  console.log(`index session: ${result.sessionId}`);
+  console.log(`scanned: ${result.scanned}`);
+  console.log(`${result.dryRun ? "would index" : "indexed"}: ${result.indexed.length}`);
+  for (const item of result.indexed) {
+    console.log(
+      `${result.dryRun ? "would write" : "wrote"} ${item.primaryKind} ${item.primaryPath}`,
+    );
+    console.log(`  source: ${item.source}`);
+    if (item.peoplePaths.length > 0) {
+      console.log(`  people: ${item.peoplePaths.length}`);
+    }
+    if (item.projectPaths.length > 0) {
+      console.log(`  projects: ${item.projectPaths.length}`);
+    }
+    if (item.decisionPaths.length > 0) {
+      console.log(`  decisions: ${item.decisionPaths.length}`);
+    }
+    if (item.threadPaths.length > 0) {
+      console.log(`  threads: ${item.threadPaths.length}`);
+    }
+    if (item.actionCount > 0) {
+      console.log(`  actions: ${item.actionCount}`);
+    }
+  }
+  for (const skipped of result.skipped) {
+    console.log(`skipped: ${skipped.rawPath} (${skipped.reason})`);
+  }
 }
 
 function parseModelOptions(args: string[]): ModelOptions & { rest: string[] } {

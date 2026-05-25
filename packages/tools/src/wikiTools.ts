@@ -222,7 +222,9 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
       allowRoot: true,
       allowRawRead: includeRaw,
     });
-    const pages = await listMarkdownPages(start.wikiRoot, start.absolutePath, includeRaw, 10_000);
+    const pages = rankSearchPages(
+      await listMarkdownPages(start.wikiRoot, start.absolutePath, includeRaw, 10_000),
+    );
     const matches = await searchPages(start.wikiRoot, pages, query, limit, maxFileBytes);
     return { query, matches, count: matches.length };
   },
@@ -498,6 +500,34 @@ async function searchPages(
   }
 
   return matches;
+}
+
+function rankSearchPages(pages: string[]): string[] {
+  return [...pages].sort((left, right) => {
+    const rankDelta = wikiSearchRank(left) - wikiSearchRank(right);
+    return rankDelta === 0 ? left.localeCompare(right) : rankDelta;
+  });
+}
+
+function wikiSearchRank(relativePath: string): number {
+  if (isRawPath(relativePath)) {
+    return 90;
+  }
+  const topLevel = relativePath.split("/")[0] ?? "";
+  if (
+    ["projects", "decisions", "threads", "meetings", "people", "teams", "actions"].includes(
+      topLevel,
+    )
+  ) {
+    return 0;
+  }
+  if (["priorities.md", "me.md", "index.md"].includes(relativePath)) {
+    return 10;
+  }
+  if (relativePath === "log.md") {
+    return 40;
+  }
+  return 20;
 }
 
 function resolveWikiPath(

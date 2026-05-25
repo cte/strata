@@ -19,7 +19,7 @@ The wiki is the durable knowledge base. The harness is the operating system that
 - `packages/tui`: first-party terminal UI over the shared agent loop.
 - `packages/web-api`: local Hono + tRPC server for the browser app, connector operations, and chat streaming.
 - `apps/web`: Vite + React + TanStack Router browser app for connector setup and initial agent chat.
-- `packages/ingest`: connector contracts, source pullers, checkpointing, and raw snapshot writers for Notion, Granola, and Slack.
+- `packages/ingest`: connector contracts, source pullers, checkpointing, raw snapshot writers for Notion, Granola, and Slack, plus automated raw-to-wiki indexing for meeting/entity pages across those sources.
 - Planned `packages/integrations/*`: optional third-party tool packs, starting with Notion MCP, that register external capabilities as ordinary Strata tools without adding provider-specific code to the agent loop.
 
 The CLI, TUI, and web chat should be presentation layers over the same agent runtime. Do not duplicate agent-loop behavior inside an interface package.
@@ -46,12 +46,12 @@ Key invariant:
 
 ## Current Strategic Direction
 
-Near-term work is focused on deepening the now-usable web chat surface before returning to connector bring-up:
+Near-term work is returning to connector bring-up and raw-to-wiki automation now that the web chat depth slice is usable:
 
 1. Keep Slack ingestion running and continue connector validation in parallel.
 2. Treat [web-feature-parity-plan.md](./web-feature-parity-plan.md) as complete: `listModels` lives in `@strata/agent`, repo-file enumeration lives in `@strata/core` as `findRepoFiles`, `chat.files.list` / `chat.models.list` expose those data sources through tRPC, and the web composer now has file `@`-mentions, a persisted model/reasoning picker, slash commands, and prompt history.
-3. Finish the remaining web chat polish: dropped-stream reconnect edge cases are verified, so the remaining deferred browser work is responsive polish.
-4. Return to connector UI depth and raw-to-wiki proposal generation after web chat polish is usable.
+3. Treat the web chat polish slice as complete: dropped-stream reconnect/recovery and responsive mobile/tablet/narrow-desktop behavior have been browser-verified.
+4. Apply wiki entity consolidation and improve raw-to-wiki extraction quality. `wiki.search` is now curated-first and `wiki.entities` can audit duplicate project topics; next work should merge duplicate canonical topics and strengthen decision/action extraction before expanding connector UI depth.
 
 Use [status.md](./status.md) for the exact handoff and next concrete implementation step.
 

@@ -98,9 +98,31 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
     }, timeoutMs);
 
     try {
+      // Stream stdout/stderr to the run as it arrives (capped at the same
+      // budget as the returned preview) while still collecting the full text
+      // for the final result.
+      let stdoutEmitted = 0;
+      let stderrEmitted = 0;
+      const emit = (stream: "stdout" | "stderr", text: string): void => {
+        if (context.onOutput === undefined) {
+          return;
+        }
+        const emitted = stream === "stdout" ? stdoutEmitted : stderrEmitted;
+        const remaining = maxOutputChars - emitted;
+        if (remaining <= 0) {
+          return;
+        }
+        const slice = text.length > remaining ? text.slice(0, remaining) : text;
+        if (stream === "stdout") {
+          stdoutEmitted += slice.length;
+        } else {
+          stderrEmitted += slice.length;
+        }
+        context.onOutput({ stream, text: slice });
+      };
       const [stdoutText, stderrText, exitCode] = await Promise.all([
-        readStreamText(proc.stdout),
-        readStreamText(proc.stderr),
+        readStreamText(proc.stdout, (text) => emit("stdout", text)),
+        readStreamText(proc.stderr, (text) => emit("stderr", text)),
         proc.exited,
       ]);
       return {
@@ -123,8 +145,37 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
   },
 };
 
-async function readStreamText(stream: ReadableStream<Uint8Array>): Promise<string> {
-  return await new Response(stream).text();
+async function readStreamText(
+  stream: ReadableStream<Uint8Array>,
+  onChunk?: (text: string) => void,
+): Promise<string> {
+  if (onChunk === undefined) {
+    return await new Response(stream).text();
+  }
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      const text = decoder.decode(value, { stream: true });
+      if (text.length > 0) {
+        full += text;
+        onChunk(text);
+      }
+    }
+    const tail = decoder.decode();
+    if (tail.length > 0) {
+      full += tail;
+      onChunk(tail);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return full;
 }
 
 function previewOutput(text: string, maxChars: number): OutputPreview {

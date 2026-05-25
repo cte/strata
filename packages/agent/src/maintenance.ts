@@ -83,6 +83,13 @@ const JOBS: MaintenanceJob[] = [
   },
   {
     metadata: {
+      name: "wiki.entities",
+      description: "Audit wiki entity pages for duplicate topics and over-specific project pages.",
+    },
+    run: runWikiEntitiesJob,
+  },
+  {
+    metadata: {
       name: "actions.review",
       description: "Find stale or overdue runtime todos and wiki action items.",
     },
@@ -261,6 +268,65 @@ async function runWikiLintJob(context: MaintenanceJobContext): Promise<Maintenan
     pages: pages.length,
     warnings: findings.filter((item) => item.severity === "warning").length,
     errors: findings.filter((item) => item.severity === "error").length,
+  });
+}
+
+async function runWikiEntitiesJob(context: MaintenanceJobContext): Promise<MaintenanceJobOutput> {
+  const pages = await readWikiPages(context.repoRoot);
+  const projectPages = pages.filter((page) => page.relativePath.startsWith(`projects${path.sep}`));
+  const findings: MaintenanceFinding[] = [];
+  const canonicalTopics = new Map<string, WikiPage[]>();
+  let overSpecificProjectPages = 0;
+
+  for (const page of projectPages) {
+    const title = pageTitle(page);
+    for (const topic of canonicalEntityTopics(`${title}\n${page.basename}`)) {
+      const pagesForTopic = canonicalTopics.get(topic) ?? [];
+      pagesForTopic.push(page);
+      canonicalTopics.set(topic, pagesForTopic);
+    }
+
+    if (looksOverSpecificProjectPage(page, title)) {
+      overSpecificProjectPages += 1;
+      findings.push(
+        finding(
+          "warning",
+          "Over-specific project page",
+          `${page.relativePath} looks source-derived rather than canonical; consider merging it into a stable project/topic page.`,
+          { path: page.relativePath },
+        ),
+      );
+    }
+  }
+
+  let duplicateProjectTopics = 0;
+  for (const [topic, topicPages] of [...canonicalTopics.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (topicPages.length <= 1) {
+      continue;
+    }
+    const firstPage = topicPages[0];
+    if (firstPage === undefined) {
+      continue;
+    }
+    duplicateProjectTopics += 1;
+    findings.push(
+      finding(
+        "warning",
+        "Duplicate project topic",
+        `${topic} appears to have ${topicPages.length} project pages: ${topicPages
+          .map((page) => page.relativePath)
+          .join(", ")}.`,
+        { path: firstPage.relativePath },
+      ),
+    );
+  }
+
+  return outputFromFindings("wiki.entities", findings, {
+    projectPages: projectPages.length,
+    duplicateProjectTopics,
+    overSpecificProjectPages,
   });
 }
 
@@ -667,6 +733,61 @@ function indexMentionsPage(indexText: string, page: WikiPage): boolean {
     wikilinks(indexText).some((link) => pageKey(path.basename(link, ".md")) === slug)
   );
 }
+
+function pageTitle(page: WikiPage): string {
+  if (page.metadata.title !== undefined && page.metadata.title.trim() !== "") {
+    return page.metadata.title.trim();
+  }
+  const heading = /^#\s+(.+)$/m.exec(page.body)?.[1]?.trim();
+  if (heading !== undefined && heading !== "") {
+    return heading;
+  }
+  return path.basename(page.basename, ".md").replace(/-/g, " ");
+}
+
+function looksOverSpecificProjectPage(page: WikiPage, title: string): boolean {
+  const slug = path.basename(page.basename, ".md");
+  const titleWords = title.split(/\s+/).filter(Boolean).length;
+  return (
+    slug.length > 72 ||
+    title.length > 90 ||
+    titleWords > 10 ||
+    /https?:|www\.|archives\/|thread[_-]?ts|p\d{8,}/i.test(title) ||
+    /\bU[A-Z0-9]{8,}\b/.test(title)
+  );
+}
+
+function canonicalEntityTopics(text: string): string[] {
+  const topics: string[] = [];
+  for (const rule of CANONICAL_ENTITY_TOPIC_PATTERNS) {
+    if (rule.patterns.some((pattern) => pattern.test(text))) {
+      topics.push(rule.label);
+    }
+  }
+  return topics;
+}
+
+const CANONICAL_ENTITY_TOPIC_PATTERNS: { label: string; patterns: RegExp[] }[] = [
+  { label: "Roo Code", patterns: [/\broo\s*code\b/i, /\broocodeinc\b/i] },
+  { label: "Roomote", patterns: [/\broomote\b/i, /\bnewmote\b/i] },
+  { label: "Slackiness", patterns: [/\bslackiness\b/i] },
+  { label: "Slack", patterns: [/\bslack\b/i] },
+  { label: "Granola", patterns: [/\bgranola\b/i] },
+  { label: "Notion", patterns: [/\bnotion\b/i] },
+  { label: "Codex", patterns: [/\bcodex\b/i] },
+  { label: "MCP", patterns: [/\bmcp\b/i] },
+  { label: "Self Serve", patterns: [/\bself[- ]?serve\b/i] },
+  { label: "Pricing", patterns: [/\bpricing\b/i] },
+  { label: "Sentry", patterns: [/\bsentry\b/i] },
+  { label: "Modal", patterns: [/\bmodal\b/i] },
+  { label: "Vercel", patterns: [/\bvercel\b/i] },
+  { label: "Sandbox", patterns: [/\bsandbox(?:es)?\b/i] },
+  { label: "Feature Flags", patterns: [/\bfeature flags?\b/i] },
+  { label: "Security", patterns: [/\bsecurity\b/i] },
+  { label: "Billing", patterns: [/\bbilling\b/i] },
+  { label: "Quota", patterns: [/\bquota\b/i] },
+  { label: "Tokens", patterns: [/\btokens?\b/i] },
+];
 
 function pageKey(value: string): string {
   return value

@@ -28,6 +28,52 @@ describe("shell tools", () => {
     }
   });
 
+  test("streams stdout and stderr chunks through onOutput as they arrive", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
+    try {
+      const registry = createDefaultToolRegistry({ profile: "dangerous" });
+      const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+      const result = await registry.execute(
+        "shell.run",
+        { command: "printf hello && printf oops >&2" },
+        { repoRoot, onOutput: (chunk) => chunks.push(chunk) },
+      );
+
+      const stdout = chunks
+        .filter((c) => c.stream === "stdout")
+        .map((c) => c.text)
+        .join("");
+      const stderr = chunks
+        .filter((c) => c.stream === "stderr")
+        .map((c) => c.text)
+        .join("");
+      expect(stdout).toBe("hello");
+      expect(stderr).toBe("oops");
+      expect(result).toMatchObject({
+        stdout: { text: "hello" },
+        stderr: { text: "oops" },
+      });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("caps streamed output at maxOutputChars", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
+    try {
+      const registry = createDefaultToolRegistry({ profile: "dangerous" });
+      let streamed = "";
+      await registry.execute(
+        "shell.run",
+        { command: "printf 'aaaaaaaaaa'", maxOutputChars: 4 },
+        { repoRoot, onOutput: (chunk) => (streamed += chunk.text) },
+      );
+      expect(streamed).toBe("aaaa");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("returns non-zero exits without treating them as tool failures", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
     try {

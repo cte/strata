@@ -82,7 +82,7 @@ Run state:
 
 Concurrency rules:
 
-- Allow multiple sessions to run concurrently.
+- Allow multiple sessions to run concurrently, server-side and in the browser: the client streams every live run in the background through the shared multi-session run store (see Frontend Design → Multi-session run store), so switching the viewed session never interrupts another session's run.
 - Prevent more than one active run for the same `sessionId`.
 - Keep a run executing if its browser stream disconnects; proxy/browser request lifetimes must not cancel the agent.
 - Cancel only through explicit run cancellation, which aborts the server-side `AbortController`.
@@ -268,6 +268,14 @@ interface ChatToolCallView {
 
 The UI should maintain a stable transcript plus one streaming assistant message, matching the TUI and Pi pattern. Do not rebuild the whole message list on every delta if that causes scroll or render instability.
 
+### Multi-session run store
+
+Client run state is owned by a single shared store (`apps/web/src/lib/chatRunsStore.ts`), not by the per-view hook. The store keys `SessionRunState` (transcript, run state, usage, error, title) by session id, with one reserved `NEW_CHAT_KEY` draft slot for a not-yet-created chat; a draft migrates to its assigned session id when `session.started` arrives. The store also owns the SSE machinery (abort controllers, reconnect, disconnect detection) per run.
+
+Because the store outlives any view, runs started in one session keep streaming while the user looks at another — switching sessions is a pure read of an already-live buffer, with no reconnect or reload flicker. `useChatRun(urlSessionId)` is a thin `useSyncExternalStore` selector over the current session's slice; per-key snapshots are immutable objects so a component viewing session A does not re-render when session B streams a token. A `discoverActiveRuns` poller attaches the store to server-side runs it is not already streaming (cross-tab / reload recovery) and reconciles transcripts for runs that finished elsewhere.
+
+`useRunningSessionIds()` exposes the set of sessions with a live run; the sidebar and cmd-k session pickers render a pulsing accent dot for those in real time (ahead of the sessions-list query), and `session.started` refreshes that list so a brand-new run's indicator appears immediately.
+
 ## Tool Rendering
 
 The first web version should render every tool generically:
@@ -279,7 +287,7 @@ The first web version should render every tool generically:
 
 The current web route adds specialized renderers for high-value tools:
 
-- `shell.run`: command, cwd, exit code, duration, stdout/stderr previews.
+- `shell.run`: command, cwd, exit code, duration, stdout/stderr previews. While the command is still running it renders a live terminal that appends `tool.output` stdout/stderr deltas in real time (auto-scrolling, with a streaming cursor), then shows the final result panel on completion.
 - `fs.read` / `wiki.readPage`: path and excerpt.
 - `fs.edit` / `wiki.patchPage`: path and changed-line summary.
 - `memory.write` / `memory.append`: target, path, size, and changed content preview.
@@ -299,13 +307,13 @@ Initial behavior:
 - After `session.started`, the UI stores the returned `sessionId`.
 - Follow-up messages in the same browser conversation pass `continueSessionId`.
 - Reloading a prior session uses `chat.sessions.get` to reconstruct the transcript.
+- While a run is active, additional prompt submissions enqueue client-side and drain FIFO after the current run returns to idle. Stop clears queued follow-ups before cancelling the active run.
 
 Later behavior:
 
 - Session list sidebar.
 - Rename/fork/export session.
 - Search previous sessions and open them in chat.
-- Queue follow-up messages while a run is active, matching the TUI's queue behavior.
 
 ## Cancellation And Disconnects
 
@@ -362,7 +370,7 @@ Later, a `strata --mode rpc` JSONL mode may still be useful for external embeddi
 9. Make web chat runs independent of the original HTTP request lifetime, persist run/event state, and add replayable reconnects.
 10. Add token/context metrics and model/thinking controls. Status: complete.
 11. Add richer specialized tool renderers. Status: complete for wiki/file/shell/learning tools.
-12. Browser-verify reconnect edge cases and finish responsive polish. Status: reconnect verification complete; responsive polish remains.
+12. Browser-verify reconnect edge cases and finish responsive polish. Status: complete; dropped-stream reconnect/recovery and responsive mobile/tablet/narrow-desktop behavior are browser-verified.
 
 ## Acceptance Criteria
 

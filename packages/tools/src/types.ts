@@ -15,6 +15,18 @@ export interface ToolContext {
   sessionId?: string;
   toolCallId?: string;
   recordFileChange?: (change: ToolFileChange) => Promise<void> | void;
+  /**
+   * Optional sink for incremental tool output (e.g. a shell command's
+   * stdout/stderr as it runs). Tools that produce streamable output call this
+   * with each chunk; the runtime surfaces it as `tool.output` run events so UIs
+   * can render output live instead of only at completion.
+   */
+  onOutput?: (chunk: ToolOutputChunk) => void;
+}
+
+export interface ToolOutputChunk {
+  stream: "stdout" | "stderr";
+  text: string;
 }
 
 export interface ToolFileChange extends JsonObject {

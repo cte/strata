@@ -28,6 +28,8 @@ export type ChatSessionSummary = RouterOutput["chat"]["sessions"]["list"]["sessi
 export type ChatSessionDetail = NonNullable<RouterOutput["chat"]["sessions"]["get"]>;
 export type ChatSessionDeleteResult = RouterOutput["chat"]["sessions"]["delete"];
 export type ChatMessageSummary = ChatSessionDetail["messages"][number];
+export type WikiTreeEntry = RouterOutput["wiki"]["tree"]["tree"][number];
+export type WikiPageDetail = RouterOutput["wiki"]["page"];
 
 export interface ChatImageAttachment {
   kind: "image";
@@ -134,6 +136,15 @@ export async function deleteChatSession(sessionId: string): Promise<ChatSessionD
 export async function searchChatSessions(query: string, limit = 20): Promise<ChatSessionSummary[]> {
   const body = await trpc.chat.sessions.search.query({ query, limit });
   return body.sessions;
+}
+
+export async function getWikiTree(includeRaw = false): Promise<WikiTreeEntry[]> {
+  const body = await trpc.wiki.tree.query({ includeRaw });
+  return body.tree;
+}
+
+export async function getWikiPage(path: string, includeRaw = false): Promise<WikiPageDetail> {
+  return trpc.wiki.page.query({ path, includeRaw });
 }
 
 export async function startChatRun(

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import type { ChatStreamEvent } from "@/lib/api";
 import {
   agentCompletionMessage,
   appendAssistantDelta,
   type ChatMessageView,
+  finalizeAssistantResponse,
   messagesToTranscript,
+  type TranscriptUpdate,
+  transcriptUpdateForStreamEvent,
 } from "@/lib/chatRunModel";
 
 describe("agentCompletionMessage", () => {
@@ -18,6 +22,71 @@ describe("agentCompletionMessage", () => {
       "Run was interrupted (server_restarted).",
     );
     assert.equal(agentCompletionMessage("failed", "model_error"), "Run failed (model_error).");
+  });
+});
+
+describe("streaming transcript updates", () => {
+  test("final response replaces the streamed assistant message for the same run iteration", () => {
+    const streamed = appendAssistantDelta(
+      appendAssistantDelta([], "run-1", 1, "Hel"),
+      "run-1",
+      1,
+      "lo",
+    );
+
+    const finalized = finalizeAssistantResponse(streamed, "run-1", 1, "Hello", [], undefined);
+    const assistantMessages = finalized.filter((message) => message.role === "assistant");
+
+    assert.equal(assistantMessages.length, 1);
+    assert.equal(assistantMessages[0]?.content, "Hello");
+    assert.equal(assistantMessages[0]?.status, "complete");
+  });
+
+  test("event updaters capture the run id before delayed React state flushing", () => {
+    let runIdRef: string | null = "run-1";
+    const pendingUpdates: TranscriptUpdate[] = [];
+
+    pendingUpdates.push(
+      transcriptUpdateForStreamEvent(
+        { type: "assistant.delta", iteration: 1, contentDelta: "Hel" },
+        runIdRef,
+      ),
+    );
+    pendingUpdates.push(
+      transcriptUpdateForStreamEvent(
+        {
+          type: "model.response",
+          iteration: 1,
+          content: "Hello",
+          toolCalls: [],
+        },
+        runIdRef,
+      ),
+    );
+    const completed: Extract<ChatStreamEvent, { type: "agent.completed" }> = {
+      type: "agent.completed",
+      result: {
+        sessionId: "session-1",
+        status: "completed",
+        stoppedReason: "final_answer",
+        finalAnswer: "Hello",
+        iterations: 1,
+        toolCalls: 0,
+      },
+    };
+    if (completed.type === "agent.completed") {
+      runIdRef = null;
+    }
+
+    const transcript = pendingUpdates.reduce<ChatMessageView[]>(
+      (current, update) => update(current),
+      [],
+    );
+    const assistantMessages = transcript.filter((message) => message.role === "assistant");
+
+    assert.equal(assistantMessages.length, 1);
+    assert.equal(assistantMessages[0]?.content, "Hello");
+    assert.equal(assistantMessages[0]?.runId, "run-1");
   });
 });
 

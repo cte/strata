@@ -114,6 +114,46 @@ describe("web api", () => {
     }
   });
 
+  test("lists and reads wiki pages for the web wiki browser", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      await mkdir(path.join(repoRoot, "wiki/projects"), { recursive: true });
+      await mkdir(path.join(repoRoot, "wiki/raw/slack"), { recursive: true });
+      await writeFile(path.join(repoRoot, "wiki/index.md"), "# Index\n");
+      await writeFile(
+        path.join(repoRoot, "wiki/projects/alpha.md"),
+        "---\ntype: project\n---\n\n# Alpha\n",
+      );
+      await writeFile(path.join(repoRoot, "wiki/raw/slack/thread.md"), "# Raw\n");
+
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        const tree = await client.wiki.tree.query({ includeRaw: false });
+        expect(tree.tree).toContainEqual({ path: "index.md", name: "index.md", type: "file" });
+        expect(tree.tree.some((entry) => entry.path === "raw")).toBe(false);
+        expect(tree.tree).toContainEqual({
+          path: "projects",
+          name: "projects",
+          type: "directory",
+          children: [{ path: "projects/alpha.md", name: "alpha.md", type: "file" }],
+        });
+
+        const page = await client.wiki.page.query({ path: "projects/alpha.md", includeRaw: false });
+        expect(page.path).toBe("projects/alpha.md");
+        expect(page.content).toContain("# Alpha");
+
+        await expect(
+          client.wiki.page.query({ path: "raw/slack/thread.md", includeRaw: false }),
+        ).rejects.toThrow("Reading raw wiki pages requires includeRaw");
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("lists OpenAI-compatible models for chat composer model controls", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     const originalFetch = globalThis.fetch;

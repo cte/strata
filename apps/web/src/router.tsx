@@ -8,7 +8,16 @@ import {
   useMatchRoute,
   useNavigate,
 } from "@tanstack/react-router";
-import { GitPullRequest, LoaderCircle, MessageSquare, Plus, Search, Trash2 } from "lucide-react";
+import {
+  BookOpen,
+  GitPullRequest,
+  LoaderCircle,
+  MessageSquare,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react";
+
 import type * as React from "react";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import {
@@ -45,6 +54,8 @@ import {
   type ChatSessionSummary,
   deleteChatSession,
 } from "@/lib/api";
+import { chatRunsStore } from "@/lib/chatRunsStore";
+import { useRunningSessionIds } from "@/lib/useChatRun";
 import { useChatSessions } from "@/lib/useChatSessions";
 import { cn } from "@/lib/utils";
 import { ChatPage } from "@/routes/chat";
@@ -52,6 +63,7 @@ import { ConnectorsPage } from "@/routes/connectors";
 import { ConnectorsGranolaPage } from "@/routes/connectors-granola";
 import { ConnectorsNotionPage } from "@/routes/connectors-notion";
 import { ConnectorsSlackPage } from "@/routes/connectors-slack";
+import { WikiPage } from "@/routes/wiki";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "strata:sidebar:collapsed";
 const noopOpenChatSessionCommandPalette = () => {};
@@ -65,6 +77,7 @@ function useOpenChatSessionCommandPalette(): () => void {
 }
 
 function RootLayout(): React.ReactElement {
+  const queryClient = useQueryClient();
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageState(
     SIDEBAR_COLLAPSED_STORAGE_KEY,
     true,
@@ -73,6 +86,12 @@ function RootLayout(): React.ReactElement {
   const openCommandPalette = useCallback(() => {
     setCommandPaletteOpen(true);
   }, []);
+
+  // Give the shared run store a query client so background-discovered runs can
+  // refresh the sessions list, regardless of whether ChatPage is mounted.
+  useEffect(() => {
+    chatRunsStore.setQueryClient(queryClient);
+  }, [queryClient]);
 
   const handleSidebarOpenChange = useCallback(
     (open: boolean) => {
@@ -105,6 +124,7 @@ function AppSidebar(): React.ReactElement {
           <SidebarGroupContent>
             <SidebarMenu>
               <ChatNavItem />
+              <NavItem to="/wiki" label="Wiki" icon={BookOpen} />
               <NavItem to="/connectors" label="Connectors" icon={GitPullRequest} />
             </SidebarMenu>
           </SidebarGroupContent>
@@ -131,7 +151,8 @@ function NavItem({
   label,
   icon: Icon,
 }: {
-  to: "/connectors";
+  to: "/connectors" | "/wiki";
+
   label: string;
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
 }): React.ReactElement {
@@ -352,12 +373,7 @@ function ChatSessionSubRow({
           className="h-auto items-start gap-2 py-1.5 data-[active=true]:bg-[var(--accent-soft)] data-[active=true]:text-[var(--fg)]"
         >
           <Link to="/chat/$sessionId" params={{ sessionId: session.id }} onClick={onNavigate}>
-            <span
-              className={cn(
-                "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
-                statusDotClass(session.status),
-              )}
-            />
+            <SessionStatusDot session={session} className="mt-1 h-1.5 w-1.5" />
             <span className="flex min-w-0 flex-col">
               <span className="truncate text-[12px] tracking-tight text-[var(--fg)]">{title}</span>
               <span className="font-mono text-[11.5px] text-[var(--fg-mute)]">
@@ -502,6 +518,33 @@ function statusDotClass(status: ChatSessionSummary["status"]): string {
   }
 }
 
+/**
+ * Status dot that reflects live client-side run state in real time. A session
+ * with a run streaming in any tab/view shows a pulsing accent dot immediately,
+ * ahead of the sessions-list query catching up; otherwise it falls back to the
+ * server-reported status.
+ */
+function SessionStatusDot({
+  session,
+  className,
+}: {
+  session: ChatSessionSummary;
+  className?: string;
+}): React.ReactElement {
+  const running = useRunningSessionIds();
+  const live = running.has(session.id) || session.status === "running";
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "shrink-0 rounded-full",
+        className,
+        live ? "bg-[var(--accent)] text-[var(--accent)] dot-pulse" : statusDotClass(session.status),
+      )}
+    />
+  );
+}
+
 function ChatSessionCommandPalette({
   open,
   setOpen,
@@ -558,7 +601,12 @@ function ChatSessionCommandPalette({
   );
 
   return (
-    <CommandDialog open={open} onOpenChange={setOpen} title="Chat session picker">
+    <CommandDialog
+      commandProps={{ shouldFilter: false }}
+      open={open}
+      onOpenChange={setOpen}
+      title="Chat session picker"
+    >
       <CommandInput
         value={searchQuery}
         onValueChange={setSearchQuery}
@@ -648,10 +696,7 @@ function SessionCommandRow({
       }}
       className="group/session-command relative items-start gap-3 py-2.5 pr-9"
     >
-      <span
-        aria-hidden="true"
-        className={cn("mt-2 size-1.5 shrink-0 rounded-full", statusDotClass(session.status))}
-      />
+      <SessionStatusDot session={session} className="mt-2 size-1.5" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[13px] font-medium tracking-tight">{title}</span>
         <span className="font-mono text-[11.5px] leading-5 text-black/50 dark:text-white/50">
@@ -757,6 +802,12 @@ const chatSessionRoute = createRoute({
   component: ChatPage,
 });
 
+const wikiRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/wiki",
+  component: WikiPage,
+});
+
 const connectorsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connectors",
@@ -785,6 +836,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   chatRoute,
   chatSessionRoute,
+  wikiRoute,
   connectorsRoute,
   connectorsNotionRoute,
   connectorsGranolaRoute,

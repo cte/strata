@@ -24,6 +24,7 @@ import {
 import { disconnectNotionMcp, getNotionMcpStatus, listNotionMcpTools } from "./notionMcp.js";
 import { repoRoot, type WebApiOptions } from "./runtime.js";
 import type { GranolaConfigureRpcInput, WebApiServices } from "./trpc.js";
+import { getWikiPage, getWikiTree } from "./wikiServices.js";
 
 export interface WebApiServiceContainer extends WebApiServices {
   chat: ReturnType<typeof createChatService>;
@@ -60,8 +61,11 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
       return deleteChatSession(input, getSessionStore);
     },
     searchChatSessions: (input) => searchChatSessions(input, getSessionStore),
+    getWikiTree: (input) => getWikiTree(input, options),
+    getWikiPage: (input) => getWikiPage(input, options),
 
     connectorSummaries: () => connectorSummaries(options),
+
     validateNotion: (config) => validateNotion(config, options),
     runNotionSession: (operation, config) => runNotionSession(operation, config, options),
     notionMcpStatus: () => getNotionMcpStatus(options),

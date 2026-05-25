@@ -10,6 +10,7 @@
     "./granola-connector": "./src/granolaConnector.ts",
     "./notion": "./src/notion.ts",
     "./notion-connector": "./src/notionConnector.ts",
+    "./raw-to-wiki": "./src/rawToWiki.ts",
     "./slack-client": "./src/slackClient.ts",
     "./slack-connector": "./src/slackConnector.ts",
     "./slack-socket-mode": "./src/slackSocketMode.ts"

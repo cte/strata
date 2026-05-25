@@ -24,6 +24,8 @@ import {
   AttachmentPreview,
   AttachmentRemove,
   Attachments,
+  getAttachmentLabel,
+  getMediaCategory,
 } from "@/components/ai-elements/attachments";
 import {
   Context,
@@ -66,6 +68,23 @@ import {
   usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
 import {
+  Queue,
+  QueueItem,
+  QueueItemAction,
+  QueueItemActions,
+  QueueItemAttachment,
+  QueueItemContent,
+  QueueItemDescription,
+  QueueItemFile,
+  QueueItemImage,
+  QueueItemIndicator,
+  QueueList,
+  QueueSection,
+  QueueSectionContent,
+  QueueSectionLabel,
+  QueueSectionTrigger,
+} from "@/components/ai-elements/queue";
+import {
   TerminalActions,
   TerminalContent,
   TerminalCopyButton,
@@ -78,6 +97,14 @@ import { AutocompletePopover } from "@/components/autocomplete-popover";
 import { ChatModelPicker } from "@/components/chat-model-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  appendQueuedChatMessage,
+  dequeueQueuedChatMessage,
+  type QueuedChatMessage,
+  queuedChatMessageDescription,
+  queuedChatMessageLabel,
+  removeQueuedChatMessage,
+} from "@/lib/chatMessageQueue";
 import {
   type ChatMessageView,
   type ChatRunState,
@@ -115,6 +142,7 @@ export function ChatPage(): React.ReactElement {
     typeof search?.session === "string" && search.session.length > 0 ? search.session : null;
   const urlSessionId = routeSessionId ?? legacySessionId;
   const [prompt, setPrompt] = useState("");
+  const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [showCommandHelp, setShowCommandHelp] = useState(false);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -205,6 +233,9 @@ export function ChatPage(): React.ReactElement {
       }
       switch (parsed.name) {
         case "clear":
+          if (!isRunning) {
+            setQueuedMessages([]);
+          }
           clearSession();
           setShowCommandHelp(false);
           return;
@@ -223,7 +254,7 @@ export function ChatPage(): React.ReactElement {
           return;
       }
     },
-    [clearSession, forkSession, setError],
+    [clearSession, forkSession, isRunning, setError],
   );
 
   const handleAutocompleteCommit = useCallback(
@@ -264,7 +295,7 @@ export function ChatPage(): React.ReactElement {
         id: clientId("att"),
       }));
       const hasAttachments = attachments.length > 0;
-      if ((message === "" && !hasAttachments) || isRunning) {
+      if (message === "" && !hasAttachments) {
         return;
       }
       if (!hasAttachments && message.startsWith("/")) {
@@ -277,10 +308,32 @@ export function ChatPage(): React.ReactElement {
       setPrompt("");
       setShowCommandHelp(false);
       setModelPickerOpen(false);
+      if (isRunning) {
+        setQueuedMessages((current) =>
+          appendQueuedChatMessage(current, {
+            id: clientId("queued"),
+            message,
+            attachments,
+          }),
+        );
+        return;
+      }
       submit({ message, attachments });
     },
     [handleSlashCommand, isRunning, recordPromptHistory, submit],
   );
+
+  useEffect(() => {
+    if (runState !== "idle" || queuedMessages.length === 0) {
+      return;
+    }
+
+    const { next, queue } = dequeueQueuedChatMessage(queuedMessages);
+    setQueuedMessages(queue);
+    if (next !== null) {
+      submit({ message: next.message, attachments: next.attachments });
+    }
+  }, [queuedMessages, runState, submit]);
 
   const handlePromptInputError = useCallback(
     (inputError: { code: string; message: string }) => {
@@ -295,7 +348,14 @@ export function ChatPage(): React.ReactElement {
     [setError],
   );
 
-  const handleCancel = useCallback(() => cancel(), [cancel]);
+  const handleRemoveQueuedMessage = useCallback((id: string) => {
+    setQueuedMessages((current) => removeQueuedChatMessage(current, id));
+  }, []);
+
+  const handleCancel = useCallback(() => {
+    setQueuedMessages([]);
+    cancel();
+  }, [cancel]);
 
   const modelLine = useMemo(() => {
     if (selectedModelChoice === null) {
@@ -354,7 +414,10 @@ export function ChatPage(): React.ReactElement {
                 onAccept={autocomplete.accept}
                 onSelect={autocomplete.select}
               />
-              <ChatPromptAttachments />
+              <ChatPromptHeader
+                queuedMessages={queuedMessages}
+                onRemoveQueuedMessage={handleRemoveQueuedMessage}
+              />
               <PromptInputBody>
                 <PromptInputTextarea
                   inputRef={promptInputRef}
@@ -398,26 +461,134 @@ export function ChatPage(): React.ReactElement {
   );
 }
 
-function ChatPromptAttachments(): React.ReactElement | null {
+function ChatPromptHeader({
+  queuedMessages,
+  onRemoveQueuedMessage,
+}: {
+  queuedMessages: QueuedChatMessage[];
+  onRemoveQueuedMessage(id: string): void;
+}): React.ReactElement | null {
   const attachments = usePromptInputAttachments();
-  if (attachments.files.length === 0) {
+  if (queuedMessages.length === 0 && attachments.files.length === 0) {
     return null;
   }
   return (
-    <PromptInputHeader>
-      <Attachments variant="grid" className="ml-0 self-start">
-        {attachments.files.map((attachment) => (
-          <Attachment
-            key={attachment.id}
-            data={attachment}
-            onRemove={() => attachments.remove(attachment.id)}
-          >
-            <AttachmentPreview />
-            <AttachmentRemove />
-          </Attachment>
-        ))}
-      </Attachments>
+    <PromptInputHeader className="flex-col items-stretch gap-2">
+      {queuedMessages.length === 0 ? null : (
+        <QueuedPromptMessages messages={queuedMessages} onRemoveMessage={onRemoveQueuedMessage} />
+      )}
+      {attachments.files.length === 0 ? null : (
+        <Attachments variant="grid" className="ml-0 self-start">
+          {attachments.files.map((attachment) => (
+            <Attachment
+              key={attachment.id}
+              data={attachment}
+              onRemove={() => attachments.remove(attachment.id)}
+            >
+              <AttachmentPreview />
+              <AttachmentRemove />
+            </Attachment>
+          ))}
+        </Attachments>
+      )}
     </PromptInputHeader>
+  );
+}
+
+function QueuedPromptMessages({
+  messages,
+  onRemoveMessage,
+}: {
+  messages: QueuedChatMessage[];
+  onRemoveMessage(id: string): void;
+}): React.ReactElement {
+  return (
+    <Queue className="w-full rounded-md border-[var(--hairline)] bg-transparent px-2 py-1.5 shadow-none">
+      <QueueSection defaultOpen>
+        <QueueSectionTrigger className="bg-transparent px-1.5 py-1 text-[12px] font-medium text-[var(--fg-mute)] hover:bg-[var(--surface-2)]">
+          <QueueSectionLabel count={messages.length} label="Queued" />
+        </QueueSectionTrigger>
+        <QueueSectionContent>
+          <QueueList className="mt-1 -mb-0">
+            {messages.map((message) => (
+              <QueuedPromptMessage
+                key={message.id}
+                message={message}
+                onRemove={() => onRemoveMessage(message.id)}
+              />
+            ))}
+          </QueueList>
+        </QueueSectionContent>
+      </QueueSection>
+    </Queue>
+  );
+}
+
+function QueuedPromptMessage({
+  message,
+  onRemove,
+}: {
+  message: QueuedChatMessage;
+  onRemove(): void;
+}): React.ReactElement {
+  const description = queuedChatMessageDescription(message);
+  return (
+    <QueueItem className="px-1.5 py-1.5 text-[12px] hover:bg-[var(--surface-2)]">
+      <div className="flex min-w-0 items-start gap-2">
+        <QueueItemIndicator className="mt-[0.45rem] size-2 shrink-0 border-[var(--fg-mute)]/60" />
+        <QueueItemContent className="min-w-0 text-[12px] leading-5 text-[var(--fg)]">
+          {queuedChatMessageLabel(message)}
+        </QueueItemContent>
+        <QueueItemActions className="ml-auto shrink-0">
+          <QueueItemAction
+            aria-label="Remove queued message"
+            className="opacity-100 [&>svg]:!size-3"
+            onClick={onRemove}
+          >
+            <X size={12} strokeWidth={1.75} />
+          </QueueItemAction>
+        </QueueItemActions>
+      </div>
+      {description === null ? null : (
+        <QueueItemDescription className="ml-4 text-[11.5px] leading-4 text-[var(--fg-mute)]">
+          {description}
+        </QueueItemDescription>
+      )}
+      {message.attachments.length === 0 ? null : (
+        <QueueItemAttachment className="ml-4 mt-1 gap-1.5">
+          {message.attachments.map((attachment) => (
+            <QueuedPromptAttachment key={attachment.id} attachment={attachment} />
+          ))}
+        </QueueItemAttachment>
+      )}
+    </QueueItem>
+  );
+}
+
+function QueuedPromptAttachment({
+  attachment,
+}: {
+  attachment: AttachmentData;
+}): React.ReactElement {
+  const label = getAttachmentLabel(attachment);
+  if (
+    attachment.type === "file" &&
+    getMediaCategory(attachment) === "image" &&
+    attachment.url !== ""
+  ) {
+    return (
+      <QueueItemImage
+        alt={label}
+        className="size-7 rounded-sm border-[var(--hairline)]"
+        src={attachment.url}
+      />
+    );
+  }
+
+  return (
+    <QueueItemFile className="border-[var(--hairline)] bg-[var(--surface)] text-[11.5px]">
+      {label}
+    </QueueItemFile>
   );
 }
 
@@ -574,9 +745,9 @@ function ToolPanel({ tool }: { tool: ChatToolCallView }): React.ReactElement {
         <span
           className={cn(
             "label-eyebrow ml-auto",
-            tool.status === "running" && "text-[var(--warn)]",
-            tool.status === "complete" && "text-[var(--good)]",
-            tool.status === "error" && "text-[var(--bad)]",
+            tool.status === "running" && "!text-[var(--warn)]",
+            tool.status === "complete" && "!text-[var(--good)]",
+            tool.status === "error" && "!text-[var(--bad)]",
           )}
         >
           {tool.status}
@@ -625,6 +796,9 @@ function SpecializedToolContent({
   execution: ToolExecutionView | null;
 }): React.ReactElement {
   if (tool.status === "running" && execution === null) {
+    if (tool.name === "shell.run") {
+      return <RunningShellView tool={tool} args={args} />;
+    }
     return <PreviewBlock label="args" value={formatArguments(tool.argumentsText)} />;
   }
   if (execution?.ok === false) {
@@ -876,14 +1050,17 @@ function ShellOutputTerminal({
   label,
   output,
   truncated,
+  streaming = false,
 }: {
   label: "stdout" | "stderr";
   output: string;
   truncated: boolean;
+  streaming?: boolean;
 }): React.ReactElement {
   return (
     <TerminalOutput
-      autoScroll={false}
+      autoScroll={streaming}
+      isStreaming={streaming}
       output={output}
       className="rounded-md border-[var(--hairline)] bg-zinc-950 text-zinc-100"
     >
@@ -900,6 +1077,33 @@ function ShellOutputTerminal({
       </TerminalHeader>
       <TerminalContent className="max-h-80 p-3" />
     </TerminalOutput>
+  );
+}
+
+/** Live view for an in-flight shell.run: args plus streaming stdout/stderr. */
+function RunningShellView({
+  tool,
+  args,
+}: {
+  tool: ChatToolCallView;
+  args: JsonRecord | null;
+}): React.ReactElement {
+  const command = stringValue(args?.command) ?? "";
+  const stdout = tool.liveOutput?.stdout ?? "";
+  const stderr = tool.liveOutput?.stderr ?? "";
+  return (
+    <div className="space-y-2">
+      {command === "" ? null : <PreviewBlock label="command" value={command} />}
+      {stdout === "" ? null : (
+        <ShellOutputTerminal label="stdout" output={stdout} truncated={false} streaming />
+      )}
+      {stderr === "" ? null : (
+        <ShellOutputTerminal label="stderr" output={stderr} truncated={false} streaming />
+      )}
+      {stdout === "" && stderr === "" ? (
+        <p className="text-[12px] text-[var(--fg-mute)]">Running…</p>
+      ) : null}
+    </div>
   );
 }
 
