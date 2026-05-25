@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
-import { type ChatSessionSummary, listChatSessions, searchChatSessions } from "@/lib/api";
+import { useCallback, useMemo, useState } from "react";
+import { type ChatSessionSummary, listChatSessions } from "@/lib/api";
+import { CHAT_SESSION_INDEX_LIMIT, filterChatSessionsClientSide } from "@/lib/chatSessionSearch";
 
 export interface UseChatSessionsResult {
   searchQuery: string;
@@ -11,26 +12,17 @@ export interface UseChatSessionsResult {
   refresh(): void;
 }
 
-const SEARCH_DEBOUNCE_MS = 180;
-
 export function useChatSessions(): UseChatSessionsResult {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery);
-    }, SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timeout);
-  }, [searchQuery]);
-
-  const trimmedSearch = debouncedSearchQuery.trim();
   const sessionsQuery = useQuery<ChatSessionSummary[]>({
-    queryKey: ["chat", "sessions", { search: trimmedSearch }],
-    queryFn: () =>
-      trimmedSearch === "" ? listChatSessions(40) : searchChatSessions(trimmedSearch, 40),
+    queryKey: ["chat", "sessions", "index"],
+    queryFn: () => listChatSessions(CHAT_SESSION_INDEX_LIMIT),
   });
+  const sessions = useMemo(
+    () => filterChatSessionsClientSide(sessionsQuery.data ?? [], searchQuery),
+    [searchQuery, sessionsQuery.data],
+  );
 
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
@@ -39,7 +31,7 @@ export function useChatSessions(): UseChatSessionsResult {
   return {
     searchQuery,
     setSearchQuery,
-    sessions: sessionsQuery.data ?? [],
+    sessions,
     isLoaded: !sessionsQuery.isPending,
     error: sessionsQuery.error,
     refresh,

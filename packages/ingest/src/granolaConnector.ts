@@ -28,11 +28,15 @@ import type {
 import { redactConnectorMessage } from "./connectors/types.js";
 
 const DEFAULT_GRANOLA_NOTES_URL = "https://public-api.granola.ai/v1/notes";
+const DEFAULT_GRANOLA_PAGE_SIZE = 30;
+const DEFAULT_GRANOLA_MAX_PAGES = 50;
 
-export interface GranolaConnectorConfig extends Record<string, string | undefined> {
+export interface GranolaConnectorConfig extends Record<string, number | string | undefined> {
   apiToken?: string;
   fixture?: string;
+  maxPages?: number | string;
   meetingsUrl?: string;
+  pageSize?: number | string;
   since?: string;
   transcriptUrlTemplate?: string;
 }
@@ -96,6 +100,18 @@ export const granolaConnector = {
         label: "Meetings URL",
         description: "Override Granola notes/meetings API URL.",
         env: "GRANOLA_MEETINGS_URL",
+      },
+      pageSize: {
+        type: "number",
+        label: "Page size",
+        description: "Number of Granola notes to request per page. Granola allows 1-30.",
+        placeholder: "30",
+      },
+      maxPages: {
+        type: "number",
+        label: "Max pages",
+        description: "Safety cap for cursor-paginated backfills.",
+        placeholder: "50",
       },
       transcriptUrlTemplate: {
         type: "string",
@@ -279,15 +295,15 @@ async function runGranola(
 ): Promise<ConnectorPullResult> {
   const options = optionsFromRuntime(runtime);
   const since = config.since?.trim() || defaultSince(runtime.now ?? utcNow());
-  const payload = await loadGranolaPayload(config, options, since);
+  const loaded = await loadGranolaMeetings(config, options, since);
   const pulledAt = (runtime.now ?? utcNow()).toISOString();
   const rawDir = path.join(runtime.repoRoot, "wiki", "raw", "granola");
   const items = [];
   let writtenCount = 0;
   let skippedCount = 0;
 
-  for (const originalMeeting of meetingsFromPayload(payload)) {
-    const meeting = await fetchDetailIfNeeded(originalMeeting, config, options);
+  for (const originalMeeting of loaded.meetings) {
+    const meeting = await fetchDetailIfNeeded(originalMeeting, config, options, loaded.apiToken);
     const rendered = renderMeeting(meeting, rawDir, runtime.repoRoot, pulledAt);
     const written = dryRun ? false : await writeOnce(rendered.filePath, rendered.content);
     const skipped = dryRun ? false : !written;
@@ -323,6 +339,7 @@ async function runGranola(
     metadata: {
       since,
       itemCount: items.length,
+      pagesFetched: loaded.pagesFetched,
       writtenCount,
       skippedCount,
     },
@@ -330,19 +347,44 @@ async function runGranola(
   };
 }
 
-async function loadGranolaPayload(
+async function loadGranolaMeetings(
   config: GranolaConnectorConfig,
   options: GranolaOptions,
   since: string,
-): Promise<unknown> {
+): Promise<{ apiToken: string; meetings: JsonObject[]; pagesFetched: number }> {
   if (config.fixture?.trim()) {
-    return JSON.parse(await readFile(config.fixture.trim(), "utf8"));
+    return {
+      apiToken: "",
+      meetings: meetingsFromPayload(JSON.parse(await readFile(config.fixture.trim(), "utf8"))),
+      pagesFetched: 1,
+    };
   }
   const apiToken = await resolveGranolaApiToken(config.apiToken, options);
   if (apiToken === "") {
     throw new Error("Set GRANOLA_API_TOKEN, configure Granola, or pass a fixture file.");
   }
-  return requestJson(buildUrl(granolaMeetingsUrl(config, options), since), apiToken, options);
+  const maxPages = positiveInteger(config.maxPages, "maxPages", DEFAULT_GRANOLA_MAX_PAGES);
+  const pageSize = boundedPageSize(config.pageSize, options);
+  const meetings = [];
+  let pagesFetched = 0;
+  let cursor: string | null = null;
+  for (let page = 0; page < maxPages; page += 1) {
+    const payload = await requestJson(
+      buildListUrl(granolaMeetingsUrl(config, options), since, cursor, pageSize),
+      apiToken,
+      options,
+    );
+    pagesFetched += 1;
+    meetings.push(...meetingsFromPayload(payload));
+    if (!hasMore(payload)) {
+      return { apiToken, meetings, pagesFetched };
+    }
+    cursor = nextCursor(payload);
+    if (!cursor) {
+      throw new Error("Granola response indicated more pages but did not include a cursor.");
+    }
+  }
+  return { apiToken, meetings, pagesFetched };
 }
 
 async function requestJson(url: string, token: string, options: GranolaOptions): Promise<unknown> {
@@ -380,12 +422,12 @@ async function fetchDetailIfNeeded(
   item: JsonObject,
   config: GranolaConnectorConfig,
   options: GranolaOptions,
+  apiToken: string,
 ): Promise<JsonObject> {
   if (meetingTranscript(item)) {
     return item;
   }
-  const template =
-    config.transcriptUrlTemplate?.trim() || options.env?.GRANOLA_TRANSCRIPT_URL_TEMPLATE?.trim();
+  const template = transcriptUrlTemplate(config, options);
   if (!template) {
     return item;
   }
@@ -393,13 +435,14 @@ async function fetchDetailIfNeeded(
   if (!meetingId) {
     return item;
   }
-  const apiToken = await resolveGranolaApiToken(config.apiToken, options);
-  if (apiToken === "") {
+  const token = apiToken || (await resolveGranolaApiToken(config.apiToken, options));
+  if (token === "") {
     return item;
   }
-  const detail = asObject(
-    await requestJson(template.replace("{id}", encodeURIComponent(meetingId)), apiToken, options),
-  );
+  const detailUrl = template
+    .replace("{id}", encodeURIComponent(meetingId))
+    .replace("%7Bid%7D", encodeURIComponent(meetingId));
+  const detail = asObject(await requestJson(detailUrl, token, options));
   return detail ? { ...item, ...detail } : item;
 }
 
@@ -421,7 +464,7 @@ function renderMeeting(
   const title = firstString(item, ["title", "name", "summary"], "Untitled meeting");
   const attendees = normalizeAttendees(item.attendees ?? item.participants);
   const sourceUrl = firstString(item, ["source_url", "url", "app_url", "web_url"]) || null;
-  const transcript = meetingTranscript(item);
+  const body = meetingBody(item);
   const sourceId = firstString(item, ["id", "meeting_id", "uuid"], `${date}:${title}`);
   const filePath = path.join(rawDir, `${date}-${slugify(title, "meeting")}.md`);
   const metadata = frontmatter({
@@ -433,7 +476,6 @@ function renderMeeting(
     source_url: sourceUrl,
     pulled_at: pulledAt,
   });
-  const body = transcript || "_No transcript text was present in the API response._";
   return {
     filePath,
     relativePath: path.relative(repoRoot, filePath),
@@ -470,14 +512,75 @@ function meetingTranscript(item: JsonObject): string {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
     }
+    if (Array.isArray(value)) {
+      const rendered = renderTranscriptSegments(value);
+      if (rendered) {
+        return rendered;
+      }
+    }
   }
   return "";
 }
 
-function buildUrl(baseUrl: string, since: string): string {
+function meetingBody(item: JsonObject): string {
+  const summary = firstString(item, ["summary_markdown", "summary_text"]);
+  const transcript = meetingTranscript(item);
+  const sections = [];
+  if (summary) {
+    sections.push(`## Summary\n\n${summary}`);
+  }
+  if (transcript) {
+    sections.push(summary ? `## Transcript\n\n${transcript}` : transcript);
+  }
+  return sections.join("\n\n") || "_No transcript text was present in the API response._";
+}
+
+function renderTranscriptSegments(value: unknown[]): string {
+  return value
+    .flatMap((item) => {
+      const object = asObject(item);
+      if (!object) {
+        return [];
+      }
+      const text = firstString(object, ["text", "content", "transcript"]);
+      if (!text) {
+        return [];
+      }
+      const speaker = transcriptSpeaker(object);
+      return speaker ? [`${speaker}: ${text}`] : [text];
+    })
+    .join("\n\n")
+    .trim();
+}
+
+function transcriptSpeaker(item: JsonObject): string {
+  const direct = firstString(item, ["speaker_name", "speaker", "diarization_label"]);
+  if (direct && direct !== "[object Object]") {
+    return direct;
+  }
+  const speaker = asObject(item.speaker);
+  return speaker ? firstString(speaker, ["name", "diarization_label", "source"]) : "";
+}
+
+function buildListUrl(
+  baseUrl: string,
+  since: string,
+  cursor: string | null,
+  pageSize: number,
+): string {
   const url = new URL(baseUrl);
-  if (!url.searchParams.has("since")) {
-    url.searchParams.set("since", since);
+  if (
+    !url.searchParams.has("since") &&
+    !url.searchParams.has("created_after") &&
+    !url.searchParams.has("updated_after")
+  ) {
+    url.searchParams.set("created_after", since);
+  }
+  if (!url.searchParams.has("page_size")) {
+    url.searchParams.set("page_size", String(pageSize));
+  }
+  if (cursor !== null) {
+    url.searchParams.set("cursor", cursor);
   }
   return url.toString();
 }
@@ -492,6 +595,61 @@ function granolaMeetingsUrl(config: GranolaConnectorConfig, options: GranolaOpti
 
 function defaultSince(now: Date): string {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+}
+
+function hasMore(payload: unknown): boolean {
+  const object = asObject(payload);
+  return object?.hasMore === true || object?.has_more === true;
+}
+
+function nextCursor(payload: unknown): string | null {
+  const object = asObject(payload);
+  if (!object) {
+    return null;
+  }
+  return firstString(object, ["cursor", "next_cursor"]) || null;
+}
+
+function boundedPageSize(value: number | string | undefined, options: GranolaOptions): number {
+  return Math.min(
+    30,
+    positiveInteger(value ?? options.env?.GRANOLA_PAGE_SIZE, "pageSize", DEFAULT_GRANOLA_PAGE_SIZE),
+  );
+}
+
+function positiveInteger(
+  value: number | string | undefined,
+  label: string,
+  fallback: number,
+): number {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+  const parsed = typeof value === "number" ? value : Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(`Granola ${label} must be a positive integer.`);
+  }
+  return Math.floor(parsed);
+}
+
+function transcriptUrlTemplate(
+  config: GranolaConnectorConfig,
+  options: GranolaOptions,
+): string | null {
+  const explicit =
+    config.transcriptUrlTemplate?.trim() || options.env?.GRANOLA_TRANSCRIPT_URL_TEMPLATE?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const url = new URL(granolaMeetingsUrl(config, options));
+  const pathname = url.pathname.replace(/\/$/, "");
+  if (!pathname.endsWith("/notes")) {
+    return null;
+  }
+  url.pathname = `${pathname}/{id}`;
+  url.search = "";
+  url.searchParams.set("include", "transcript");
+  return url.toString();
 }
 
 function optionsFromRuntime(runtime: ConnectorRuntime): GranolaOptions {

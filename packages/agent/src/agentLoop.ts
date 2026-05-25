@@ -6,7 +6,7 @@ import {
   type SessionRecord,
   SessionStore,
 } from "@strata/core";
-import type { ToolExecutionMode, ToolExecutionResult } from "@strata/tools";
+import type { ToolExecutionMode, ToolExecutionResult, ToolOutputChunk } from "@strata/tools";
 import { createDefaultToolRegistry, type ToolRegistry } from "@strata/tools";
 import { ModelAdapterError } from "./model.js";
 import { buildRunContext } from "./runContext.js";
@@ -670,13 +670,25 @@ async function* executeToolCallsSequential(
     }
     await recordToolStart(options.store, options.sessionId, toolCall);
     yield toolStartedEvent(toolCall);
-    const result = await executeToolCall(
+    // Run the tool while draining its incremental output so `tool.output`
+    // events interleave with execution rather than only arriving at the end.
+    const channel = new ToolEventChannel();
+    const resultPromise = executeToolCall(
       options.store,
       options.repoRoot,
       options.sessionId,
       options.tools,
       toolCall,
+      (chunk) => channel.push(toolOutputEvent(toolCall.id, chunk)),
     );
+    void resultPromise.then(
+      () => channel.close(),
+      () => channel.close(),
+    );
+    for await (const event of channel.drain()) {
+      yield event;
+    }
+    const result = await resultPromise;
     const execution: ExecutedToolCall = { index, toolCall, result };
     executions.push(execution);
     yield toolCompletedEvent(execution);
@@ -688,7 +700,17 @@ async function* executeToolCallsParallel(
   options: ToolCallBatchOptions,
 ): AsyncGenerator<AgentRunEvent, ExecutedToolCall[]> {
   const orderedExecutions: Array<ExecutedToolCall | undefined> = [];
-  const pending = new Map<number, Promise<ExecutedToolCall>>();
+  // Output and completion events from every concurrently-running tool flow
+  // through one channel; started events are still yielded in source order
+  // first, and per-tool results are still stored at their source index.
+  const channel = new ToolEventChannel();
+  let pendingCount = 0;
+  let allLaunched = false;
+  const maybeClose = (): void => {
+    if (allLaunched && pendingCount === 0) {
+      channel.close();
+    }
+  };
 
   for (let index = 0; index < options.toolCalls.length; index += 1) {
     if (isSignalAborted(options.signal)) {
@@ -699,29 +721,76 @@ async function* executeToolCallsParallel(
       continue;
     }
     await recordToolStart(options.store, options.sessionId, toolCall);
-    pending.set(
-      index,
-      executeToolCall(
-        options.store,
-        options.repoRoot,
-        options.sessionId,
-        options.tools,
-        toolCall,
-      ).then((result): ExecutedToolCall => ({ index, toolCall, result })),
-    );
+    pendingCount += 1;
+    const sourceIndex = index;
+    void executeToolCall(
+      options.store,
+      options.repoRoot,
+      options.sessionId,
+      options.tools,
+      toolCall,
+      (chunk) => channel.push(toolOutputEvent(toolCall.id, chunk)),
+    ).then((result) => {
+      const execution: ExecutedToolCall = { index: sourceIndex, toolCall, result };
+      orderedExecutions[sourceIndex] = execution;
+      channel.push(toolCompletedEvent(execution));
+      pendingCount -= 1;
+      maybeClose();
+    });
     yield toolStartedEvent(toolCall);
   }
+  allLaunched = true;
+  maybeClose();
 
-  while (pending.size > 0) {
-    const execution = await Promise.race(pending.values());
-    pending.delete(execution.index);
-    orderedExecutions[execution.index] = execution;
-    yield toolCompletedEvent(execution);
+  for await (const event of channel.drain()) {
+    yield event;
   }
 
   return orderedExecutions.filter(
     (execution): execution is ExecutedToolCall => execution !== undefined,
   );
+}
+
+/**
+ * Minimal async channel that merges callback-driven tool output into the
+ * generator's yield sequence. `drain()` yields queued events until `close()`.
+ */
+class ToolEventChannel {
+  private queue: AgentRunEvent[] = [];
+  private waiter: (() => void) | null = null;
+  private closed = false;
+
+  push(event: AgentRunEvent): void {
+    this.queue.push(event);
+    this.wake();
+  }
+
+  close(): void {
+    this.closed = true;
+    this.wake();
+  }
+
+  private wake(): void {
+    const waiter = this.waiter;
+    if (waiter !== null) {
+      this.waiter = null;
+      waiter();
+    }
+  }
+
+  async *drain(): AsyncGenerator<AgentRunEvent> {
+    while (true) {
+      while (this.queue.length > 0) {
+        yield this.queue.shift() as AgentRunEvent;
+      }
+      if (this.closed) {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        this.waiter = resolve;
+      });
+    }
+  }
 }
 
 function shouldExecuteToolCallsSequential(
@@ -780,12 +849,17 @@ function toolCompletedEvent(execution: ExecutedToolCall): AgentRunEvent {
   };
 }
 
+function toolOutputEvent(toolCallId: string, chunk: ToolOutputChunk): AgentRunEvent {
+  return { type: "tool.output", toolCallId, stream: chunk.stream, textDelta: chunk.text };
+}
+
 async function executeToolCall(
   store: SessionStore,
   repoRoot: string,
   sessionId: string,
   tools: ToolRegistry,
   toolCall: AgentToolCall,
+  onOutput?: (chunk: ToolOutputChunk) => void,
 ): Promise<ToolExecutionResult> {
   return tools.safeExecuteText(toolCall.name, toolCall.argumentsText, {
     repoRoot,
@@ -798,6 +872,7 @@ async function executeToolCall(
         ...change,
       });
     },
+    ...(onOutput === undefined ? {} : { onOutput }),
   });
 }
 

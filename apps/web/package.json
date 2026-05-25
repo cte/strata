@@ -47,6 +47,7 @@
     "clsx": "^2.1.0",
     "cmdk": "^1.1.1",
     "embla-carousel-react": "^8.6.0",
+    "fuzzysort": "^3.1.0",
     "lucide-react": "^1.16.0",
     "media-chrome": "^4.19.0",
     "motion": "^12.38.0",

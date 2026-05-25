@@ -96,6 +96,41 @@ describe("wiki tools", () => {
     }
   });
 
+  test("search prefers curated wiki pages over raw sources when raw search is enabled", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      const wikiRoot = path.join(repoRoot, "wiki");
+      await mkdir(path.join(wikiRoot, "threads"), { recursive: true });
+      await mkdir(path.join(wikiRoot, "raw", "slack"), { recursive: true });
+      await writeFile(
+        path.join(wikiRoot, "raw", "slack", "source.md"),
+        "# Raw\n\nself serve pricing raw transcript mention.\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(wikiRoot, "threads", "self-serve-pricing.md"),
+        "# Self Serve Pricing\n\nself serve pricing curated decision context.\n",
+        "utf8",
+      );
+
+      const registry = createDefaultToolRegistry();
+      const context = { repoRoot };
+
+      await expect(
+        registry.execute(
+          "wiki.search",
+          { query: "self serve pricing", includeRaw: true, limit: 1 },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        count: 1,
+        matches: [{ path: "threads/self-serve-pricing.md" }],
+      });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("writes, patches, logs, and updates the wiki index", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {

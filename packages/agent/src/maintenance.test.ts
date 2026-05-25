@@ -9,6 +9,7 @@ describe("maintenance jobs", () => {
   test("lists the initial manual maintenance jobs", () => {
     expect(listMaintenanceJobs().map((job) => job.name)).toEqual([
       "wiki.lint",
+      "wiki.entities",
       "actions.review",
       "memory.review",
       "skills.inventory",
@@ -72,6 +73,46 @@ describe("maintenance jobs", () => {
       expect(result.status).toBe("needs_attention");
       expect(result.findings.some((finding) => finding.title === "Stale priorities")).toBe(true);
       expect(result.findings.some((finding) => finding.title === "Missing frontmatter")).toBe(true);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("wiki entity audit flags duplicate and over-specific project pages", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-maintenance-"));
+    try {
+      await mkdir(path.join(repoRoot, "wiki", "projects"), { recursive: true });
+      await writeFile(path.join(repoRoot, "wiki", "index.md"), "# Index\n", "utf8");
+      await writeFile(
+        path.join(repoRoot, "wiki", "projects", "roo-code.md"),
+        "---\ntype: project\ntitle: Roo Code\n---\n# Roo Code\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(
+          repoRoot,
+          "wiki",
+          "projects",
+          "roocodeinc-roomote-release-main-20260510-deploy-marker-investigation-from-a-very-specific-slack-thread.md",
+        ),
+        "---\ntype: project\ntitle: RooCodeInc Roomote release/main 20260510 deploy marker investigation from a very specific Slack thread\n---\n# RooCodeInc Roomote release/main 20260510 deploy marker investigation from a very specific Slack thread\n",
+        "utf8",
+      );
+
+      const result = await runMaintenanceJob({ jobName: "wiki.entities", repoRoot });
+
+      expect(result.status).toBe("needs_attention");
+      expect(result.metrics).toMatchObject({
+        projectPages: 2,
+        duplicateProjectTopics: 1,
+        overSpecificProjectPages: 1,
+      });
+      expect(result.findings.some((finding) => finding.title === "Duplicate project topic")).toBe(
+        true,
+      );
+      expect(
+        result.findings.some((finding) => finding.title === "Over-specific project page"),
+      ).toBe(true);
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

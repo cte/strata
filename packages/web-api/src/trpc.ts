@@ -78,6 +78,19 @@ export interface ChatFileEntry {
   isDirectory: boolean;
 }
 
+export interface WikiTreeEntry {
+  path: string;
+  name: string;
+  type: "directory" | "file";
+  children?: WikiTreeEntry[];
+}
+
+export interface WikiPageDetail {
+  path: string;
+  content: string;
+  chars: number;
+}
+
 export interface ChatSessionSummary {
   id: string;
   title: string;
@@ -145,7 +158,7 @@ export const granolaConfigureInput = z.object({
 export type GranolaConfigureRpcInput = z.output<typeof granolaConfigureInput>;
 
 export const chatSessionsListInput = z.object({
-  limit: z.number().int().min(1).max(100).default(20),
+  limit: z.number().int().min(1).max(500).default(20),
 });
 
 export type ChatSessionsListInput = z.output<typeof chatSessionsListInput>;
@@ -194,6 +207,19 @@ export const chatModelsListInput = z.object({
 
 export type ChatModelsListInput = z.output<typeof chatModelsListInput>;
 
+export const wikiTreeInput = z.object({
+  includeRaw: z.boolean().default(false),
+});
+
+export type WikiTreeInput = z.output<typeof wikiTreeInput>;
+
+export const wikiPageGetInput = z.object({
+  path: z.string().min(1),
+  includeRaw: z.boolean().default(false),
+});
+
+export type WikiPageGetInput = z.output<typeof wikiPageGetInput>;
+
 export interface WebApiServices {
   health(): { ok: true; repoRoot: string };
   chatModelStatus(): Promise<ChatModelStatus>;
@@ -206,8 +232,11 @@ export interface WebApiServices {
   forkChatSession(input: ChatSessionForkInput): Promise<ChatSessionDetail>;
   deleteChatSession(input: ChatSessionDeleteInput): Promise<ChatSessionDeleteResult>;
   searchChatSessions(input: ChatSessionsSearchInput): Promise<{ sessions: ChatSessionSummary[] }>;
+  getWikiTree(input: WikiTreeInput): Promise<{ tree: WikiTreeEntry[] }>;
+  getWikiPage(input: WikiPageGetInput): Promise<WikiPageDetail>;
 
   connectorSummaries(): ConnectorSummary[];
+
   validateNotion(config: NotionConnectorInput): Promise<ConnectorStatus>;
   runNotionSession(
     operation: "dry_run" | "pull",
@@ -265,6 +294,14 @@ export const appRouter = t.router({
         .input(chatSessionsSearchInput)
         .query(({ ctx, input }) => ctx.services.searchChatSessions(input)),
     }),
+  }),
+  wiki: t.router({
+    tree: t.procedure
+      .input(wikiTreeInput)
+      .query(({ ctx, input }) => ctx.services.getWikiTree(input)),
+    page: t.procedure
+      .input(wikiPageGetInput)
+      .query(({ ctx, input }) => ctx.services.getWikiPage(input)),
   }),
   connectors: t.router({
     list: t.procedure.query(({ ctx }) => ({

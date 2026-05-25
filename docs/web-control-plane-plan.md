@@ -163,8 +163,8 @@ Do not build the web app first. The implementation order should be:
 
 1. Stabilize a shared connector result contract in `packages/ingest`. Status: connector types, registry, runner, and secret store exist.
 2. Convert Notion to that contract. Status: Notion validation, dry-run, and pull use the shared connector definition; CLI and web pull paths now use the shared runner.
-3. Add Notion raw-to-wiki ingestion and proposal staging for ambiguous changes.
-4. Convert Granola and Slack to the same connector contract. Status: Granola credential configuration/status and raw pulls are registered; Slack explicit-thread pulls, checkpointed sync, and basic Socket Mode tailing are registered in the CLI. Web controls for those pulls remain to be added.
+3. Add raw-to-wiki ingestion and proposal staging for ambiguous changes. Status: generalized automation exists in `@strata/ingest/raw-to-wiki`: `strata ingest raw index --source all|granola|notion|slack` writes curated wiki pages directly, `strata ingest granola index` remains as a compatibility shortcut, connector pulls can pass `--index`, and `strata ingest granola propose` remains available for review-first experiments. Slack raw-to-wiki now dedupes snapshots, filters low-signal material, and has been applied to the current local raw Slack corpus; future web controls should expose dry-run/apply results rather than reimplementing filter logic.
+4. Convert Granola and Slack to the same connector contract. Status: Granola credential configuration/status and raw pulls are registered, including official cursor pagination and detail transcript fetches; Slack explicit-thread pulls, checkpointed sync, and basic Socket Mode tailing are registered in the CLI. Web controls for those pulls remain to be added.
 5. Add proposal review/apply/reject commands.
 6. Add recurring scheduler execution for stable connector and maintenance jobs.
 7. Add `packages/web-api` as a thin Hono + tRPC local HTTP layer over shared packages. Status: initial Notion-focused slice present.

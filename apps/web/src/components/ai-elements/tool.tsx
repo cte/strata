@@ -12,7 +12,6 @@ export function Tool({ status = "running", className, ...props }: ToolProps): Re
       className={cn(
         "group/tool border border-[var(--hairline)] bg-[var(--bg)] text-[12px]",
         status === "running" && "border-[var(--warn)]/35",
-        status === "error" && "border-[var(--bad)]/40 bg-[var(--bad)]/[0.05]",
         className,
       )}
       {...props}

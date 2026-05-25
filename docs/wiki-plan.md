@@ -326,6 +326,9 @@ All pages have YAML frontmatter (see project plan §6).
 ## Workflows
 
 ### Ingest — Granola meeting
+
+Current harness automation can run this workflow directly with `strata ingest raw index --source granola` or the compatibility shortcut `strata ingest granola index`. The indexer creates meeting pages and lightweight people/project/decision/thread/action pages from structured Granola summaries, updates `wiki/index.md`, appends `wiki/log.md`, and leaves `wiki/raw/` untouched. `strata ingest granola propose` remains available for review-first experiments.
+
 1. Read `raw/granola/<file>`.
 2. Write `meetings/<date>-<slug>.md` with summary.
 3. Update affected `projects/` and `people/` pages.
@@ -336,10 +339,10 @@ All pages have YAML frontmatter (see project plan §6).
 8. Commit. Tell the user: what changed, what they should know about, anything that contradicts prior wiki claims.
 
 ### Ingest — Slack thread
-Same shape. But: many threads add nothing — that's correct, skip them. Surface only material content (decisions, commitments, new threads, factual updates).
+Same shape. `strata ingest raw index --source slack` maps raw Slack snapshots to `threads/` pages and related entity updates, and `strata ingest slack ... --index` can index newly pulled snapshots. But: many threads add nothing — that's correct, skip them. Surface only material content (decisions, commitments, new threads, factual updates). The deterministic path now dedupes Slack snapshots by channel/thread timestamp and skips empty exports, automation/log notifications, link-only shares, routine status updates, and threads with no material ask/decision/action/incident/project signal. Continue tuning the filter from false-positive/false-negative review rather than broadening capture by default.
 
 ### Ingest — Notion doc
-First snapshot the page into `raw/notion/` with `strata ingest notion --page-id <id-or-url>`. Then apply the same raw-to-wiki shape as Granola: link from relevant project pages, extract decisions and commitments, update actions/threads, update `index.md`, and append `log.md`. Notion is already curated, so broad rewrites should usually be staged as proposals rather than applied silently.
+First snapshot the page into `raw/notion/` with `strata ingest notion --page-id <id-or-url>`, optionally adding `--index` to immediately apply. `strata ingest raw index --source notion` maps raw Notion pages to project/source-backed project updates, extracts decisions and commitments, updates actions/threads, updates `index.md`, and appends `log.md`. Notion is already curated, so broad rewrites should usually be staged as proposals rather than applied silently.
 
 ### Query
 1. Read `priorities.md`, `me.md`, `index.md`.
@@ -352,6 +355,7 @@ First snapshot the page into `raw/notion/` with `strata ingest notion --page-id 
 - Stale priorities.
 - Decisions referenced but no page exists.
 - Orphan pages.
+- Duplicate or over-specific project/entity pages (`strata maintain run wiki.entities`).
 - Contradictions across pages.
 - Action items past due.
 

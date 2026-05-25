@@ -152,6 +152,7 @@ export type AgentRunEvent =
       toolName: string;
       argumentsText: string;
     }
+  | { type: "tool.output"; toolCallId: string; stream: "stdout" | "stderr"; textDelta: string }
   | { type: "tool.call.completed"; toolCallId: string; result: ToolExecutionResult }
   | { type: "agent.completed"; result: AgentRunResult }
   | { type: "agent.failed"; message: string; result?: AgentRunResult };

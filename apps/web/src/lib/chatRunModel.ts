@@ -16,6 +16,8 @@ export interface ChatToolCallView {
   argumentsText: string;
   status: ToolStatus;
   result?: unknown;
+  /** Incremental stdout/stderr streamed via `tool.output` while the tool runs. */
+  liveOutput?: { stdout: string; stderr: string };
 }
 
 export interface ChatMessageView {
@@ -154,6 +156,35 @@ export function startToolCall(
   ];
 }
 
+export function appendToolOutput(
+  messages: ChatMessageView[],
+  toolCallId: string,
+  stream: "stdout" | "stderr",
+  textDelta: string,
+): ChatMessageView[] {
+  const index = findMessageWithTool(messages, toolCallId);
+  if (index === -1) {
+    return messages;
+  }
+  return messages.map((message, messageIndex) =>
+    messageIndex === index
+      ? {
+          ...message,
+          toolCalls: message.toolCalls.map((toolCall) => {
+            if (toolCall.id !== toolCallId) {
+              return toolCall;
+            }
+            const live = toolCall.liveOutput ?? { stdout: "", stderr: "" };
+            return {
+              ...toolCall,
+              liveOutput: { ...live, [stream]: `${live[stream]}${textDelta}` },
+            };
+          }),
+        }
+      : message,
+  );
+}
+
 export function completeToolCall(
   messages: ChatMessageView[],
   toolCallId: string,
@@ -183,6 +214,44 @@ export function completeToolCall(
         }
       : message,
   );
+}
+
+type TranscriptStreamEvent =
+  | Extract<ChatStreamEvent, { type: "assistant.delta" }>
+  | Extract<ChatStreamEvent, { type: "model.response" }>
+  | Extract<ChatStreamEvent, { type: "tool.call.started" }>
+  | Extract<ChatStreamEvent, { type: "tool.output" }>
+  | Extract<ChatStreamEvent, { type: "tool.call.completed" }>;
+
+export type TranscriptUpdate = (messages: ChatMessageView[]) => ChatMessageView[];
+
+export function transcriptUpdateForStreamEvent(
+  event: TranscriptStreamEvent,
+  runId: string | null,
+  usage?: TokenUsage,
+): TranscriptUpdate {
+  switch (event.type) {
+    case "assistant.delta":
+      return (messages) =>
+        appendAssistantDelta(messages, runId, event.iteration, event.contentDelta);
+    case "model.response":
+      return (messages) =>
+        finalizeAssistantResponse(
+          messages,
+          runId,
+          event.iteration,
+          event.content,
+          event.toolCalls,
+          usage,
+        );
+    case "tool.call.started":
+      return (messages) => startToolCall(messages, runId, event);
+    case "tool.output":
+      return (messages) =>
+        appendToolOutput(messages, event.toolCallId, event.stream, event.textDelta);
+    case "tool.call.completed":
+      return (messages) => completeToolCall(messages, event.toolCallId, event.result);
+  }
 }
 
 export function markPendingMessagesErrored(messages: ChatMessageView[]): ChatMessageView[] {

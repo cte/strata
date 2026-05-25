@@ -1,0 +1,742 @@
+import type { QueryClient } from "@tanstack/react-query";
+import type { AttachmentData } from "@/components/ai-elements/attachments";
+import {
+  type ChatImageAttachment,
+  type ChatStreamEvent,
+  type ChatStreamEventMeta,
+  cancelChatRun,
+  forkChatSession,
+  getChatRun,
+  getChatSession,
+  listActiveChatRuns,
+  type StartChatRunRequest,
+  startChatRun,
+  streamChatRunEvents,
+} from "@/lib/api";
+import {
+  agentCompletionMessage,
+  type ChatMessageView,
+  type ChatRunState,
+  type ChatSubmitInput,
+  clientId,
+  errorMessage,
+  markPendingMessagesComplete,
+  markPendingMessagesErrored,
+  messagesToTranscript,
+  sanitizeDisplayText,
+  toChatImageAttachment,
+  transcriptUpdateForStreamEvent,
+} from "@/lib/chatRunModel";
+import {
+  accumulateTokenUsage,
+  createTokenUsageTotals,
+  normalizeModelUsage,
+  type TokenUsageTotals,
+  usageTotalsFromMessages,
+} from "@/lib/chatUsage";
+import type { ChatModelChoice } from "@/lib/useChatModelChoice";
+
+const MAX_STREAM_RECONNECTS = 2;
+/** Interval for discovering server-side runs not yet streamed by this client. */
+const DISCOVER_INTERVAL_MS = 4_000;
+const DISCONNECT_MESSAGE =
+  "Live stream disconnected before the run finished. The server-side agent may still be running; use Stop to cancel it. The session list will refresh when it finishes.";
+
+/**
+ * Stable key for the not-yet-created "new chat" draft. A submit from this slot
+ * migrates to the assigned session id once `session.started` arrives.
+ */
+export const NEW_CHAT_KEY = "__new__";
+
+/** Immutable, React-facing per-session run state. */
+export interface SessionRunState {
+  runKey: string;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  transcript: ChatMessageView[];
+  runState: ChatRunState;
+  activeRunId: string | null;
+  error: string | null;
+  usageTotals: TokenUsageTotals;
+  /** True once the persisted transcript has been seeded for this view. */
+  loaded: boolean;
+}
+
+/** Mutable streaming bookkeeping; never read during render. */
+interface RunRefs {
+  abort: AbortController | null;
+  runId: string | null;
+  lastEventId: number;
+  reconnectAttempts: number;
+  runTerminal: boolean;
+}
+
+/** Indirection so a stream started under the draft key follows its migration. */
+interface KeyRef {
+  current: string;
+}
+
+type Navigate = (sessionId: string | null, options?: { replace?: boolean }) => void;
+
+const noopNavigate: Navigate = () => {};
+
+function isLiveRunState(state: ChatRunState): boolean {
+  return (
+    state === "starting" ||
+    state === "streaming" ||
+    state === "cancelling" ||
+    state === "disconnected"
+  );
+}
+
+function blankState(key: string): SessionRunState {
+  return {
+    runKey: key,
+    sessionId: key === NEW_CHAT_KEY ? null : key,
+    sessionTitle: null,
+    transcript: [],
+    runState: "idle",
+    activeRunId: null,
+    error: null,
+    usageTotals: createTokenUsageTotals(),
+    loaded: false,
+  };
+}
+
+/**
+ * Owns every chat run the browser is tracking, keyed by session (with a single
+ * `NEW_CHAT_KEY` draft slot for not-yet-created chats). The store outlives any
+ * view, so runs started in one session keep streaming while the user looks at
+ * another — switching sessions is a pure read of an already-live buffer.
+ *
+ * React reads slices through `useSyncExternalStore`: per-key snapshots are
+ * immutable objects replaced on change, so a component viewing session A does
+ * not re-render when session B streams a token.
+ */
+class ChatRunsStore {
+  private states = new Map<string, SessionRunState>();
+  private refs = new Map<string, RunRefs>();
+  private listeners = new Set<() => void>();
+  private queryClient: QueryClient | null = null;
+  private discoverTimer: ReturnType<typeof setInterval> | null = null;
+  private discovering = false;
+
+  // Cached so the running-set selector keeps a stable identity between renders.
+  private runningSnapshot: ReadonlySet<string> = new Set();
+
+  setQueryClient(client: QueryClient): void {
+    this.queryClient = client;
+  }
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    this.ensureDiscovering();
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  getState = (key: string): SessionRunState | undefined => this.states.get(key);
+
+  getRunningSessionIds = (): ReadonlySet<string> => this.runningSnapshot;
+
+  // --- React notification --------------------------------------------------
+  private emit(): void {
+    this.recomputeRunning();
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  private recomputeRunning(): void {
+    const next = new Set<string>();
+    for (const state of this.states.values()) {
+      if (state.sessionId !== null && isLiveRunState(state.runState)) {
+        next.add(state.sessionId);
+      }
+    }
+    if (
+      next.size !== this.runningSnapshot.size ||
+      [...next].some((id) => !this.runningSnapshot.has(id))
+    ) {
+      this.runningSnapshot = next;
+    }
+  }
+
+  private update(key: string, patch: Partial<SessionRunState>): void {
+    const base = this.states.get(key) ?? blankState(key);
+    this.states.set(key, { ...base, ...patch });
+    this.emit();
+  }
+
+  private updateTranscript(
+    key: string,
+    updater: (transcript: ChatMessageView[]) => ChatMessageView[],
+  ): void {
+    const base = this.states.get(key) ?? blankState(key);
+    this.update(key, { transcript: updater(base.transcript) });
+  }
+
+  private refsFor(key: string): RunRefs {
+    let refs = this.refs.get(key);
+    if (refs === undefined) {
+      refs = { abort: null, runId: null, lastEventId: 0, reconnectAttempts: 0, runTerminal: false };
+      this.refs.set(key, refs);
+    }
+    return refs;
+  }
+
+  private refreshSessions(): void {
+    void this.queryClient?.invalidateQueries({ queryKey: ["chat", "sessions"] });
+  }
+
+  // --- View wiring ---------------------------------------------------------
+
+  /** Ensure a draft slot exists for the "new chat" view. */
+  ensureDraft(): void {
+    if (!this.states.has(NEW_CHAT_KEY)) {
+      this.states.set(NEW_CHAT_KEY, { ...blankState(NEW_CHAT_KEY), loaded: true });
+      this.emit();
+    }
+  }
+
+  /**
+   * Make sure the viewed session's transcript is present. No-op when the store
+   * already holds live or loaded state for it (so returning to a
+   * background-streaming session shows its live buffer with no reload flicker).
+   */
+  ensureSessionLoaded(sessionId: string): void {
+    const existing = this.states.get(sessionId);
+    if (existing !== undefined && (existing.loaded || isLiveRunState(existing.runState))) {
+      return;
+    }
+    void this.seedSessionTranscript(sessionId);
+  }
+
+  /**
+   * Fetch and seed a session's persisted transcript. Awaitable so background
+   * run attachment can seed *before* it marks the session streaming — otherwise
+   * the live-state guard below would skip seeding and leave a recovered run with
+   * an empty transcript. Returns early when already loaded or when a live stream
+   * is in progress (don't clobber an in-flight run's buffer).
+   */
+  private async seedSessionTranscript(sessionId: string): Promise<void> {
+    const existing = this.states.get(sessionId);
+    if (existing !== undefined && existing.loaded) {
+      return;
+    }
+    // Seed a placeholder so the selector has a stable object while loading.
+    if (existing === undefined) {
+      this.states.set(sessionId, blankState(sessionId));
+      this.emit();
+    }
+    try {
+      const detail = await getChatSession(sessionId);
+      if (detail === null) {
+        this.update(sessionId, { error: `Session not found: ${sessionId}`, loaded: true });
+        return;
+      }
+      // Don't clobber a stream that started while the fetch was in flight.
+      const current = this.states.get(sessionId);
+      if (current !== undefined && isLiveRunState(current.runState)) {
+        return;
+      }
+      const alignment = current?.transcript;
+      const stored = messagesToTranscript(detail.messages, alignment);
+      const transcript =
+        detail.session.status === "failed" || detail.session.status === "interrupted"
+          ? markPendingMessagesErrored(stored)
+          : detail.session.status === "completed"
+            ? markPendingMessagesComplete(stored)
+            : stored;
+      this.update(sessionId, {
+        sessionId: detail.session.id,
+        sessionTitle: sanitizeDisplayText(detail.session.title),
+        transcript,
+        usageTotals: usageTotalsFromMessages(detail.messages),
+        loaded: true,
+        error:
+          detail.session.status === "failed" || detail.session.status === "interrupted"
+            ? agentCompletionMessage(detail.session.status)
+            : null,
+      });
+    } catch (cause: unknown) {
+      this.update(sessionId, { error: errorMessage(cause), loaded: true });
+    }
+  }
+
+  setError(key: string, message: string | null): void {
+    this.update(key, { error: message });
+  }
+
+  // --- Submit --------------------------------------------------------------
+
+  submit(args: {
+    viewKey: string;
+    input: ChatSubmitInput;
+    modelChoice: ChatModelChoice | null;
+    navigate: Navigate;
+  }): void {
+    const { viewKey, input, modelChoice, navigate } = args;
+    const message = input.message.trim();
+    const hasAttachments = input.attachments.length > 0;
+    if (message === "" && !hasAttachments) {
+      return;
+    }
+    const state = this.states.get(viewKey);
+    if (state !== undefined && state.runState !== "idle") {
+      return;
+    }
+
+    const continuingSessionId = viewKey === NEW_CHAT_KEY ? null : (state?.sessionId ?? viewKey);
+
+    const controller = new AbortController();
+    const refs = this.refsFor(viewKey);
+    refs.abort = controller;
+    refs.runId = null;
+    refs.lastEventId = 0;
+    refs.reconnectAttempts = 0;
+    refs.runTerminal = false;
+    const keyRef: KeyRef = { current: viewKey };
+
+    const sentAttachments = input.attachments;
+    this.update(viewKey, {
+      runState: "starting",
+      error: null,
+      loaded: true,
+      ...(continuingSessionId === null ? { usageTotals: createTokenUsageTotals() } : {}),
+    });
+    this.updateTranscript(viewKey, (current) => [
+      ...current,
+      {
+        id: clientId("user"),
+        role: "user",
+        content: message,
+        status: "complete",
+        toolCalls: [],
+        attachments: sentAttachments,
+      },
+    ]);
+
+    const request: StartChatRunRequest = {
+      message: message === "" ? "(image attached)" : message,
+    };
+    if (continuingSessionId !== null) {
+      request.continueSessionId = continuingSessionId;
+    }
+    if (sentAttachments.length > 0) {
+      request.attachments = sentAttachments
+        .map(toChatImageAttachment)
+        .filter((value): value is ChatImageAttachment => value !== null);
+    }
+    if (modelChoice !== null) {
+      request.provider = modelChoice.provider;
+      request.model = modelChoice.model;
+      request.reasoningEffort = modelChoice.reasoningEffort;
+    }
+
+    startChatRun(
+      request,
+      (event, meta) => this.applyStreamEvent(keyRef, refs, event, meta, navigate),
+      controller.signal,
+    ).then(
+      () => this.onStreamSettled(keyRef, refs, controller, navigate, null),
+      (cause: unknown) => this.onStreamSettled(keyRef, refs, controller, navigate, cause),
+    );
+  }
+
+  // --- Stream lifecycle ----------------------------------------------------
+
+  private onStreamSettled(
+    keyRef: KeyRef,
+    refs: RunRefs,
+    controller: AbortController,
+    navigate: Navigate,
+    cause: unknown | null,
+  ): void {
+    const key = keyRef.current;
+    const streamDisconnected =
+      !controller.signal.aborted && refs.runId !== null && !refs.runTerminal;
+    if (refs.abort === controller) {
+      if (refs.runTerminal || controller.signal.aborted) {
+        this.update(key, { runState: "idle", activeRunId: null });
+        refs.runId = null;
+      } else if (streamDisconnected) {
+        const runId = refs.runId;
+        if (runId !== null && this.resumeStream(keyRef, refs, runId, controller, navigate)) {
+          return;
+        }
+        this.update(key, { runState: "disconnected", error: DISCONNECT_MESSAGE });
+      } else {
+        this.update(key, { runState: "idle", activeRunId: null });
+        refs.runId = null;
+      }
+      refs.abort = null;
+    }
+    if (cause !== null && !controller.signal.aborted && !streamDisconnected) {
+      this.update(key, { error: errorMessage(cause) });
+      this.updateTranscript(key, markPendingMessagesErrored);
+    }
+    this.refreshSessions();
+  }
+
+  private resumeStream(
+    keyRef: KeyRef,
+    refs: RunRefs,
+    runId: string,
+    controller: AbortController,
+    navigate: Navigate,
+  ): boolean {
+    if (refs.reconnectAttempts >= MAX_STREAM_RECONNECTS) {
+      return false;
+    }
+    refs.reconnectAttempts += 1;
+    this.update(keyRef.current, { runState: "streaming", error: null });
+    streamChatRunEvents(
+      runId,
+      refs.lastEventId,
+      (event, meta) => this.applyStreamEvent(keyRef, refs, event, meta, navigate),
+      controller.signal,
+    ).then(
+      () => {
+        if (refs.abort !== controller) {
+          return;
+        }
+        if (refs.runTerminal || controller.signal.aborted) {
+          this.update(keyRef.current, { runState: "idle", activeRunId: null });
+          refs.runId = null;
+          refs.abort = null;
+          this.refreshSessions();
+          return;
+        }
+        if (!this.resumeStream(keyRef, refs, runId, controller, navigate)) {
+          this.update(keyRef.current, { runState: "disconnected", error: DISCONNECT_MESSAGE });
+          this.refreshSessions();
+        }
+      },
+      (cause: unknown) => {
+        if (refs.abort !== controller || controller.signal.aborted) {
+          return;
+        }
+        if (!this.resumeStream(keyRef, refs, runId, controller, navigate)) {
+          this.update(keyRef.current, { runState: "disconnected", error: errorMessage(cause) });
+          this.refreshSessions();
+        }
+      },
+    );
+    return true;
+  }
+
+  private applyStreamEvent(
+    keyRef: KeyRef,
+    refs: RunRefs,
+    event: ChatStreamEvent,
+    meta: ChatStreamEventMeta = { id: null },
+    navigate: Navigate,
+  ): void {
+    if (meta.id !== null && meta.id > refs.lastEventId) {
+      refs.lastEventId = meta.id;
+    }
+    const key = keyRef.current;
+    switch (event.type) {
+      case "run.started":
+        refs.runId = event.runId;
+        refs.runTerminal = false;
+        this.update(key, { activeRunId: event.runId, runState: "streaming" });
+        break;
+      case "session.started": {
+        const target = this.migrateToSession(keyRef, event.sessionId);
+        this.update(target, {
+          sessionId: event.sessionId,
+          sessionTitle: sanitizeDisplayText(event.title),
+        });
+        navigate(event.sessionId, { replace: true });
+        // Surface the new session in the sidebar/cmd-k right away so its live
+        // running indicator can show before the run finishes.
+        this.refreshSessions();
+        break;
+      }
+      case "message.user":
+        break;
+      case "model.request":
+      case "model.retry":
+        this.update(key, { runState: "streaming" });
+        break;
+      case "assistant.delta": {
+        this.update(key, { runState: "streaming" });
+        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        break;
+      }
+      case "model.response": {
+        const turnUsage = event.usage === undefined ? undefined : normalizeModelUsage(event.usage);
+        const base = this.states.get(key) ?? blankState(key);
+        this.update(key, {
+          usageTotals: accumulateTokenUsage(base.usageTotals, event.usage),
+          transcript: transcriptUpdateForStreamEvent(event, refs.runId, turnUsage)(base.transcript),
+        });
+        break;
+      }
+      case "tool.call.started":
+        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        break;
+      case "tool.output":
+        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        break;
+      case "tool.call.completed":
+        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        break;
+      case "agent.completed": {
+        refs.runTerminal = true;
+        refs.runId = null;
+        const sessionId = event.result.sessionId !== "" ? event.result.sessionId : undefined;
+        const message =
+          event.result.status === "completed"
+            ? null
+            : agentCompletionMessage(event.result.status, event.result.stoppedReason);
+        this.update(key, {
+          runState: "idle",
+          activeRunId: null,
+          ...(sessionId === undefined ? {} : { sessionId }),
+          ...(message === null ? {} : { error: message }),
+        });
+        if (event.result.status !== "completed") {
+          this.updateTranscript(
+            key,
+            message === null ? markPendingMessagesComplete : markPendingMessagesErrored,
+          );
+        }
+        break;
+      }
+      case "agent.failed":
+        refs.runTerminal = true;
+        refs.runId = null;
+        this.update(key, { runState: "idle", activeRunId: null, error: event.message });
+        this.updateTranscript(key, markPendingMessagesErrored);
+        break;
+    }
+  }
+
+  /** Move draft state+refs onto the assigned session key. Returns the new key. */
+  private migrateToSession(keyRef: KeyRef, sessionId: string): string {
+    const fromKey = keyRef.current;
+    if (fromKey === sessionId) {
+      return sessionId;
+    }
+    const state = this.states.get(fromKey);
+    if (state !== undefined) {
+      this.states.set(sessionId, { ...state, runKey: sessionId, sessionId });
+      // Reset the draft slot so the next new chat starts clean.
+      this.states.set(fromKey, { ...blankState(fromKey), loaded: true });
+    }
+    const refs = this.refs.get(fromKey);
+    if (refs !== undefined) {
+      this.refs.set(sessionId, refs);
+      this.refs.delete(fromKey);
+    }
+    keyRef.current = sessionId;
+    this.emit();
+    return sessionId;
+  }
+
+  // --- Cancel / clear / fork ----------------------------------------------
+
+  cancel(key: string): void {
+    const state = this.states.get(key);
+    if (state === undefined || state.runState === "idle") {
+      return;
+    }
+    const refs = this.refs.get(key);
+    const runId = refs?.runId ?? state.activeRunId;
+    this.update(key, { runState: "cancelling" });
+
+    const finish = () => {
+      refs?.abort?.abort();
+      if (refs !== undefined) {
+        refs.abort = null;
+        refs.runTerminal = true;
+        refs.runId = null;
+      }
+      this.update(key, { runState: "idle", activeRunId: null });
+      this.updateTranscript(key, markPendingMessagesComplete);
+      this.refreshSessions();
+    };
+
+    if (runId === null || runId === undefined) {
+      finish();
+      return;
+    }
+    cancelChatRun(runId).then(finish, (cause: unknown) => {
+      this.update(key, { error: errorMessage(cause) });
+      finish();
+    });
+  }
+
+  clearDraft(navigate: Navigate): void {
+    this.states.set(NEW_CHAT_KEY, { ...blankState(NEW_CHAT_KEY), loaded: true });
+    this.emit();
+    navigate(null);
+  }
+
+  fork(key: string, navigate: Navigate): void {
+    const state = this.states.get(key);
+    if (state === undefined) {
+      return;
+    }
+    if (state.runState !== "idle") {
+      this.update(key, { error: "Cannot fork while a run is active." });
+      return;
+    }
+    if (state.sessionId === null) {
+      this.update(key, { error: "No active session to fork." });
+      return;
+    }
+    void forkChatSession(state.sessionId).then(
+      (detail) => {
+        this.states.set(detail.session.id, {
+          ...blankState(detail.session.id),
+          sessionTitle: sanitizeDisplayText(detail.session.title),
+          transcript: messagesToTranscript(detail.messages),
+          usageTotals: usageTotalsFromMessages(detail.messages),
+          loaded: true,
+        });
+        this.emit();
+        navigate(detail.session.id);
+        this.refreshSessions();
+      },
+      (cause: unknown) => {
+        this.update(key, { error: errorMessage(cause) });
+      },
+    );
+  }
+
+  // --- Background discovery (cross-tab / reload recovery) ------------------
+
+  private ensureDiscovering(): void {
+    if (this.discoverTimer !== null) {
+      return;
+    }
+    void this.discoverActiveRuns();
+    this.discoverTimer = setInterval(() => {
+      void this.discoverActiveRuns();
+    }, DISCOVER_INTERVAL_MS);
+  }
+
+  private async discoverActiveRuns(): Promise<void> {
+    if (this.discovering) {
+      return;
+    }
+    this.discovering = true;
+    try {
+      const runs = await listActiveChatRuns();
+      const activeSessionIds = new Set<string>();
+      for (const run of runs) {
+        const sessionId = run.sessionId ?? run.continueSessionId;
+        if (sessionId === undefined || sessionId === null) {
+          continue;
+        }
+        activeSessionIds.add(sessionId);
+        const refs = this.refs.get(sessionId);
+        if (refs !== undefined && refs.abort !== null) {
+          continue; // already streaming this run in this tab
+        }
+        void this.attachBackgroundRun(sessionId, run.runId, run.lastEventId ?? 0);
+      }
+      // A session we believe is streaming but the server no longer lists as
+      // running has finished elsewhere — reconcile its transcript.
+      for (const [key, state] of this.states) {
+        if (key === NEW_CHAT_KEY || state.sessionId === null) {
+          continue;
+        }
+        const refs = this.refs.get(key);
+        const clientStreaming = refs?.abort !== null && refs?.abort !== undefined;
+        if (state.runState === "disconnected" && !activeSessionIds.has(state.sessionId)) {
+          this.reconcileFinishedRun(state.sessionId, state.activeRunId);
+        } else if (
+          !clientStreaming &&
+          isLiveRunState(state.runState) &&
+          !activeSessionIds.has(state.sessionId)
+        ) {
+          this.reconcileFinishedRun(state.sessionId, state.activeRunId);
+        }
+      }
+    } catch {
+      // Network blip; the next tick retries.
+    } finally {
+      this.discovering = false;
+    }
+  }
+
+  private async attachBackgroundRun(
+    sessionId: string,
+    runId: string,
+    lastEventId: number,
+  ): Promise<void> {
+    // Bail if a stream is already attached for this session (the view started
+    // one, or a previous discovery tick already attached).
+    if (this.refs.get(sessionId)?.abort != null) {
+      return;
+    }
+    // Seed the persisted transcript first and await it, so the live-state guard
+    // in seeding doesn't skip it once we mark the run streaming below. Without
+    // this, a background-recovered run renders an empty transcript.
+    await this.seedSessionTranscript(sessionId);
+    // Re-check after awaiting: the view may have attached its own stream.
+    if (this.refs.get(sessionId)?.abort != null) {
+      return;
+    }
+    const controller = new AbortController();
+    const refs = this.refsFor(sessionId);
+    refs.abort = controller;
+    refs.runId = runId;
+    refs.lastEventId = lastEventId;
+    refs.reconnectAttempts = 0;
+    refs.runTerminal = false;
+    const keyRef: KeyRef = { current: sessionId };
+    this.update(sessionId, { runState: "streaming", activeRunId: runId });
+    if (!this.resumeStream(keyRef, refs, runId, controller, noopNavigate)) {
+      refs.abort = null;
+      this.update(sessionId, { runState: "disconnected", error: DISCONNECT_MESSAGE });
+    }
+  }
+
+  private reconcileFinishedRun(sessionId: string, runId: string | null): void {
+    const finalize = (status: string | undefined, stoppedReason: string | undefined) => {
+      void getChatSession(sessionId).then((detail) => {
+        if (detail !== null) {
+          this.update(sessionId, {
+            transcript: messagesToTranscript(
+              detail.messages,
+              this.states.get(sessionId)?.transcript,
+            ),
+            usageTotals: usageTotalsFromMessages(detail.messages),
+          });
+        }
+        const resolved = status ?? detail?.session.status ?? "unknown";
+        const message =
+          resolved === "completed" ? null : agentCompletionMessage(resolved, stoppedReason);
+        this.update(sessionId, { runState: "idle", activeRunId: null, error: message });
+        if (resolved !== "completed") {
+          this.updateTranscript(
+            sessionId,
+            message === null ? markPendingMessagesComplete : markPendingMessagesErrored,
+          );
+        }
+      });
+    };
+    const refs = this.refs.get(sessionId);
+    if (refs !== undefined) {
+      refs.abort = null;
+      refs.runTerminal = true;
+    }
+    if (runId === null) {
+      finalize(undefined, undefined);
+      return;
+    }
+    void getChatRun(runId).then(
+      (run) => finalize(run?.status, run?.stoppedReason),
+      () => finalize(undefined, undefined),
+    );
+  }
+}
+
+export const chatRunsStore = new ChatRunsStore();

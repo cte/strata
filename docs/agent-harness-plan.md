@@ -214,6 +214,7 @@ Current execution constraints:
 - `AgentRunConfig.toolExecution` can force `"sequential"`, but defaults to `"parallel"`.
 - A called `ToolDefinition` with `executionMode: "sequential"` forces the whole batch sequential.
 - In parallel mode, `tool.call.started` events emit in assistant source order, `tool.call.completed` events emit as tools finish, and persisted tool messages remain in assistant source order.
+- Tools may stream incremental output while running: `ToolContext.onOutput(chunk)` (e.g. `shell.run` stdout/stderr) is surfaced as interleaved `tool.output` run events. The batch generators merge these callback-driven events into the yield sequence via an async channel, so live output reaches UIs without disturbing the started/completed/result ordering above. `tool.output` is an ephemeral event, not a persisted tool message; the full output still lands in the final `tool.call.completed` result.
 - Tool results above a size threshold are summarized or persisted to trace files and replaced with a preview.
 - Model adapters request provider-side parallel tool calls when supported.
 

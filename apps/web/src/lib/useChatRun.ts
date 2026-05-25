@@ -1,46 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { AttachmentData } from "@/components/ai-elements/attachments";
-import {
-  type ChatImageAttachment,
-  type ChatStreamEvent,
-  type ChatStreamEventMeta,
-  cancelChatRun,
-  forkChatSession,
-  getChatRun,
-  getChatSession,
-  listActiveChatRuns,
-  type StartChatRunRequest,
-  startChatRun,
-  streamChatRunEvents,
-} from "@/lib/api";
-import {
-  agentCompletionMessage,
-  appendAssistantDelta,
-  type ChatMessageView,
-  type ChatRunState,
-  type ChatSubmitInput,
-  clientId,
-  completeToolCall,
-  errorMessage,
-  finalizeAssistantResponse,
-  markPendingMessagesComplete,
-  markPendingMessagesErrored,
-  messagesToTranscript,
-  sanitizeDisplayText,
-  startToolCall,
-  toChatImageAttachment,
-} from "@/lib/chatRunModel";
-import {
-  accumulateTokenUsage,
-  createTokenUsageTotals,
-  normalizeModelUsage,
-  type TokenUsageTotals,
-  usageTotalsFromMessages,
-} from "@/lib/chatUsage";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import type { ChatMessageView, ChatRunState, ChatSubmitInput } from "@/lib/chatRunModel";
+import { chatRunsStore, NEW_CHAT_KEY, type SessionRunState } from "@/lib/chatRunsStore";
+import { createTokenUsageTotals, type TokenUsageTotals } from "@/lib/chatUsage";
 import type { ChatModelChoice } from "@/lib/useChatModelChoice";
-
-const MAX_STREAM_RECONNECTS = 2;
 
 export interface UseChatRunOptions {
   /** Currently-selected session id from the URL (or null for a new chat). */
@@ -61,551 +24,109 @@ export interface UseChatRunResult {
   error: string | null;
   setError(message: string | null): void;
   usageTotals: TokenUsageTotals;
-  /** Submit a new turn. No-op if `runState !== "idle"` or input is empty. */
+  /** Submit a new turn. No-op if the viewed session is mid-run or input is empty. */
   submit(input: ChatSubmitInput): void;
-  /** Cancel the active run if any. */
+  /** Cancel the viewed session's active run if any. */
   cancel(): void;
-  /** Reset transcript + session id (the `/clear` slash command). */
+  /** Start a fresh chat (the `/clear` slash command). */
   clearSession(): void;
-  /** Fork the active session into a new one and switch to it. */
+  /** Fork the viewed session into a new one and switch to it. */
   forkSession(): void;
   /** Invalidate cached sessions list (sidebar). */
   refreshSessions(): void;
 }
 
 /**
- * Owns the in-process model of one chat session as the user experiences it:
- * the URL-driven session detail load, the SSE event stream, the
- * disconnected-and-finished detection, transcript and usage accumulation,
- * cancel and fork. The page consumes the returned values and dispatches via
- * `submit`/`cancel`/`clearSession`/`forkSession` — it doesn't reach into the
- * SSE machinery or run-state refs.
- *
- * Architecturally this is the deepening of what used to be ~500 LoC of
- * state and effects in `apps/web/src/routes/chat.tsx`. The page is now the
- * presentation seam; `useChatRun` is the implementation.
+ * Thin view over {@link chatRunsStore} for the currently-selected session. The
+ * store owns every run's state and SSE stream, so runs keep streaming while the
+ * user looks at a different session; this hook just reads the slice for
+ * `urlSessionId` and binds actions to its key.
  */
 export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
   const { urlSessionId, selectedModelChoice, onSessionChange } = options;
   const queryClient = useQueryClient();
-
-  const [transcript, setTranscript] = useState<ChatMessageView[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionTitle, setSessionTitle] = useState<string | null>(null);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [runState, setRunState] = useState<ChatRunState>("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [usageTotals, setUsageTotals] = useState<TokenUsageTotals>(() => createTokenUsageTotals());
-
-  const abortRef = useRef<AbortController | null>(null);
-  const runIdRef = useRef<string | null>(null);
-  const lastEventIdRef = useRef(0);
-  const reconnectAttemptsRef = useRef(0);
-  const runTerminalRef = useRef(false);
-  const sessionIdRef = useRef<string | null>(null);
+  const runKey = urlSessionId ?? NEW_CHAT_KEY;
 
   useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
+    chatRunsStore.setQueryClient(queryClient);
+  }, [queryClient]);
 
-  const isRunning = runState !== "idle";
+  // Make sure the viewed session is present in the store (seed persisted
+  // transcript), without clobbering a live background stream for it.
+  useEffect(() => {
+    if (urlSessionId === null) {
+      chatRunsStore.ensureDraft();
+    } else {
+      chatRunsStore.ensureSessionLoaded(urlSessionId);
+    }
+  }, [urlSessionId]);
+
+  const state = useSyncExternalStore(
+    chatRunsStore.subscribe,
+    () => chatRunsStore.getState(runKey),
+    () => chatRunsStore.getState(runKey),
+  );
+
+  const fallback = useMemo<SessionRunState>(
+    () => ({
+      runKey,
+      sessionId: urlSessionId,
+      sessionTitle: null,
+      transcript: [],
+      runState: "idle",
+      activeRunId: null,
+      error: null,
+      usageTotals: createTokenUsageTotals(),
+      loaded: false,
+    }),
+    [runKey, urlSessionId],
+  );
+  const view = state ?? fallback;
+
+  const submit = useCallback(
+    (input: ChatSubmitInput) => {
+      chatRunsStore.submit({
+        viewKey: runKey,
+        input,
+        modelChoice: selectedModelChoice,
+        navigate: onSessionChange,
+      });
+    },
+    [runKey, selectedModelChoice, onSessionChange],
+  );
+
+  const cancel = useCallback(() => {
+    chatRunsStore.cancel(runKey);
+  }, [runKey]);
+
+  const clearSession = useCallback(() => {
+    chatRunsStore.clearDraft(onSessionChange);
+  }, [onSessionChange]);
+
+  const forkSession = useCallback(() => {
+    chatRunsStore.fork(runKey, onSessionChange);
+  }, [runKey, onSessionChange]);
+
+  const setError = useCallback(
+    (message: string | null) => {
+      chatRunsStore.setError(runKey, message);
+    },
+    [runKey],
+  );
 
   const refreshSessions = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
   }, [queryClient]);
 
-  // --- Disconnected-stream recovery ---------------------------------------
-  const activeRunsQuery = useQuery({
-    queryKey: ["chat", "runs", "active"],
-    queryFn: listActiveChatRuns,
-    enabled: runState === "disconnected",
-    refetchInterval: runState === "disconnected" ? 2_000 : false,
-  });
-
-  const loadFinishedRun = useCallback((runId: string) => {
-    void getChatRun(runId).then(
-      (run) => {
-        const runSessionId = run?.sessionId ?? sessionIdRef.current;
-        if (runSessionId === undefined || runSessionId === null) {
-          setError("Live stream disconnected, but the server-side run has finished.");
-          return;
-        }
-        void getChatSession(runSessionId).then(
-          (detail) => {
-            if (detail !== null) {
-              setTranscript((current) => messagesToTranscript(detail.messages, current));
-              setUsageTotals(usageTotalsFromMessages(detail.messages));
-            }
-            const status = run?.status ?? detail?.session.status;
-            const stoppedReason = run?.stoppedReason;
-            if (status === "completed") {
-              setError("Live stream disconnected, but the server-side run finished.");
-              return;
-            }
-            const message = agentCompletionMessage(status ?? "unknown", stoppedReason);
-            setError(message);
-            setTranscript(
-              message === null ? markPendingMessagesComplete : markPendingMessagesErrored,
-            );
-          },
-          (cause: unknown) => {
-            setError(errorMessage(cause));
-          },
-        );
-      },
-      (cause: unknown) => {
-        setError(errorMessage(cause));
-      },
-    );
-  }, []);
-
-  useEffect(() => {
-    if (runState !== "disconnected" || activeRunId === null || activeRunsQuery.data === undefined) {
-      return;
-    }
-    if (activeRunsQuery.data.some((run) => run.runId === activeRunId)) {
-      return;
-    }
-    runTerminalRef.current = true;
-    runIdRef.current = null;
-    setActiveRunId(null);
-    setRunState("idle");
-    void loadFinishedRun(activeRunId);
-    refreshSessions();
-  }, [activeRunId, activeRunsQuery.data, loadFinishedRun, refreshSessions, runState]);
-
-  // --- URL ?session=<id>  →  in-memory transcript ------------------------
-  // Driven by `urlSessionId` only. Reads `sessionIdRef.current` for the
-  // equality check rather than depending on `sessionId`, so that when the SSE
-  // stream's `session.started` event sets `sessionId` (before the matching
-  // `navigate()` lands and updates `urlSessionId`), this effect doesn't fire
-  // and wipe the in-flight optimistic transcript.
-  useEffect(() => {
-    if (urlSessionId === sessionIdRef.current) {
-      return;
-    }
-    if (urlSessionId === null) {
-      setSessionTitle(null);
-      setTranscript([]);
-      setError(null);
-      setSessionId(null);
-      sessionIdRef.current = null;
-      setUsageTotals(createTokenUsageTotals());
-      return;
-    }
-    let cancelled = false;
-    setError(null);
-    queryClient
-      .fetchQuery({
-        queryKey: ["chat", "sessions", "detail", urlSessionId],
-        queryFn: () => getChatSession(urlSessionId),
-        staleTime: 60_000,
-      })
-      .then(
-        (detail) => {
-          if (cancelled) return;
-          if (detail === null) {
-            setError(`Session not found: ${urlSessionId}`);
-            return;
-          }
-          const previousSessionId = sessionIdRef.current;
-          setSessionId(detail.session.id);
-          sessionIdRef.current = detail.session.id;
-          setSessionTitle(sanitizeDisplayText(detail.session.title));
-          setTranscript((current) => {
-            // Only align ids with the existing transcript when it belongs to
-            // the same session we're loading — otherwise stale entries from a
-            // previous session would bleed into the new one.
-            const alignment = previousSessionId === detail.session.id ? current : undefined;
-            const storedTranscript = messagesToTranscript(detail.messages, alignment);
-            if (detail.session.status === "failed" || detail.session.status === "interrupted") {
-              return markPendingMessagesErrored(storedTranscript);
-            }
-            if (detail.session.status === "completed") {
-              return markPendingMessagesComplete(storedTranscript);
-            }
-            return storedTranscript;
-          });
-          setUsageTotals(usageTotalsFromMessages(detail.messages));
-          if (detail.session.status === "failed" || detail.session.status === "interrupted") {
-            setError(agentCompletionMessage(detail.session.status));
-          }
-        },
-        (cause: unknown) => {
-          if (!cancelled) {
-            setError(errorMessage(cause));
-          }
-        },
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, [urlSessionId, queryClient]);
-
-  // --- SSE event reducer ---------------------------------------------------
-  const handleStreamEvent = useCallback(
-    (event: ChatStreamEvent, meta: ChatStreamEventMeta = { id: null }) => {
-      if (meta.id !== null && meta.id > lastEventIdRef.current) {
-        lastEventIdRef.current = meta.id;
-      }
-      switch (event.type) {
-        case "run.started":
-          runIdRef.current = event.runId;
-          runTerminalRef.current = false;
-          setActiveRunId(event.runId);
-          setRunState("streaming");
-          break;
-        case "session.started":
-          sessionIdRef.current = event.sessionId;
-          setSessionId(event.sessionId);
-          setSessionTitle(sanitizeDisplayText(event.title));
-          onSessionChange(event.sessionId, { replace: true });
-          break;
-        case "message.user":
-          break;
-        case "model.request":
-          setRunState("streaming");
-          break;
-        case "model.retry":
-          setRunState("streaming");
-          break;
-        case "assistant.delta":
-          setRunState("streaming");
-          setTranscript((current) =>
-            appendAssistantDelta(current, runIdRef.current, event.iteration, event.contentDelta),
-          );
-          break;
-        case "model.response": {
-          const turnUsage =
-            event.usage === undefined ? undefined : normalizeModelUsage(event.usage);
-          setUsageTotals((current) => accumulateTokenUsage(current, event.usage));
-          setTranscript((current) =>
-            finalizeAssistantResponse(
-              current,
-              runIdRef.current,
-              event.iteration,
-              event.content,
-              event.toolCalls,
-              turnUsage,
-            ),
-          );
-          break;
-        }
-        case "tool.call.started":
-          setTranscript((current) => startToolCall(current, runIdRef.current, event));
-          break;
-        case "tool.call.completed":
-          setTranscript((current) => completeToolCall(current, event.toolCallId, event.result));
-          break;
-        case "agent.completed":
-          runTerminalRef.current = true;
-          setRunState("idle");
-          setActiveRunId(null);
-          runIdRef.current = null;
-          if (event.result.sessionId !== "") {
-            sessionIdRef.current = event.result.sessionId;
-            setSessionId(event.result.sessionId);
-          }
-          if (event.result.status !== "completed") {
-            const message = agentCompletionMessage(event.result.status, event.result.stoppedReason);
-            setError(message);
-            setTranscript(
-              message === null ? markPendingMessagesComplete : markPendingMessagesErrored,
-            );
-          }
-          break;
-        case "agent.failed":
-          runTerminalRef.current = true;
-          setError(event.message);
-          setRunState("idle");
-          setActiveRunId(null);
-          runIdRef.current = null;
-          setTranscript(markPendingMessagesErrored);
-          break;
-      }
-    },
-    [onSessionChange],
-  );
-
-  const resumeRunStream = useCallback(
-    (runId: string, controller: AbortController): boolean => {
-      if (reconnectAttemptsRef.current >= MAX_STREAM_RECONNECTS) {
-        return false;
-      }
-      reconnectAttemptsRef.current += 1;
-      setRunState("streaming");
-      setError(null);
-      streamChatRunEvents(runId, lastEventIdRef.current, handleStreamEvent, controller.signal).then(
-        () => {
-          if (abortRef.current !== controller) {
-            return;
-          }
-          if (runTerminalRef.current || controller.signal.aborted) {
-            setRunState("idle");
-            setActiveRunId(null);
-            runIdRef.current = null;
-            abortRef.current = null;
-            refreshSessions();
-            return;
-          }
-          if (!resumeRunStream(runId, controller)) {
-            setRunState("disconnected");
-            setError(
-              "Live stream disconnected before the run finished. The server-side agent may still be running; use Stop to cancel it. The session list will refresh when it finishes.",
-            );
-            refreshSessions();
-          }
-        },
-        (cause: unknown) => {
-          if (abortRef.current !== controller || controller.signal.aborted) {
-            return;
-          }
-          if (!resumeRunStream(runId, controller)) {
-            setRunState("disconnected");
-            setError(errorMessage(cause));
-            refreshSessions();
-          }
-        },
-      );
-      return true;
-    },
-    [handleStreamEvent, refreshSessions],
-  );
-
-  useEffect(() => {
-    if (sessionId === null || runState !== "idle") {
-      return;
-    }
-
-    let cancelled = false;
-    void listActiveChatRuns().then(
-      (runs) => {
-        if (cancelled || sessionIdRef.current !== sessionId || abortRef.current !== null) {
-          return;
-        }
-        const activeRun = runs.find(
-          (run) => run.sessionId === sessionId || run.continueSessionId === sessionId,
-        );
-        if (activeRun === undefined) {
-          return;
-        }
-
-        const controller = new AbortController();
-        abortRef.current = controller;
-        runIdRef.current = activeRun.runId;
-        lastEventIdRef.current = activeRun.lastEventId ?? 0;
-        reconnectAttemptsRef.current = 0;
-        runTerminalRef.current = false;
-        setActiveRunId(activeRun.runId);
-        if (!resumeRunStream(activeRun.runId, controller)) {
-          abortRef.current = null;
-          setRunState("disconnected");
-          setError(
-            "Live stream disconnected before the run finished. The server-side agent may still be running; use Stop to cancel it. The session list will refresh when it finishes.",
-          );
-        }
-      },
-      (cause: unknown) => {
-        if (!cancelled) {
-          setError(errorMessage(cause));
-        }
-      },
-    );
-
-    return () => {
-      cancelled = true;
-    };
-  }, [resumeRunStream, runState, sessionId]);
-
-  // --- Submit / cancel / clear / fork --------------------------------------
-  const submit = useCallback(
-    (input: ChatSubmitInput) => {
-      const message = input.message.trim();
-      const hasAttachments = input.attachments.length > 0;
-      if ((message === "" && !hasAttachments) || isRunning) {
-        return;
-      }
-
-      const controller = new AbortController();
-      abortRef.current = controller;
-      runIdRef.current = null;
-      lastEventIdRef.current = 0;
-      reconnectAttemptsRef.current = 0;
-      runTerminalRef.current = false;
-      const sentAttachments = input.attachments;
-      const continuingSessionId = sessionIdRef.current;
-      if (continuingSessionId === null) {
-        setUsageTotals(createTokenUsageTotals());
-      }
-      setError(null);
-      setRunState("starting");
-      setTranscript((current) => [
-        ...current,
-        {
-          id: clientId("user"),
-          role: "user",
-          content: message,
-          status: "complete",
-          toolCalls: [],
-          attachments: sentAttachments,
-        },
-      ]);
-
-      const request: StartChatRunRequest = {
-        message: message === "" ? "(image attached)" : message,
-      };
-      if (continuingSessionId !== null) {
-        request.continueSessionId = continuingSessionId;
-      }
-      if (sentAttachments.length > 0) {
-        request.attachments = sentAttachments
-          .map(toChatImageAttachment)
-          .filter((value): value is ChatImageAttachment => value !== null);
-      }
-      if (selectedModelChoice !== null) {
-        request.provider = selectedModelChoice.provider;
-        request.model = selectedModelChoice.model;
-        request.reasoningEffort = selectedModelChoice.reasoningEffort;
-      }
-
-      startChatRun(request, handleStreamEvent, controller.signal).then(
-        () => {
-          if (abortRef.current === controller) {
-            if (runTerminalRef.current || controller.signal.aborted) {
-              setRunState("idle");
-              setActiveRunId(null);
-              runIdRef.current = null;
-            } else {
-              const runId = runIdRef.current;
-              if (runId !== null && resumeRunStream(runId, controller)) {
-                return;
-              }
-              setRunState("disconnected");
-              setError(
-                "Live stream disconnected before the run finished. The server-side agent may still be running; use Stop to cancel it. The session list will refresh when it finishes.",
-              );
-            }
-            abortRef.current = null;
-          }
-          refreshSessions();
-        },
-        (cause: unknown) => {
-          const streamDisconnected =
-            !controller.signal.aborted && runIdRef.current !== null && !runTerminalRef.current;
-          if (abortRef.current === controller) {
-            if (streamDisconnected) {
-              const runId = runIdRef.current;
-              if (runId !== null && resumeRunStream(runId, controller)) {
-                return;
-              }
-              setRunState("disconnected");
-              setError(
-                "Live stream disconnected before the run finished. The server-side agent may still be running; use Stop to cancel it. The session list will refresh when it finishes.",
-              );
-            } else {
-              setRunState("idle");
-              setActiveRunId(null);
-              runIdRef.current = null;
-            }
-            abortRef.current = null;
-          }
-          if (!controller.signal.aborted) {
-            if (!streamDisconnected) {
-              setError(errorMessage(cause));
-              setTranscript(markPendingMessagesErrored);
-            }
-          }
-          refreshSessions();
-        },
-      );
-    },
-    [handleStreamEvent, isRunning, refreshSessions, resumeRunStream, selectedModelChoice],
-  );
-
-  const cancel = useCallback(() => {
-    if (!isRunning) {
-      return;
-    }
-    const controller = abortRef.current;
-    const runId = runIdRef.current;
-    setRunState("cancelling");
-    const finishLocalCancel = () => {
-      controller?.abort();
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-      }
-      runTerminalRef.current = true;
-      runIdRef.current = null;
-      setActiveRunId(null);
-      setRunState("idle");
-      setTranscript(markPendingMessagesComplete);
-      refreshSessions();
-    };
-
-    if (runId === null) {
-      finishLocalCancel();
-      return;
-    }
-
-    cancelChatRun(runId).then(
-      () => finishLocalCancel(),
-      (cause: unknown) => {
-        setError(errorMessage(cause));
-        finishLocalCancel();
-      },
-    );
-  }, [isRunning, refreshSessions]);
-
-  const clearSession = useCallback(() => {
-    if (isRunning) {
-      setError("Cannot clear while a run is active.");
-      return;
-    }
-    setTranscript([]);
-    setSessionId(null);
-    sessionIdRef.current = null;
-    setSessionTitle(null);
-    setUsageTotals(createTokenUsageTotals());
-    setError(null);
-    onSessionChange(null);
-  }, [isRunning, onSessionChange]);
-
-  const forkSession = useCallback(() => {
-    if (isRunning) {
-      setError("Cannot fork while a run is active.");
-      return;
-    }
-    const currentSessionId = sessionIdRef.current;
-    if (currentSessionId === null) {
-      setError("No active session to fork.");
-      return;
-    }
-    setError(null);
-    void forkChatSession(currentSessionId).then(
-      (detail) => {
-        setSessionId(detail.session.id);
-        sessionIdRef.current = detail.session.id;
-        setSessionTitle(sanitizeDisplayText(detail.session.title));
-        setTranscript(messagesToTranscript(detail.messages));
-        setUsageTotals(usageTotalsFromMessages(detail.messages));
-        onSessionChange(detail.session.id);
-        refreshSessions();
-      },
-      (cause: unknown) => {
-        setError(errorMessage(cause));
-      },
-    );
-  }, [isRunning, onSessionChange, refreshSessions]);
-
   return {
-    sessionId,
-    sessionTitle,
-    transcript,
-    runState,
-    activeRunId,
-    error,
+    sessionId: view.sessionId,
+    sessionTitle: view.sessionTitle,
+    transcript: view.transcript,
+    runState: view.runState,
+    activeRunId: view.activeRunId,
+    error: view.error,
     setError,
-    usageTotals,
+    usageTotals: view.usageTotals,
     submit,
     cancel,
     clearSession,
@@ -614,4 +135,11 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
   };
 }
 
-export type { ChatMessageView, ChatRunState, ChatSubmitInput } from "@/lib/chatRunModel";
+/** Session ids with a live (starting/streaming/cancelling/disconnected) run. */
+export function useRunningSessionIds(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    chatRunsStore.subscribe,
+    chatRunsStore.getRunningSessionIds,
+    chatRunsStore.getRunningSessionIds,
+  );
+}
