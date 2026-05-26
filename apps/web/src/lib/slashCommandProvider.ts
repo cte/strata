@@ -1,6 +1,6 @@
 import type { AutocompleteProvider, AutocompleteSuggestions } from "@/lib/useAutocomplete";
 
-export type ChatSlashCommandName = "clear" | "fork" | "help" | "model";
+export type ChatSlashCommandName = "clear" | "fork" | "help" | "model" | "skill";
 
 export interface SlashCommandDefinition {
   name: ChatSlashCommandName;
@@ -17,6 +17,7 @@ export const CHAT_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
   { name: "fork", description: "branch from the current session" },
   { name: "help", description: "show chat commands" },
   { name: "model", description: "open model controls" },
+  { name: "skill", description: "run a skill with /skill:<name>" },
 ];
 
 const COMMANDS_BY_NAME = new Map(CHAT_SLASH_COMMANDS.map((command) => [command.name, command]));
@@ -61,6 +62,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand | undefined
   const space = trimmed.indexOf(" ");
   const rawName = space === -1 ? trimmed.slice(1) : trimmed.slice(1, space);
   const args = space === -1 ? "" : trimmed.slice(space + 1).trim();
+  if (rawName.startsWith("skill:")) {
+    const skillName = rawName.slice("skill:".length);
+    return skillName === ""
+      ? undefined
+      : { name: "skill", args: [skillName, args].join(" ").trim() };
+  }
   if (!isChatSlashCommandName(rawName)) {
     return undefined;
   }

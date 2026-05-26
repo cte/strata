@@ -2,18 +2,31 @@
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import {
+  clearAnthropicCredentials,
   clearChatGptCredentials,
   createModelAdapter,
+  getAnthropicCredentials,
   getChatGptCredentials,
   listMaintenanceJobs,
+  loginAnthropic,
   loginChatGpt,
   type ModelProviderName,
   runAgentLoop,
   runMaintenanceJob,
   runReflection,
+  setAnthropicCredentials,
   setChatGptCredentials,
 } from "@strata/agent";
-import { ensureRuntimeDirs, getStrataPaths, type SessionRecord, SessionStore } from "@strata/core";
+
+import {
+  ensureRuntimeDirs,
+  getStrataPaths,
+  refreshWikiSearchIndex,
+  type SessionRecord,
+  SessionStore,
+  searchWikiSearchIndex,
+  type WikiSearchIndexSource,
+} from "@strata/core";
 import { loadDotenv } from "@strata/ingest/common";
 import {
   type ConnectorConfig,
@@ -30,7 +43,16 @@ import {
   runRawToWikiIndex,
 } from "@strata/ingest/raw-to-wiki";
 import { runSlackSocketModeListener } from "@strata/ingest/slack-socket-mode";
-import { createDefaultToolRegistry, type ToolProfile } from "@strata/tools";
+import { archiveGeneratedSlackThreads, compactWikiIndex } from "@strata/ingest/wiki-index";
+import { createConfiguredMcpToolPack } from "@strata/integration-mcp/exa";
+
+import {
+  createDefaultToolRegistry,
+  createToolRegistryWithPacks,
+  type ToolPack,
+  type ToolProfile,
+} from "@strata/tools";
+
 import { type RunTuiOptions, runTui } from "@strata/tui";
 
 type CommandResult = number;
@@ -39,9 +61,12 @@ function usage(): string {
   return `usage: strata <command>
 
 commands:
-  auth status                  show configured model auth without exposing tokens
+    auth status                  show configured model auth without exposing tokens
   auth login openai-codex      sign in with ChatGPT for Codex model access
+  auth login anthropic-claude  sign in with Claude for Anthropic model access
   auth logout openai-codex     remove stored ChatGPT credentials
+  auth logout anthropic-claude remove stored Claude credentials
+
   init                         initialize .strata runtime directories
   ingest raw index              index raw source snapshots into wiki pages
   ingest notion --page-id ID    snapshot a Notion page or URL into wiki/raw/notion
@@ -49,6 +74,9 @@ commands:
   ingest granola index          index raw Granola snapshots into wiki pages
   ingest granola propose        stage wiki proposals from raw Granola snapshots
   ingest slack [options]        snapshot an explicit Slack thread into wiki/raw/slack
+  wiki compact-index            rebuild the human wiki index without raw-source fanout
+  wiki search-index refresh     refresh the local wiki/raw retrieval index
+  wiki search <query>           search the local retrieval index with curated-first ranking
   query [options] <question>   run an agent query using the default dangerous tool profile
   learn reflect [options] <id>  reflect on a completed session trace
   maintain list                list maintenance jobs
@@ -138,6 +166,26 @@ interface SlackIngestOptions {
   workspaceUrl?: string;
 }
 
+interface WikiSearchOptions {
+  includeRaw: boolean;
+  limit: number;
+  query: string;
+}
+
+interface WikiSearchIndexRefreshOptions {
+  source: WikiSearchIndexSource;
+  includeRaw: boolean;
+}
+
+interface WikiCompactIndexOptions {
+  dryRun: boolean;
+}
+
+interface WikiArchiveGeneratedSlackThreadsOptions {
+  dryRun: boolean;
+  rewriteLinks: boolean;
+}
+
 const INGEST_USAGE = `usage:
   strata ingest raw index [--source all|granola|notion|slack] [--raw-path FILE] [--limit N] [--dry-run]
   strata ingest notion --page-id PAGE_ID_OR_URL [--index] [--dry-run]
@@ -151,6 +199,12 @@ const INGEST_USAGE = `usage:
                            [--max-channels N] [--max-messages-per-channel N] [--max-threads N]
                            [--index] [--dry-run]
   strata ingest slack listen [--include-bot-messages]`;
+
+const WIKI_USAGE = `usage:
+  strata wiki compact-index [--dry-run]
+  strata wiki archive-generated-slack-threads [--dry-run] [--no-rewrite-links]
+  strata wiki search-index refresh [--source all|granola|notion|slack] [--no-raw]
+  strata wiki search [--include-raw] [--limit N] <query>`;
 
 function parseLimit(args: string[], fallback = 20): number {
   const index = args.indexOf("--limit");
@@ -267,10 +321,12 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
     throw new Error("query requires a question");
   }
 
+  const repoRoot = getStrataPaths().repoRoot;
   const result = await runAgentLoop({
     question: options.question,
     model: await createModelAdapter(options),
-    repoRoot: getStrataPaths().repoRoot,
+    repoRoot,
+    tools: await createAgentToolRegistry({ repoRoot, env: Bun.env }),
   });
 
   if (result.finalAnswer.trim() !== "") {
@@ -282,6 +338,21 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
     `\n[session: ${result.sessionId}; status: ${result.status}; iterations: ${result.iterations}; tool calls: ${result.toolCalls}]`,
   );
   return result.status === "failed" ? 1 : 0;
+}
+
+async function createAgentToolRegistry(options: {
+  repoRoot: string;
+  env: Record<string, string | undefined>;
+}) {
+  const packs: ToolPack[] = [createConfiguredMcpToolPack()];
+
+  return createToolRegistryWithPacks({
+    context: {
+      repoRoot: options.repoRoot,
+      env: options.env,
+    },
+    packs,
+  });
 }
 
 async function cmdIngest(args: string[]): Promise<CommandResult> {
@@ -470,10 +541,94 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
   throw new Error(`Unknown ingest source: ${source}`);
 }
 
+async function cmdWiki(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(WIKI_USAGE);
+    return 0;
+  }
+
+  if (subcommand === "compact-index") {
+    const options = parseWikiCompactIndexOptions(args);
+    const result = await compactWikiIndex({
+      repoRoot: getStrataPaths().repoRoot,
+      dryRun: options.dryRun,
+    });
+    console.log(`${result.dryRun ? "would write" : "wrote"} ${result.writtenPaths.length} paths`);
+    for (const writtenPath of result.writtenPaths) {
+      console.log(`- ${writtenPath}`);
+    }
+    console.log(
+      `counts: people=${result.counts.people} projects=${result.counts.projects} meetings=${result.counts.meetings} decisions=${result.counts.decisions} threads=${result.counts.threads} slack_raw=${result.counts.slackRawThreads}`,
+    );
+    if (result.counts.omittedDecisions > 0 || result.counts.omittedThreads > 0) {
+      console.log(
+        `omitted from root index: decisions=${result.counts.omittedDecisions} threads=${result.counts.omittedThreads}`,
+      );
+    }
+    return 0;
+  }
+
+  if (subcommand === "archive-generated-slack-threads") {
+    const options = parseWikiArchiveGeneratedSlackThreadsOptions(args);
+    const result = await archiveGeneratedSlackThreads({
+      repoRoot: getStrataPaths().repoRoot,
+      dryRun: options.dryRun,
+      rewriteLinks: options.rewriteLinks,
+    });
+    console.log(`${result.dryRun ? "would archive" : "archived"} ${result.archived} pages`);
+    console.log(`scanned: ${result.scanned}`);
+    console.log(`kept: ${result.kept}`);
+    console.log(`missing raw sources: ${result.missingRawSources}`);
+    console.log(`rewritten files: ${result.rewrittenFiles}`);
+    console.log(`rewritten links: ${result.rewrittenLinks}`);
+    console.log(`archive: ${result.archiveDir}`);
+    if (result.manifestPath !== null) {
+      console.log(`manifest: ${result.manifestPath}`);
+    }
+    return 0;
+  }
+
+  if (subcommand === "search-index") {
+    const action = args.shift();
+    if (action !== "refresh") {
+      throw new Error("Unknown wiki search-index command. Expected: wiki search-index refresh");
+    }
+    const options = parseWikiSearchIndexRefreshOptions(args);
+    const result = await refreshWikiSearchIndex({
+      repoRoot: getStrataPaths().repoRoot,
+      source: options.source,
+      includeRaw: options.includeRaw,
+    });
+    console.log(
+      `indexed ${result.indexed} docs (curated=${result.curated}, sources=${result.sources}, raw=${result.raw})`,
+    );
+    return 0;
+  }
+
+  if (subcommand === "search") {
+    const options = parseWikiSearchOptions(args);
+    const matches = await searchWikiSearchIndex({
+      repoRoot: getStrataPaths().repoRoot,
+      query: options.query,
+      includeRaw: options.includeRaw,
+      limit: options.limit,
+    });
+    const results = matches ?? [];
+    for (const match of results) {
+      console.log(`${match.path}:${match.line} ${match.preview}`);
+    }
+    console.log(`matches: ${results.length}${matches === null ? " (search index is empty)" : ""}`);
+    return 0;
+  }
+
+  throw new Error(`Unknown wiki subcommand: ${subcommand}`);
+}
+
 async function cmdAuth(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: strata auth <status|login|logout> [openai-codex]`);
+    console.log(`usage: strata auth <status|login|logout> [openai-codex|anthropic-claude]`);
     return 0;
   }
 
@@ -486,21 +641,29 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
         `openai-codex: logged in, token expires ${new Date(credentials.expiresAt).toISOString()}`,
       );
     }
+    const anthropicCredentials = await getAnthropicCredentials();
+    if (anthropicCredentials === undefined) {
+      console.log("anthropic-claude: not logged in");
+    } else {
+      console.log(
+        `anthropic-claude: logged in, token expires ${new Date(anthropicCredentials.expiresAt).toISOString()}`,
+      );
+    }
     const apiKeyConfigured = Boolean(Bun.env.STRATA_API_KEY ?? Bun.env.OPENAI_API_KEY);
     console.log(`openai-compatible: ${apiKeyConfigured ? "API key configured" : "not configured"}`);
     return 0;
   }
 
   const provider = args.shift() ?? "openai-codex";
-  if (provider !== "openai-codex") {
+  if (provider !== "openai-codex" && provider !== "anthropic-claude") {
     throw new Error(`Unsupported auth provider: ${provider}`);
   }
 
   if (subcommand === "login") {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
-      const credentials = await loginChatGpt({
-        onAuth(info) {
+      const callbacks = {
+        onAuth(info: { url: string; instructions: string }) {
           console.log(`Open this URL in your browser:\n${info.url}\n`);
           console.log(info.instructions);
         },
@@ -513,13 +676,23 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
           }
           return value;
         },
-        onPrompt: (prompt) => rl.question(`${prompt} `),
-        onProgress: (message) => console.log(message),
-      });
-      await setChatGptCredentials(credentials);
-      console.log(
-        `Logged in to openai-codex. Token expires ${new Date(credentials.expiresAt).toISOString()}`,
-      );
+        onPrompt: (prompt: string) => rl.question(`${prompt} `),
+        onProgress: (message: string) => console.log(message),
+      };
+      if (provider === "anthropic-claude") {
+        const credentials = await loginAnthropic(callbacks);
+        await setAnthropicCredentials(credentials);
+        console.log(
+          `Logged in to ${provider}. Token expires ${new Date(credentials.expiresAt).toISOString()}`,
+        );
+      } else {
+        const credentials = await loginChatGpt(callbacks);
+        await setChatGptCredentials(credentials);
+        console.log(
+          `Logged in to ${provider}. Token expires ${new Date(credentials.expiresAt).toISOString()}`,
+        );
+      }
+
       return 0;
     } finally {
       rl.close();
@@ -527,8 +700,12 @@ async function cmdAuth(args: string[]): Promise<CommandResult> {
   }
 
   if (subcommand === "logout") {
-    await clearChatGptCredentials();
-    console.log("Logged out of openai-codex.");
+    if (provider === "anthropic-claude") {
+      await clearAnthropicCredentials();
+    } else {
+      await clearChatGptCredentials();
+    }
+    console.log(`Logged out of ${provider}.`);
     return 0;
   }
 
@@ -788,6 +965,9 @@ async function main(argv: string[]): Promise<CommandResult> {
   if (command === "ingest") {
     return cmdIngest(argv);
   }
+  if (command === "wiki") {
+    return cmdWiki(argv);
+  }
   if (command === "query") {
     return cmdQuery(argv);
   }
@@ -1003,6 +1183,78 @@ function parseRawToWikiSource(value: string): RawToWikiSourceFilter {
     return value;
   }
   throw new Error("--source must be one of: all, granola, notion, slack");
+}
+
+function parseWikiSearchIndexSource(value: string): WikiSearchIndexSource {
+  if (value === "all" || value === "granola" || value === "notion" || value === "slack") {
+    return value;
+  }
+  throw new Error("--source must be one of: all, granola, notion, slack");
+}
+
+function parseWikiSearchIndexRefreshOptions(args: string[]): WikiSearchIndexRefreshOptions {
+  const parsed: WikiSearchIndexRefreshOptions = { source: "all", includeRaw: true };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--source") {
+      parsed.source = parseWikiSearchIndexSource(
+        requireArgValue(args[++index], "--source requires a value"),
+      );
+    } else if (arg === "--no-raw") {
+      parsed.includeRaw = false;
+    } else {
+      throw new Error(`Unknown wiki search-index refresh argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+function parseWikiCompactIndexOptions(args: string[]): WikiCompactIndexOptions {
+  const parsed: WikiCompactIndexOptions = { dryRun: false };
+  for (const arg of args) {
+    if (arg === "--dry-run") {
+      parsed.dryRun = true;
+    } else {
+      throw new Error(`Unknown wiki compact-index argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+function parseWikiArchiveGeneratedSlackThreadsOptions(
+  args: string[],
+): WikiArchiveGeneratedSlackThreadsOptions {
+  const parsed: WikiArchiveGeneratedSlackThreadsOptions = { dryRun: false, rewriteLinks: true };
+  for (const arg of args) {
+    if (arg === "--dry-run") {
+      parsed.dryRun = true;
+    } else if (arg === "--no-rewrite-links") {
+      parsed.rewriteLinks = false;
+    } else {
+      throw new Error(`Unknown wiki archive-generated-slack-threads argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+function parseWikiSearchOptions(args: string[]): WikiSearchOptions {
+  const parsed: WikiSearchOptions = { includeRaw: false, limit: 20, query: "" };
+  const rest: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--include-raw") {
+      parsed.includeRaw = true;
+    } else if (arg === "--limit") {
+      parsed.limit = parsePositiveIntegerArg(args[++index], "--limit requires a positive integer");
+    } else {
+      rest.push(arg ?? "");
+    }
+  }
+  parsed.query = rest.join(" ").trim();
+  if (parsed.query === "") {
+    throw new Error("wiki search requires a query");
+  }
+  return parsed;
 }
 
 function parseSlackIngestOptions(args: string[]): SlackIngestOptions {

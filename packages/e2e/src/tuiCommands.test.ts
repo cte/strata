@@ -17,7 +17,7 @@ async function setupApp(width = 80, height = 20) {
   const app = new StrataApp(
     runtime,
     { repoRoot, provider: "openai-codex", model: "gpt-test" },
-    { codexLoggedIn: false, apiKeyConfigured: false },
+    { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
   );
   runtime.setRoot(app);
   runtime.start();

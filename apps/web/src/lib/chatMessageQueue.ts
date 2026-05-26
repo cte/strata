@@ -1,4 +1,5 @@
 import { type AttachmentData, getAttachmentLabel } from "@/components/ai-elements/attachments";
+import type { ChatQueuedMessageSummary } from "@/lib/api";
 
 export interface QueuedChatMessage {
   id: string;
@@ -6,29 +7,12 @@ export interface QueuedChatMessage {
   attachments: AttachmentData[];
 }
 
-export function appendQueuedChatMessage(
-  queue: QueuedChatMessage[],
-  message: QueuedChatMessage,
-): QueuedChatMessage[] {
-  return [...queue, message];
-}
-
-export function dequeueQueuedChatMessage(queue: QueuedChatMessage[]): {
-  next: QueuedChatMessage | null;
-  queue: QueuedChatMessage[];
-} {
-  const [next, ...remaining] = queue;
+export function queuedChatMessageFromSummary(summary: ChatQueuedMessageSummary): QueuedChatMessage {
   return {
-    next: next ?? null,
-    queue: remaining,
+    id: summary.id,
+    message: summary.message,
+    attachments: attachmentDataFromJson(summary.attachments),
   };
-}
-
-export function removeQueuedChatMessage(
-  queue: QueuedChatMessage[],
-  id: string,
-): QueuedChatMessage[] {
-  return queue.filter((message) => message.id !== id);
 }
 
 export function queuedChatMessageLabel(message: QueuedChatMessage): string {
@@ -48,4 +32,31 @@ export function queuedChatMessageDescription(message: QueuedChatMessage): string
 
   const count = message.attachments.length;
   return `${count} attachment${count === 1 ? "" : "s"}`;
+}
+
+function attachmentDataFromJson(value: ChatQueuedMessageSummary["attachments"]): AttachmentData[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const attachments: AttachmentData[] = [];
+  for (const item of value) {
+    if (isAttachmentData(item)) {
+      attachments.push(item);
+    }
+  }
+  return attachments;
+}
+
+function isAttachmentData(value: unknown): value is AttachmentData {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    record.type === "file" &&
+    typeof record.mediaType === "string" &&
+    typeof record.url === "string" &&
+    (record.filename === undefined || typeof record.filename === "string")
+  );
 }

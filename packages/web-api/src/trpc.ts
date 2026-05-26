@@ -48,7 +48,53 @@ export interface GranolaStatus {
   validatedAt?: string;
 }
 
-export type ChatProviderName = "openai-codex" | "openai-compatible";
+export type ModelAuthProviderName = "openai-codex" | "anthropic-claude";
+
+export interface ModelAuthProviderStatus {
+  provider: ModelAuthProviderName;
+  displayName: string;
+  authenticated: boolean;
+  state: "connected" | "not_connected" | "auth_pending";
+  message: string;
+  expiresAt?: number;
+}
+
+export interface ModelAuthStatus {
+  providers: ModelAuthProviderStatus[];
+}
+
+export interface ModelAuthStartResult {
+  provider: ModelAuthProviderName;
+  authenticated: false;
+  authorizationUrl: string;
+  callbackUrl: string;
+  message: string;
+}
+
+export interface McpServerStatus {
+  slug: string;
+  displayName: string;
+  serverUrl: string;
+  enabled: boolean;
+  selectedTools: string[];
+  headerNames: string[];
+  apiKeyConfigured: boolean;
+  state: "enabled" | "disabled";
+  message: string;
+  updatedAt?: string;
+}
+
+export interface McpSettingsStatus {
+  servers: McpServerStatus[];
+}
+
+export interface McpToolSummary {
+  name: string;
+  description: string;
+}
+
+export type ChatProviderName = "openai-codex" | "openai-compatible" | "anthropic-claude";
+
 export type ChatSessionKind = "chat" | "query";
 export type ChatSessionStatus = "running" | "completed" | "failed" | "interrupted";
 export type ChatMessageRole = "system" | "user" | "assistant" | "tool";
@@ -65,7 +111,9 @@ export interface ChatModelStatus {
   model: string;
   codexLoggedIn: boolean;
   apiKeyConfigured: boolean;
+  anthropicLoggedIn: boolean;
   codexExpiresAt?: number;
+  anthropicExpiresAt?: number;
 }
 
 export interface ChatModelSummary {
@@ -76,6 +124,19 @@ export interface ChatModelSummary {
 export interface ChatFileEntry {
   path: string;
   isDirectory: boolean;
+}
+
+export interface ChatSkillEntry {
+  name: string;
+  description: string;
+  path: string;
+  source: "strata" | "agents";
+  disableModelInvocation: boolean;
+}
+
+export interface ChatSkillInvocation {
+  name: string;
+  prompt: string;
 }
 
 export interface WikiTreeEntry {
@@ -121,6 +182,18 @@ export interface ChatSessionDeleteResult {
   id: string;
   title: string;
   traceMethod: "trash" | "unlink" | "missing";
+}
+
+export interface ChatQueuedMessageSummary {
+  id: string;
+  sessionId?: string;
+  runId?: string;
+  message: string;
+  attachments: BrowserJsonValue;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+  createdAt: string;
 }
 
 export interface ChatActiveRunSummary {
@@ -194,6 +267,34 @@ export const chatRunGetInput = z.object({
 
 export type ChatRunGetInput = z.output<typeof chatRunGetInput>;
 
+export const chatQueueTargetInput = z
+  .object({
+    sessionId: z.string().min(1).optional(),
+    runId: z.string().min(1).optional(),
+  })
+  .refine((value) => value.sessionId !== undefined || value.runId !== undefined, {
+    message: "sessionId or runId is required.",
+  });
+
+export type ChatQueueTargetInput = z.output<typeof chatQueueTargetInput>;
+
+export const chatQueueAddInput = chatQueueTargetInput.extend({
+  id: z.string().min(1),
+  message: z.string().min(1),
+  attachments: z.array(z.any()).default([]),
+  provider: z.enum(["openai-codex", "openai-compatible", "anthropic-claude"]).optional(),
+  model: z.string().min(1).optional(),
+  reasoningEffort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
+});
+
+export type ChatQueueAddInput = z.output<typeof chatQueueAddInput>;
+
+export const chatQueueRemoveInput = z.object({
+  id: z.string().min(1),
+});
+
+export type ChatQueueRemoveInput = z.output<typeof chatQueueRemoveInput>;
+
 export const chatFilesListInput = z.object({
   query: z.string().default(""),
   limit: z.number().int().min(1).max(100).default(20),
@@ -202,10 +303,69 @@ export const chatFilesListInput = z.object({
 export type ChatFilesListInput = z.output<typeof chatFilesListInput>;
 
 export const chatModelsListInput = z.object({
-  provider: z.enum(["openai-codex", "openai-compatible"]),
+  provider: z.enum(["openai-codex", "openai-compatible", "anthropic-claude"]),
 });
 
 export type ChatModelsListInput = z.output<typeof chatModelsListInput>;
+
+export const chatSkillsListInput = z.object({
+  query: z.string().default(""),
+  limit: z.number().int().min(1).max(100).default(40),
+});
+
+export type ChatSkillsListInput = z.output<typeof chatSkillsListInput>;
+
+export const chatSkillInvokeInput = z.object({
+  name: z.string().min(1),
+  args: z.string().default(""),
+});
+
+export type ChatSkillInvokeInput = z.output<typeof chatSkillInvokeInput>;
+
+export const modelAuthProviderInput = z.object({
+  provider: z.enum(["openai-codex", "anthropic-claude"]),
+});
+
+export type ModelAuthProviderInput = z.output<typeof modelAuthProviderInput>;
+
+export const modelAuthStartInput = modelAuthProviderInput.extend({
+  origin: z.string().url().optional(),
+});
+
+export type ModelAuthStartInput = z.output<typeof modelAuthStartInput>;
+
+export const modelAuthCompleteInput = modelAuthProviderInput.extend({
+  authorizationResponse: z.string().min(1),
+});
+
+export type ModelAuthCompleteInput = z.output<typeof modelAuthCompleteInput>;
+
+export const mcpServerInput = z.object({
+  slug: z.string().min(1),
+});
+
+export type McpServerInput = z.output<typeof mcpServerInput>;
+
+export const mcpSettingsUpdateInput = mcpServerInput.extend({
+  displayName: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+  serverUrl: z.string().url().optional(),
+  selectedTools: z.array(z.string().min(1)).optional(),
+  apiKey: z.string().optional(),
+  clearApiKey: z.boolean().optional(),
+});
+
+export type McpSettingsUpdateInput = z.output<typeof mcpSettingsUpdateInput>;
+
+export const mcpSettingsDeleteInput = mcpServerInput;
+
+export type McpSettingsDeleteInput = z.output<typeof mcpSettingsDeleteInput>;
+
+export const mcpToolsListInput = mcpServerInput.extend({
+  serverUrl: z.string().url().optional(),
+});
+
+export type McpToolsListInput = z.output<typeof mcpToolsListInput>;
 
 export const wikiTreeInput = z.object({
   includeRaw: z.boolean().default(false),
@@ -225,8 +385,14 @@ export interface WebApiServices {
   chatModelStatus(): Promise<ChatModelStatus>;
   listChatModels(input: ChatModelsListInput): Promise<{ models: ChatModelSummary[] }>;
   listChatFiles(input: ChatFilesListInput): { entries: ChatFileEntry[] };
+  listChatSkills(input: ChatSkillsListInput): Promise<{ skills: ChatSkillEntry[] }>;
+  invokeChatSkill(input: ChatSkillInvokeInput): Promise<ChatSkillInvocation>;
   listActiveChatRuns(): { runs: ChatActiveRunSummary[] };
   getChatRun(input: ChatRunGetInput): { run: ChatActiveRunSummary | null };
+  listChatQueuedMessages(input: ChatQueueTargetInput): { messages: ChatQueuedMessageSummary[] };
+  addChatQueuedMessage(input: ChatQueueAddInput): Promise<ChatQueuedMessageSummary>;
+  removeChatQueuedMessage(input: ChatQueueRemoveInput): Promise<{ removed: boolean }>;
+  clearChatQueuedMessages(input: ChatQueueTargetInput): Promise<{ removed: number }>;
   listChatSessions(input: ChatSessionsListInput): Promise<{ sessions: ChatSessionSummary[] }>;
   getChatSession(input: ChatSessionGetInput): Promise<ChatSessionDetail | null>;
   forkChatSession(input: ChatSessionForkInput): Promise<ChatSessionDetail>;
@@ -234,6 +400,16 @@ export interface WebApiServices {
   searchChatSessions(input: ChatSessionsSearchInput): Promise<{ sessions: ChatSessionSummary[] }>;
   getWikiTree(input: WikiTreeInput): Promise<{ tree: WikiTreeEntry[] }>;
   getWikiPage(input: WikiPageGetInput): Promise<WikiPageDetail>;
+
+  modelAuthStatus(): Promise<ModelAuthStatus>;
+  startModelAuth(input: ModelAuthStartInput): Promise<ModelAuthStartResult>;
+  completeModelAuth(input: ModelAuthCompleteInput): Promise<ModelAuthStatus>;
+  disconnectModelAuth(input: ModelAuthProviderInput): Promise<ModelAuthStatus>;
+
+  mcpSettingsStatus(): Promise<McpSettingsStatus>;
+  updateMcpSettings(input: McpSettingsUpdateInput): Promise<McpSettingsStatus>;
+  deleteMcpSettings(input: McpSettingsDeleteInput): Promise<McpSettingsStatus>;
+  listMcpTools(input: McpToolsListInput): Promise<{ tools: McpToolSummary[] }>;
 
   connectorSummaries(): ConnectorSummary[];
 
@@ -271,11 +447,33 @@ export const appRouter = t.router({
         .input(chatFilesListInput)
         .query(({ ctx, input }) => ctx.services.listChatFiles(input)),
     }),
+    skills: t.router({
+      list: t.procedure
+        .input(chatSkillsListInput)
+        .query(({ ctx, input }) => ctx.services.listChatSkills(input)),
+      invoke: t.procedure
+        .input(chatSkillInvokeInput)
+        .query(({ ctx, input }) => ctx.services.invokeChatSkill(input)),
+    }),
     runs: t.router({
       active: t.procedure.query(({ ctx }) => ctx.services.listActiveChatRuns()),
       get: t.procedure
         .input(chatRunGetInput)
         .query(({ ctx, input }) => ctx.services.getChatRun(input)),
+    }),
+    queue: t.router({
+      list: t.procedure
+        .input(chatQueueTargetInput)
+        .query(({ ctx, input }) => ctx.services.listChatQueuedMessages(input)),
+      add: t.procedure
+        .input(chatQueueAddInput)
+        .mutation(({ ctx, input }) => ctx.services.addChatQueuedMessage(input)),
+      remove: t.procedure
+        .input(chatQueueRemoveInput)
+        .mutation(({ ctx, input }) => ctx.services.removeChatQueuedMessage(input)),
+      clear: t.procedure
+        .input(chatQueueTargetInput)
+        .mutation(({ ctx, input }) => ctx.services.clearChatQueuedMessages(input)),
     }),
     sessions: t.router({
       list: t.procedure
@@ -302,6 +500,34 @@ export const appRouter = t.router({
     page: t.procedure
       .input(wikiPageGetInput)
       .query(({ ctx, input }) => ctx.services.getWikiPage(input)),
+  }),
+  auth: t.router({
+    models: t.router({
+      status: t.procedure.query(({ ctx }) => ctx.services.modelAuthStatus()),
+      start: t.procedure
+        .input(modelAuthStartInput)
+        .mutation(({ ctx, input }) => ctx.services.startModelAuth(input)),
+      complete: t.procedure
+        .input(modelAuthCompleteInput)
+        .mutation(({ ctx, input }) => ctx.services.completeModelAuth(input)),
+      disconnect: t.procedure
+        .input(modelAuthProviderInput)
+        .mutation(({ ctx, input }) => ctx.services.disconnectModelAuth(input)),
+    }),
+  }),
+  mcps: t.router({
+    status: t.procedure.query(({ ctx }) => ctx.services.mcpSettingsStatus()),
+    update: t.procedure
+      .input(mcpSettingsUpdateInput)
+      .mutation(({ ctx, input }) => ctx.services.updateMcpSettings(input)),
+    delete: t.procedure
+      .input(mcpSettingsDeleteInput)
+      .mutation(({ ctx, input }) => ctx.services.deleteMcpSettings(input)),
+    tools: t.router({
+      list: t.procedure
+        .input(mcpToolsListInput)
+        .query(({ ctx, input }) => ctx.services.listMcpTools(input)),
+    }),
   }),
   connectors: t.router({
     list: t.procedure.query(({ ctx }) => ({

@@ -29,9 +29,14 @@ export async function loadPreferences(runtimeDir: string): Promise<Preferences> 
   }
   const obj = parsed as Record<string, unknown>;
   const out: Preferences = {};
-  if (obj.provider === "openai-codex" || obj.provider === "openai-compatible") {
+  if (
+    obj.provider === "openai-codex" ||
+    obj.provider === "openai-compatible" ||
+    obj.provider === "anthropic-claude"
+  ) {
     out.provider = obj.provider;
   }
+
   if (typeof obj.model === "string" && obj.model !== "") {
     out.model = obj.model;
   }

@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { getStrataPaths, type JsonObject, type JsonValue, type StrataPaths } from "@strata/core";
 import { nowIso, safeJsonStringify } from "@strata/core/events";
+import { QueueChangeStore, type QueueChangeTarget } from "./queueChangeStore.js";
 
 export type ChatRunStatus = "running" | "completed" | "failed" | "interrupted";
 
@@ -33,6 +34,29 @@ export interface CreateChatRunRecordInput {
   continueSessionId?: string;
 }
 
+export interface ChatQueuedMessageRecord {
+  id: string;
+  sessionId?: string;
+  runId?: string;
+  message: string;
+  attachments: JsonValue;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+  createdAt: string;
+}
+
+export type ChatQueueTarget = QueueChangeTarget;
+
+export interface AddChatQueuedMessageInput extends ChatQueueTarget {
+  id: string;
+  message: string;
+  attachments?: JsonValue;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+}
+
 export interface FinishChatRunInput {
   status: Exclude<ChatRunStatus, "running">;
   stoppedReason?: string;
@@ -43,6 +67,7 @@ export interface FinishChatRunInput {
 export class ChatRunStore {
   private readonly paths: StrataPaths;
   private readonly db: Database;
+  private readonly queueChanges: QueueChangeStore;
 
   constructor(repoRoot?: string) {
     this.paths = getStrataPaths(repoRoot);
@@ -50,10 +75,12 @@ export class ChatRunStore {
     this.db = new Database(this.paths.stateDbPath, { create: true });
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.run("PRAGMA foreign_keys = ON");
+    this.queueChanges = new QueueChangeStore(repoRoot);
     this.ensureSchema();
   }
 
   close(): void {
+    this.queueChanges.close();
     this.db.close();
   }
 
@@ -195,6 +222,106 @@ export class ChatRunStore {
     return row === null ? undefined : rowToRun(row);
   }
 
+  listQueuedMessages(target: ChatQueueTarget): ChatQueuedMessageRecord[] {
+    const rows = this.queuedMessageRows(target);
+    return rows.map(rowToQueuedMessage);
+  }
+
+  addQueuedMessage(input: AddChatQueuedMessageInput): ChatQueuedMessageRecord {
+    if (input.sessionId === undefined && input.runId === undefined) {
+      throw new Error("Queued message requires a session id or run id.");
+    }
+    const ts = nowIso();
+    this.db
+      .query(
+        `
+          insert into web_chat_queued_messages (
+            id, session_id, run_id, message, attachments_json,
+            provider, model, reasoning_effort, created_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        input.id,
+        input.sessionId ?? null,
+        input.runId ?? null,
+        input.message,
+        safeJsonStringify(input.attachments ?? []),
+        input.provider ?? null,
+        input.model ?? null,
+        input.reasoningEffort ?? null,
+        ts,
+      );
+    this.recordQueueChange(input);
+    return this.requiredQueuedMessage(input.id);
+  }
+
+  getQueuedMessage(id: string): ChatQueuedMessageRecord | undefined {
+    const row = this.db
+      .query("select * from web_chat_queued_messages where id = ?")
+      .get(id) as ChatQueuedMessageRow | null;
+    return row === null ? undefined : rowToQueuedMessage(row);
+  }
+
+  removeQueuedMessage(id: string): boolean {
+    const existing = this.getQueuedMessage(id);
+    const result = this.db.query("delete from web_chat_queued_messages where id = ?").run(id);
+    const removed = Number(result.changes) > 0;
+    if (removed && existing !== undefined) {
+      this.recordQueueChange(existing);
+    }
+    return removed;
+  }
+
+  clearQueuedMessages(target: ChatQueueTarget): number {
+    const rows = this.queuedMessageRows(target);
+    if (rows.length === 0) {
+      return 0;
+    }
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => "?").join(", ");
+    const result = this.db
+      .query(`delete from web_chat_queued_messages where id in (${placeholders})`)
+      .run(...ids);
+    const removed = Number(result.changes);
+    if (removed > 0) {
+      this.recordQueueChange(target);
+    }
+    return removed;
+  }
+
+  migrateQueuedMessagesToSession(runId: string, sessionId: string): number {
+    const result = this.db
+      .query(
+        `
+          update web_chat_queued_messages
+          set session_id = ?, run_id = null
+          where run_id = ? and session_id is null
+        `,
+      )
+      .run(sessionId, runId);
+    const migrated = Number(result.changes);
+    if (migrated > 0) {
+      this.recordQueueChange({ sessionId, runId });
+    }
+    return migrated;
+  }
+
+  peekNextQueuedMessage(sessionId: string): ChatQueuedMessageRecord | undefined {
+    const row = this.db
+      .query(
+        `
+          select *
+          from web_chat_queued_messages
+          where session_id = ?
+          order by created_at asc, id asc
+          limit 1
+        `,
+      )
+      .get(sessionId) as ChatQueuedMessageRow | null;
+    return row === null ? undefined : rowToQueuedMessage(row);
+  }
+
   listEvents(runId: string, afterEventId = 0): ChatRunEventRecord[] {
     const rows = this.db
       .query(
@@ -236,12 +363,73 @@ export class ChatRunStore {
     return recovered;
   }
 
+  private recordQueueChange(target: ChatQueueTarget): void {
+    if (target.sessionId === undefined && target.runId === undefined) {
+      return;
+    }
+    this.queueChanges.appendQueueChange(target);
+  }
+
   private requiredRun(runId: string): ChatRunRecord {
     const run = this.getRun(runId);
     if (run === undefined) {
       throw new Error(`Chat run was not persisted: ${runId}`);
     }
     return run;
+  }
+
+  private requiredQueuedMessage(id: string): ChatQueuedMessageRecord {
+    const row = this.db
+      .query("select * from web_chat_queued_messages where id = ?")
+      .get(id) as ChatQueuedMessageRow | null;
+    if (row === null) {
+      throw new Error(`Queued chat message was not persisted: ${id}`);
+    }
+    return rowToQueuedMessage(row);
+  }
+
+  private queuedMessageRows(target: ChatQueueTarget): ChatQueuedMessageRow[] {
+    if (target.sessionId === undefined && target.runId === undefined) {
+      return [];
+    }
+    if (target.sessionId !== undefined && target.runId !== undefined) {
+      return this.db
+        .query(
+          `
+            select *
+            from web_chat_queued_messages
+            where session_id = ? or run_id = ?
+            order by created_at asc, id asc
+          `,
+        )
+        .all(target.sessionId, target.runId) as ChatQueuedMessageRow[];
+    }
+    if (target.sessionId !== undefined) {
+      return this.db
+        .query(
+          `
+            select *
+            from web_chat_queued_messages
+            where session_id = ?
+            order by created_at asc, id asc
+          `,
+        )
+        .all(target.sessionId) as ChatQueuedMessageRow[];
+    }
+    const runId = target.runId;
+    if (runId === undefined) {
+      return [];
+    }
+    return this.db
+      .query(
+        `
+          select *
+          from web_chat_queued_messages
+          where run_id = ?
+          order by created_at asc, id asc
+        `,
+      )
+      .all(runId) as ChatQueuedMessageRow[];
   }
 
   private ensureSchema(): void {
@@ -279,6 +467,28 @@ export class ChatRunStore {
     this.db.run(`
       create index if not exists idx_web_chat_run_events_run_id
       on web_chat_run_events(run_id, id)
+    `);
+    this.db.run(`
+      create table if not exists web_chat_queued_messages (
+        id text primary key,
+        session_id text,
+        run_id text,
+        message text not null,
+        attachments_json text not null,
+        provider text,
+        model text,
+        reasoning_effort text,
+        created_at text not null,
+        check (session_id is not null or run_id is not null)
+      )
+    `);
+    this.db.run(`
+      create index if not exists idx_web_chat_queued_messages_session
+      on web_chat_queued_messages(session_id, created_at, id)
+    `);
+    this.db.run(`
+      create index if not exists idx_web_chat_queued_messages_run
+      on web_chat_queued_messages(run_id, created_at, id)
     `);
   }
 
@@ -384,6 +594,18 @@ interface ChatRunEventRow {
   payload_json: string;
 }
 
+interface ChatQueuedMessageRow {
+  id: string;
+  session_id: string | null;
+  run_id: string | null;
+  message: string;
+  attachments_json: string;
+  provider: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
+  created_at: string;
+}
+
 function rowToRun(row: ChatRunRow): ChatRunRecord {
   return {
     runId: row.run_id,
@@ -407,5 +629,19 @@ function rowToEvent(row: ChatRunEventRow): ChatRunEventRecord {
     ts: row.ts,
     type: row.type,
     payload: JSON.parse(row.payload_json) as JsonObject,
+  };
+}
+
+function rowToQueuedMessage(row: ChatQueuedMessageRow): ChatQueuedMessageRecord {
+  return {
+    id: row.id,
+    ...(row.session_id === null ? {} : { sessionId: row.session_id }),
+    ...(row.run_id === null ? {} : { runId: row.run_id }),
+    message: row.message,
+    attachments: JSON.parse(row.attachments_json) as JsonValue,
+    ...(row.provider === null ? {} : { provider: row.provider }),
+    ...(row.model === null ? {} : { model: row.model }),
+    ...(row.reasoning_effort === null ? {} : { reasoningEffort: row.reasoning_effort }),
+    createdAt: row.created_at,
   };
 }

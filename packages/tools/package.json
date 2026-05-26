@@ -13,9 +13,11 @@
     "./session-tools": "./src/sessionTools.ts",
     "./skill-tools": "./src/skillTools.ts",
     "./todo-tools": "./src/todoTools.ts",
+    "./tool-packs": "./src/toolPacks.ts",
     "./wiki-tools": "./src/wikiTools.ts",
     "./types": "./src/types.ts"
   },
+
   "dependencies": {
     "@strata/core": "workspace:*"
   },

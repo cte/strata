@@ -94,7 +94,7 @@ export interface RawToWikiIndexOptions {
 export interface RawToWikiIndexItem {
   source: RawToWikiSource;
   rawPath: string;
-  primaryKind: "meeting" | "project" | "thread";
+  primaryKind: "meeting" | "project" | "source" | "thread";
   primaryPath: string;
   title: string;
   date: string;
@@ -155,7 +155,7 @@ interface SourceWikiDraft {
   sourceUrl: string | null;
   body: string;
   summary: string;
-  primaryKind: "project" | "thread";
+  primaryKind: "project" | "source" | "thread";
   primaryPath: string;
   peopleCandidates: string[];
   projectCandidates: string[];
@@ -714,7 +714,7 @@ function buildSlackSourceDraft(
   const summary = slackSummary(messages, title);
   const channel = parsed.scalars.channel || "slack";
   const threadTs = parsed.scalars.thread_ts || slugify(title, "thread");
-  const primarySlug = `${slugify(channel)}-${slackTsSlug(threadTs)}-${slugify(title, "thread")}`;
+  const primarySlug = `${date}-${slackTsSlug(threadTs)}-${slugify(title, "thread")}`;
   return {
     source: "slack",
     rawPath,
@@ -723,13 +723,13 @@ function buildSlackSourceDraft(
     sourceUrl: parsed.scalars.source_url || null,
     body,
     summary,
-    primaryKind: "thread",
-    primaryPath: path.join("wiki", "threads", `${primarySlug}.md`),
+    primaryKind: "source",
+    primaryPath: path.join("wiki", "sources", "slack", slugify(channel), `${primarySlug}.md`),
     peopleCandidates: slackParticipantsFromHeadings(body).slice(0, 16),
     projectCandidates: slackProjectLabelsFromTitleAndBody(title, body).slice(0, 8),
     actionCandidates: candidateLines(summary, ACTION_PATTERNS, 8),
     decisionCandidates: candidateLines(summary, DECISION_PATTERNS, 8),
-    threadCandidates: threadCandidatesForSource(summary, 6),
+    threadCandidates: promotedSlackThreadCandidates(summary, 3),
     metadata: parsed,
   };
 }
@@ -1674,7 +1674,7 @@ async function updateSourceWikiIndex(
   next = updateFrontmatterScalar(next, "last_updated", plan.draft.date);
   if (plan.draft.primaryKind === "project") {
     next = upsertIndexEntry(next, "Projects", plan.draft.primaryPath, plan.draft.title);
-  } else {
+  } else if (plan.draft.primaryKind === "thread") {
     next = upsertIndexEntry(next, "Threads", plan.draft.primaryPath, plan.draft.title);
   }
   for (const person of plan.classified.people) {
@@ -2351,6 +2351,17 @@ function threadCandidatesForSource(summary: string, limit: number): CandidateLin
   );
 }
 
+function promotedSlackThreadCandidates(summary: string, limit: number): CandidateLine[] {
+  return candidateLines(
+    summary,
+    [
+      /\b(blocked|unresolved|open issue|open question|decision needed|need to decide)\b/i,
+      /\b(risk|concern|follow[- ]?up|owner:|due:|next step)\b/i,
+    ],
+    limit,
+  );
+}
+
 function sourceNoteLine(draft: SourceWikiDraft): string {
   return `- ${draft.date}: ${wikiLink(draft.primaryPath, draft.title)} (${sourceLink(draft.rawPath)})`;
 }
@@ -2446,6 +2457,49 @@ function formatSourcePrimaryPage(
       "## Source Notes",
       "",
       sourceNoteLine(draft),
+      "",
+      "## Source",
+      "",
+      ...formatSourceLines(draft),
+      "",
+    ].join("\n");
+  }
+  if (draft.primaryKind === "source") {
+    return [
+      frontmatter({
+        type: `${draft.source}_source`,
+        source_type: draft.source,
+        title: draft.title,
+        source: draft.rawPath.replace(/^wiki\//, ""),
+        last_updated: draft.date,
+        indexed_at: now.toISOString(),
+      }).trimEnd(),
+      "",
+      `# ${draft.title}`,
+      "",
+      "## Summary",
+      "",
+      draft.summary,
+      "",
+      "## Projects",
+      "",
+      formatEntityLinks(classified.projects),
+      "",
+      "## Decisions",
+      "",
+      formatEntityLinks(classified.decisions),
+      "",
+      "## Actions",
+      "",
+      formatActionBullets(classified.actions),
+      "",
+      "## Promoted Threads",
+      "",
+      formatEntityLinks(classified.threads),
+      "",
+      "## Timeline",
+      "",
+      sourceTimelineLine(draft),
       "",
       "## Source",
       "",

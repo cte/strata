@@ -19,11 +19,26 @@ export type NotionMcpStartResult = RouterOutput["connectors"]["notion"]["mcp"]["
 export type NotionMcpToolsResult = RouterOutput["connectors"]["notion"]["mcp"]["listTools"];
 export type GranolaStatus = RouterOutput["connectors"]["granola"]["status"];
 export type GranolaConfigureInput = RouterInput["connectors"]["granola"]["configure"];
+export type ModelAuthStatus = RouterOutput["auth"]["models"]["status"];
+export type ModelAuthProviderStatus = ModelAuthStatus["providers"][number];
+export type ModelAuthProviderName = ModelAuthProviderStatus["provider"];
+export type ModelAuthStartResult = RouterOutput["auth"]["models"]["start"];
+export type McpSettingsStatus = RouterOutput["mcps"]["status"];
+export type McpServerStatus = McpSettingsStatus["servers"][number];
+export type McpSettingsUpdateInput = RouterInput["mcps"]["update"];
+export type McpToolSummary = RouterOutput["mcps"]["tools"]["list"]["tools"][number];
 export type ChatModelStatus = RouterOutput["chat"]["models"]["status"];
+
 export type ChatModelSummary = RouterOutput["chat"]["models"]["list"]["models"][number];
 export type ChatFileEntry = RouterOutput["chat"]["files"]["list"]["entries"][number];
+export type ChatSkillEntry = RouterOutput["chat"]["skills"]["list"]["skills"][number];
+export type ChatSkillInvocation = RouterOutput["chat"]["skills"]["invoke"];
 export type ChatActiveRunSummary = RouterOutput["chat"]["runs"]["active"]["runs"][number];
 export type ChatRunSummary = NonNullable<RouterOutput["chat"]["runs"]["get"]["run"]>;
+export type ChatQueuedMessageSummary = RouterOutput["chat"]["queue"]["list"]["messages"][number];
+export type ChatQueuedMessageAddInput = RouterInput["chat"]["queue"]["add"];
+export type ChatQueueTargetInput = RouterInput["chat"]["queue"]["list"];
+export type ChatQueueTarget = { sessionId?: string; runId?: string };
 export type ChatSessionSummary = RouterOutput["chat"]["sessions"]["list"]["sessions"][number];
 export type ChatSessionDetail = NonNullable<RouterOutput["chat"]["sessions"]["get"]>;
 export type ChatSessionDeleteResult = RouterOutput["chat"]["sessions"]["delete"];
@@ -42,7 +57,8 @@ export interface StartChatRunRequest {
   message: string;
   continueSessionId?: string;
   model?: string;
-  provider?: "openai-codex" | "openai-compatible";
+  provider?: "openai-codex" | "openai-compatible" | "anthropic-claude";
+
   reasoningEffort?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   attachments?: ChatImageAttachment[];
 }
@@ -90,6 +106,50 @@ export async function disconnectGranola(): Promise<GranolaStatus> {
   return trpc.connectors.granola.disconnect.mutate();
 }
 
+export async function getModelAuthStatus(): Promise<ModelAuthStatus> {
+  return trpc.auth.models.status.query();
+}
+
+export async function startModelAuth(
+  provider: ModelAuthProviderName,
+  origin: string,
+): Promise<ModelAuthStartResult> {
+  return trpc.auth.models.start.mutate({ provider, origin });
+}
+
+export async function completeModelAuth(
+  provider: ModelAuthProviderName,
+  authorizationResponse: string,
+): Promise<ModelAuthStatus> {
+  return trpc.auth.models.complete.mutate({ provider, authorizationResponse });
+}
+
+export async function disconnectModelAuth(
+  provider: ModelAuthProviderName,
+): Promise<ModelAuthStatus> {
+  return trpc.auth.models.disconnect.mutate({ provider });
+}
+
+export async function getMcpSettingsStatus(): Promise<McpSettingsStatus> {
+  return trpc.mcps.status.query();
+}
+
+export async function updateMcpSettings(input: McpSettingsUpdateInput): Promise<McpSettingsStatus> {
+  return trpc.mcps.update.mutate(input);
+}
+
+export async function deleteMcpSettings(slug: string): Promise<McpSettingsStatus> {
+  return trpc.mcps.delete.mutate({ slug });
+}
+
+export async function listMcpTools(slug: string, serverUrl?: string): Promise<McpToolSummary[]> {
+  const body = await trpc.mcps.tools.list.query({
+    slug,
+    ...(serverUrl === undefined ? {} : { serverUrl }),
+  });
+  return body.tools;
+}
+
 export async function getChatModelStatus(): Promise<ChatModelStatus> {
   return trpc.chat.models.status.query();
 }
@@ -106,6 +166,15 @@ export async function listChatFiles(query: string, limit = 20): Promise<ChatFile
   return body.entries;
 }
 
+export async function listChatSkills(query: string, limit = 40): Promise<ChatSkillEntry[]> {
+  const body = await trpc.chat.skills.list.query({ query, limit });
+  return body.skills;
+}
+
+export async function invokeChatSkill(name: string, args: string): Promise<ChatSkillInvocation> {
+  return trpc.chat.skills.invoke.query({ name, args });
+}
+
 export async function listActiveChatRuns(): Promise<ChatActiveRunSummary[]> {
   const body = await trpc.chat.runs.active.query();
   return body.runs;
@@ -114,6 +183,29 @@ export async function listActiveChatRuns(): Promise<ChatActiveRunSummary[]> {
 export async function getChatRun(runId: string): Promise<ChatRunSummary | null> {
   const body = await trpc.chat.runs.get.query({ runId });
   return body.run;
+}
+
+export async function listChatQueuedMessages(
+  target: ChatQueueTarget,
+): Promise<ChatQueuedMessageSummary[]> {
+  const body = await trpc.chat.queue.list.query(target as ChatQueueTargetInput);
+  return body.messages;
+}
+
+export async function addChatQueuedMessage(
+  input: ChatQueuedMessageAddInput,
+): Promise<ChatQueuedMessageSummary> {
+  return trpc.chat.queue.add.mutate(input);
+}
+
+export async function removeChatQueuedMessage(id: string): Promise<boolean> {
+  const body = await trpc.chat.queue.remove.mutate({ id });
+  return body.removed;
+}
+
+export async function clearChatQueuedMessages(target: ChatQueueTarget): Promise<number> {
+  const body = await trpc.chat.queue.clear.mutate(target as ChatQueueTargetInput);
+  return body.removed;
 }
 
 export async function listChatSessions(limit = 20): Promise<ChatSessionSummary[]> {
@@ -220,6 +312,68 @@ async function readChatEventStream(
   const finalEvent = parseSseFrame(buffer);
   if (finalEvent !== null) {
     onEvent(finalEvent.event, finalEvent.meta);
+  }
+}
+
+/** Notice from the local change feed that some sessions advanced. */
+export interface SessionChangeNotice {
+  sessionIds: string[];
+  maxEventId: number;
+  queue?: {
+    sessionIds: string[];
+    runIds: string[];
+    maxQueueChangeId: number;
+  };
+}
+
+/**
+ * Subscribe to the local realtime change feed (`GET /api/changes`). Resolves
+ * when the stream ends; callers reconnect. Each notice names sessions and/or
+ * web-chat queues that changed anywhere (this tab, another tab, or the CLI/TUI).
+ */
+export async function streamSessionChanges(
+  onNotice: (notice: SessionChangeNotice) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const init: RequestInit = {};
+  if (signal !== undefined) {
+    init.signal = signal;
+  }
+  const response = await fetch("/api/changes", init);
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response));
+  }
+  if (response.body === null) {
+    throw new Error("Change feed did not include a response body.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const emit = (frame: string): void => {
+    const dataLine = frame
+      .trim()
+      .split("\n")
+      .find((line) => line.startsWith("data: "));
+    if (dataLine === undefined) {
+      return;
+    }
+    try {
+      onNotice(JSON.parse(dataLine.slice("data: ".length)) as SessionChangeNotice);
+    } catch {
+      // Ignore malformed frames (e.g. heartbeats).
+    }
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      emit(frame);
+    }
   }
 }
 

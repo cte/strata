@@ -4,6 +4,7 @@ import { ensureRuntimeDirs, getStrataPaths } from "@strata/core";
 import { loadDotenv } from "@strata/ingest/common";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import type { SessionChangeNotice } from "./changeFeed.js";
 import {
   ChatRunConflictError,
   type ChatRunEvent,
@@ -12,7 +13,9 @@ import {
   type StartChatRunInput,
   type StartedChatRun,
 } from "./chat.js";
+import { finishModelAuth } from "./modelAuth.js";
 import { finishNotionMcpAuth } from "./notionMcp.js";
+
 import {
   connectorSummaries,
   createWebApiServices,
@@ -56,10 +59,24 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
   app.get("/api/connectors/notion/mcp/callback", async (c) => {
     try {
       const result = await finishNotionMcpAuth(c.req.url, options);
-      return c.html(callbackRedirectHtml({ status: "ok", message: result.message }));
+      return c.html(
+        callbackRedirectHtml("/connectors/notion", { status: "ok", message: result.message }),
+      );
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      return c.html(callbackRedirectHtml({ status: "error", message }), 400);
+      return c.html(callbackRedirectHtml("/connectors/notion", { status: "error", message }), 400);
+    }
+  });
+
+  app.get("/api/auth/models/:provider/callback", async (c) => {
+    try {
+      const result = await finishModelAuth(c.req.url, c.req.param("provider"), options);
+      return c.html(
+        callbackRedirectHtml("/settings/models", { status: "ok", message: result.message }),
+      );
+    } catch (cause: unknown) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      return c.html(callbackRedirectHtml("/settings/models", { status: "error", message }), 400);
     }
   });
 
@@ -125,6 +142,14 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
     );
   });
 
+  app.get("/api/changes", (c) =>
+    streamSessionChanges(
+      services.changes.subscribe(),
+      c.req.raw.signal,
+      positiveNumber(options.chatStreamHeartbeatMs, CHAT_STREAM_HEARTBEAT_MS),
+    ),
+  );
+
   app.use(
     "/api/trpc/*",
     trpcServer({
@@ -182,12 +207,16 @@ if (import.meta.main) {
   await startWebApiServer();
 }
 
-function callbackRedirectHtml(opts: { status: "ok" | "error"; message: string }): string {
+function callbackRedirectHtml(
+  path: string,
+  opts: { status: "ok" | "error"; message: string },
+): string {
   const params = new URLSearchParams({
     status: opts.status,
     message: opts.message,
   }).toString();
-  const target = escapeAttr(`/connectors/notion?${params}`);
+  const target = escapeAttr(`${path}?${params}`);
+
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -209,7 +238,8 @@ function escapeAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
-const CHAT_PROVIDERS = new Set(["openai-codex", "openai-compatible"]);
+const CHAT_PROVIDERS = new Set(["openai-codex", "openai-compatible", "anthropic-claude"]);
+
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
 async function parseStartChatRunInput(request: Request): Promise<StartChatRunInput> {
@@ -233,7 +263,7 @@ async function parseStartChatRunInput(request: Request): Promise<StartChatRunInp
   }
   if (raw.provider !== undefined) {
     if (typeof raw.provider !== "string" || !CHAT_PROVIDERS.has(raw.provider)) {
-      throw new Error("provider must be openai-codex or openai-compatible.");
+      throw new Error("provider must be openai-codex, openai-compatible, or anthropic-claude.");
     }
     input.provider = raw.provider as NonNullable<StartChatRunInput["provider"]>;
   }
@@ -356,6 +386,69 @@ function streamChatRunEvents(
     cancel: () => closeStream("reader_cancelled"),
   });
 
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+function streamSessionChanges(
+  notices: AsyncIterable<SessionChangeNotice>,
+  requestSignal: AbortSignal,
+  heartbeatMs: number,
+): Response {
+  const encoder = new TextEncoder();
+  let closed = false;
+  let iterator: AsyncIterator<SessionChangeNotice> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const stop = () => {
+        if (!closed) {
+          closed = true;
+          void iterator?.return?.();
+        }
+      };
+      requestSignal.addEventListener("abort", stop, { once: true });
+      iterator = notices[Symbol.asyncIterator]();
+      const heartbeat = setInterval(() => {
+        if (closed) {
+          return;
+        }
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          stop();
+        }
+      }, heartbeatMs);
+      try {
+        while (!closed) {
+          const next = await iterator.next();
+          if (next.done === true) {
+            break;
+          }
+          controller.enqueue(
+            encoder.encode(`event: changed\ndata: ${JSON.stringify(next.value)}\n\n`),
+          );
+        }
+      } catch {
+        // Stream torn down; fall through to cleanup.
+      } finally {
+        clearInterval(heartbeat);
+        requestSignal.removeEventListener("abort", stop);
+        if (!closed) {
+          controller.close();
+        }
+      }
+    },
+    cancel: () => {
+      closed = true;
+      void iterator?.return?.();
+    },
+  });
   return new Response(stream, {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",

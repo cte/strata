@@ -1,39 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { AttachmentData } from "@/components/ai-elements/attachments";
+import type { ChatQueuedMessageSummary } from "@/lib/api";
 import {
-  appendQueuedChatMessage,
-  dequeueQueuedChatMessage,
   type QueuedChatMessage,
   queuedChatMessageDescription,
+  queuedChatMessageFromSummary,
   queuedChatMessageLabel,
-  removeQueuedChatMessage,
 } from "@/lib/chatMessageQueue";
 
 describe("chat message queue", () => {
-  test("appends and dequeues messages in FIFO order", () => {
-    const queue = appendQueuedChatMessage(
-      appendQueuedChatMessage([], message("first")),
-      message("second"),
-    );
-
-    const first = dequeueQueuedChatMessage(queue);
-    const second = dequeueQueuedChatMessage(first.queue);
-
-    assert.equal(first.next?.message, "first");
-    assert.equal(second.next?.message, "second");
-    assert.deepEqual(second.queue, []);
-  });
-
-  test("removes queued messages by id", () => {
-    const queue = [message("keep", "1"), message("remove", "2"), message("also keep", "3")];
-
-    assert.deepEqual(
-      removeQueuedChatMessage(queue, "2").map((item) => item.id),
-      ["1", "3"],
-    );
-  });
-
   test("labels attachment-only messages from the attachment", () => {
     const queued = message("", "1", [
       {
@@ -47,6 +23,32 @@ describe("chat message queue", () => {
 
     assert.equal(queuedChatMessageLabel(queued), "screenshot.png");
     assert.equal(queuedChatMessageDescription(queued), "1 attachment");
+  });
+
+  test("maps durable queue summaries into prompt queue messages", () => {
+    const queued = queuedChatMessageFromSummary({
+      id: "queued-1",
+      sessionId: "session-1",
+      message: "follow up",
+      attachments: [
+        {
+          id: "att-1",
+          type: "file",
+          mediaType: "image/png",
+          filename: "screenshot.png",
+          url: "data:image/png;base64,",
+        },
+        { bad: true },
+      ],
+      createdAt: "2026-05-26T00:00:00.000Z",
+    } satisfies ChatQueuedMessageSummary);
+
+    assert.equal(queued.id, "queued-1");
+    assert.equal(queued.message, "follow up");
+    assert.deepEqual(
+      queued.attachments.map((attachment) => attachment.id),
+      ["att-1"],
+    );
   });
 });
 

@@ -26,7 +26,7 @@ Patterns worth adapting:
 Patterns to avoid or defer:
 
 - Do not create a single giant interactive-mode class. Pi's controller is powerful, but Strata should split controller, state reducer, command registry, components, and runtime bindings.
-- Do not implement extensions, custom UI plugin APIs, terminal image protocols, theme hot reload, full settings UI, keybinding customization, session tree/fork flows, or compaction UI in the first pass.
+- Do not implement extensions, custom UI plugin APIs, terminal image protocols, theme hot reload, full settings UI, keybinding customization, session tree/fork flows, or compaction UI in the first pass. After the extension runtime exists, add only the TUI extension hooks described in [extensions-plan.md](./extensions-plan.md).
 - Do not copy pi code wholesale. Reimplement the core ideas in smaller Strata-specific modules.
 
 Useful local reference points:

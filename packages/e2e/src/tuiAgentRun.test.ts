@@ -36,7 +36,7 @@ describe("tui ↔ agent loop integration", () => {
     const app = new StrataApp(
       runtime,
       { repoRoot, provider: "openai-compatible", model: "fake-model" },
-      { codexLoggedIn: false, apiKeyConfigured: true },
+      { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: true },
     );
     runtime.setRoot(app);
     runtime.start();

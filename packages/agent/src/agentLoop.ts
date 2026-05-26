@@ -8,6 +8,14 @@ import {
 } from "@strata/core";
 import type { ToolExecutionMode, ToolExecutionResult, ToolOutputChunk } from "@strata/tools";
 import { createDefaultToolRegistry, type ToolRegistry } from "@strata/tools";
+import {
+  buildCompactedMessageRecords,
+  type CompactSessionResult,
+  compactSession,
+  DEFAULT_AUTO_COMPACT_RESERVE_TOKENS,
+  latestPostCompactionAssistantContextTokens,
+  shouldAutoCompact,
+} from "./compaction.js";
 import { ModelAdapterError } from "./model.js";
 import { buildRunContext } from "./runContext.js";
 import type {
@@ -16,6 +24,7 @@ import type {
   AgentRunEvent,
   AgentRunResult,
   AgentToolCall,
+  ModelAdapter,
   ModelResponse,
   ModelRetryPolicy,
 } from "./types.js";
@@ -36,8 +45,10 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   let toolCallCount = 0;
   let finalAnswer = "";
   let cancelled = false;
+  let overflowRecoveryAttempted = false;
   const isAborted = (): boolean => signal !== undefined && signal.aborted;
   const retryPolicy = normalizeModelRetryPolicy(config.modelRetryPolicy);
+  const setupEvents: AgentRunEvent[] = [];
 
   const buildCancelledResult = (): AgentRunResult => ({
     sessionId: session?.id ?? "",
@@ -72,11 +83,22 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       // gets fresh memory/todos/skills, but seed the rest of the message log
       // from history so the model sees the prior turns.
       session = continuingSession;
+      const preCompactEvents = await maybeAutoCompactSession({
+        store,
+        sessionId: session.id,
+        model: config.model,
+        repoRoot,
+        contextWindow: autoCompactContextWindow(config),
+        reserveTokens: config.autoCompactReserveTokens,
+        enabled: config.autoCompact,
+        latestContextTokens: latestPostCompactionAssistantContextTokens(store, session.id),
+        signal,
+      });
+      setupEvents.push(...preCompactEvents);
       const systemMessages = runContext.messages.filter((m) => m.role === "system");
-      const priorNonSystem = store
-        .listMessages(session.id)
-        .filter((m) => m.role !== "system")
-        .map(messageRecordToAgentMessage);
+      const priorNonSystem = buildCompactedMessageRecords(store, session.id).map(
+        messageRecordToAgentMessage,
+      );
       const userMessage = runContext.messages.find((m) => m.role === "user");
       messages = [
         ...systemMessages,
@@ -123,6 +145,9 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       title: session.title,
       model: config.model.name,
     };
+    for (const event of setupEvents) {
+      yield event;
+    }
     yield { type: "message.user", content: config.question };
 
     while (true) {
@@ -214,6 +239,41 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
             cancelled = true;
             break;
           }
+          if (isContextOverflowError(settled.error)) {
+            if (overflowRecoveryAttempted) {
+              throw new Error(
+                "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+              );
+            }
+            overflowRecoveryAttempted = true;
+            const compactEvents = await maybeAutoCompactSession({
+              store,
+              sessionId: session.id,
+              model: config.model,
+              repoRoot,
+              contextWindow: autoCompactContextWindow(config),
+              reserveTokens: config.autoCompactReserveTokens,
+              enabled: config.autoCompact,
+              latestContextTokens: undefined,
+              signal,
+              reason: "overflow",
+            });
+            for (const event of compactEvents) {
+              yield event;
+            }
+            const failed = compactEvents.find((event) => event.type === "compaction.failed");
+            if (failed?.type === "compaction.failed") {
+              throw new Error(`Context overflow recovery failed: ${failed.message}`);
+            }
+            if (!compactEvents.some((event) => event.type === "compaction.completed")) {
+              throw settled.error;
+            }
+            messages = [
+              ...messages.filter((message) => message.role === "system"),
+              ...buildCompactedMessageRecords(store, session.id).map(messageRecordToAgentMessage),
+            ];
+            continue;
+          }
           const retry = modelRetryDecision(settled.error, emittedDelta, attempt, retryPolicy);
           if (retry === undefined) {
             throw settled.error;
@@ -284,6 +344,21 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
 
       if (response.toolCalls.length === 0) {
         finalAnswer = response.content;
+        const compactEvents = await maybeAutoCompactSession({
+          store,
+          sessionId: session.id,
+          model: config.model,
+          repoRoot,
+          contextWindow: autoCompactContextWindow(config),
+          reserveTokens: config.autoCompactReserveTokens,
+          enabled: config.autoCompact,
+          latestContextTokens: normalizedUsage?.total,
+          signal,
+          reason: "threshold",
+        });
+        for (const event of compactEvents) {
+          yield event;
+        }
         await store.appendEvent(session.id, "agent.loop.completed", {
           reason: "final_answer",
           iterations,
@@ -396,6 +471,35 @@ const DEFAULT_MODEL_RETRY_POLICY: NormalizedModelRetryPolicy = {
 };
 
 const RETRYABLE_MODEL_HTTP_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const CONTEXT_OVERFLOW_ERROR_PATTERNS = [
+  /prompt is too long/i,
+  /request_too_large/i,
+  /input is too long for requested model/i,
+  /exceeds the context window/i,
+  /exceeds (?:the )?(?:model'?s )?maximum context length of [\d,]+ tokens?/i,
+  /input token count.*exceeds the maximum/i,
+  /maximum prompt length is \d+/i,
+  /reduce the length of the messages/i,
+  /maximum context length is \d+ tokens/i,
+  /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i,
+  /exceeds the limit of \d+/i,
+  /exceeds the available context size/i,
+  /greater than the context length/i,
+  /context window exceeds limit/i,
+  /exceeded model token limit/i,
+  /too large for model with \d+ maximum context length/i,
+  /model_context_window_exceeded/i,
+  /prompt too long; exceeded (?:max )?context length/i,
+  /context[_ ]length[_ ]exceeded/i,
+  /too many tokens/i,
+  /token limit exceeded/i,
+  /^4(?:00|13)\s*(?:status code)?\s*\(no body\)/i,
+];
+const NON_CONTEXT_OVERFLOW_ERROR_PATTERNS = [
+  /^(Throttling error|Service unavailable):/i,
+  /rate limit/i,
+  /too many requests/i,
+];
 const RETRYABLE_NETWORK_ERROR_TEXT = [
   "overloaded",
   "provider returned error",
@@ -493,6 +597,9 @@ function modelRetryDelayMs(attempt: number, policy: NormalizedModelRetryPolicy):
 }
 
 function isRetryableModelError(error: unknown): boolean {
+  if (isContextOverflowError(error)) {
+    return false;
+  }
   if (error instanceof ModelAdapterError) {
     if (error.code === "codex_http_error" || error.code === "model_http_error") {
       const status = httpStatusFromMessage(error.message);
@@ -513,6 +620,15 @@ function isRetryableModelError(error: unknown): boolean {
   }
 
   return false;
+}
+
+function isContextOverflowError(error: unknown): boolean {
+  const message = errorMessage(error);
+  const normalized = message.replace(/[_-]+/g, " ");
+  if (NON_CONTEXT_OVERFLOW_ERROR_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+  return CONTEXT_OVERFLOW_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function hasRetryableModelErrorText(message: string): boolean {
@@ -574,6 +690,99 @@ function cancellationDetails(signal: AbortSignal | undefined): JsonObject {
     };
   }
   return { source: "abort_signal" };
+}
+
+interface AutoCompactSessionOptions {
+  store: SessionStore;
+  sessionId: string;
+  model: ModelAdapter;
+  repoRoot: string;
+  contextWindow: number | undefined;
+  reserveTokens: number | undefined;
+  enabled: boolean | undefined;
+  latestContextTokens: number | undefined;
+  signal: AbortSignal | undefined;
+  reason?: "threshold" | "overflow";
+}
+
+async function maybeAutoCompactSession(
+  options: AutoCompactSessionOptions,
+): Promise<AgentRunEvent[]> {
+  if (options.enabled === false || isSignalAborted(options.signal)) {
+    return [];
+  }
+  const reason = options.reason ?? "threshold";
+  const contextWindow = options.contextWindow;
+  const reserveTokens = options.reserveTokens ?? DEFAULT_AUTO_COMPACT_RESERVE_TOKENS;
+  if (reason === "threshold") {
+    const checkOptions: Parameters<typeof shouldAutoCompact>[0] = {
+      contextWindow,
+      latestContextTokens: options.latestContextTokens,
+      reserveTokens,
+    };
+    if (!shouldAutoCompact(checkOptions) || contextWindow === undefined) {
+      return [];
+    }
+  }
+
+  const started: Extract<AgentRunEvent, { type: "compaction.started" }> = {
+    type: "compaction.started",
+    reason,
+    latestContextTokens: options.latestContextTokens ?? 0,
+    contextWindow: contextWindow ?? 0,
+    reserveTokens,
+  };
+  await options.store.appendEvent(options.sessionId, "compaction.started", {
+    reason: started.reason,
+    latestContextTokens: started.latestContextTokens,
+    contextWindow: started.contextWindow,
+    reserveTokens: started.reserveTokens,
+  });
+
+  try {
+    const compactOptions: Parameters<typeof compactSession>[0] = {
+      sessionId: options.sessionId,
+      model: options.model,
+      repoRoot: options.repoRoot,
+      reason,
+    };
+    if (options.signal !== undefined) {
+      compactOptions.signal = options.signal;
+    }
+    const result = await compactSession(compactOptions);
+    return [started, compactCompletedEvent(result, reason)];
+  } catch (error: unknown) {
+    const message = errorMessage(error);
+    await options.store.appendEvent(options.sessionId, "compaction.failed", {
+      reason,
+      message: message.slice(0, 500),
+    });
+    return [
+      started,
+      {
+        type: "compaction.failed",
+        reason,
+        message,
+      },
+    ];
+  }
+}
+
+function compactCompletedEvent(
+  result: CompactSessionResult,
+  reason: "threshold" | "overflow",
+): Extract<AgentRunEvent, { type: "compaction.completed" }> {
+  return {
+    type: "compaction.completed",
+    reason,
+    sessionId: result.sessionId,
+    messagesSummarized: result.messagesSummarized,
+    incremental: result.incremental,
+  };
+}
+
+function autoCompactContextWindow(config: AgentRunConfig): number | undefined {
+  return config.contextWindow ?? config.model.contextWindow;
 }
 
 function isCancellationObject(value: unknown): value is Record<string, unknown> {

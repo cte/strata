@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { JsonObject, JsonValue } from "@strata/core";
+import { type JsonObject, type JsonValue, searchWikiSearchIndex } from "@strata/core";
 import { editTextFile, writeTextFile } from "./fsTools.js";
 import {
   assertReadAllowed,
@@ -189,7 +189,8 @@ const wikiReadPageTool: ToolDefinition<WikiReadPageArgs, WikiPageResult> = {
 
 const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
   name: "wiki.search",
-  description: "Search Markdown pages in the Strata wiki by case-insensitive substring.",
+  description:
+    "Search Markdown pages in the Strata wiki. Uses the local retrieval index when available, with curated pages ranked before raw sources.",
   mode: "read",
   inputSchema: {
     type: "object",
@@ -218,6 +219,17 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
       "maxFileBytes",
     );
     const root = optionalString(args.root, ".", "root").trim() || ".";
+    const indexedMatches = await searchWikiSearchIndex({
+      repoRoot: context.repoRoot,
+      query,
+      root,
+      includeRaw,
+      limit,
+    });
+    if (indexedMatches !== null && indexedMatches.length > 0) {
+      return { query, matches: indexedMatches, count: indexedMatches.length, indexed: true };
+    }
+
     const start = resolveWikiPath(context.repoRoot, root, {
       allowRoot: true,
       allowRawRead: includeRaw,
@@ -226,7 +238,7 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
       await listMarkdownPages(start.wikiRoot, start.absolutePath, includeRaw, 10_000),
     );
     const matches = await searchPages(start.wikiRoot, pages, query, limit, maxFileBytes);
-    return { query, matches, count: matches.length };
+    return { query, matches, count: matches.length, indexed: false };
   },
 };
 

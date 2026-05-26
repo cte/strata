@@ -9,6 +9,9 @@ The Slack connector is designed to become a continuous source for Strata: initia
 - `strata ingest slack thread` snapshots one explicit Slack thread.
 - `strata ingest slack sync` discovers conversations, pulls history with `conversations.history`, expands threads with `conversations.replies`, writes immutable Markdown snapshots under `wiki/raw/slack/`, and stores progress in `.strata/connectors/slack/checkpoint.json`.
 - `strata ingest slack listen` opens Slack Socket Mode, acknowledges event envelopes, and materializes the affected thread when message events arrive.
+- `strata ingest raw index --source slack` reads raw Slack snapshots, filters low-signal material, writes material source pages under `wiki/sources/slack/`, and only promotes durable decisions, actions, projects, people, or strongly unresolved open threads into the curated wiki folders.
+- `strata wiki archive-generated-slack-threads` archives legacy generated Slack thread pages from `wiki/threads` into `.strata/archive/` and rewrites wiki links to the immutable raw Slack source.
+- `strata wiki search-index refresh --source slack` refreshes the local SQLite FTS retrieval index so chat/CLI/TUI search can find Slack evidence without enumerating every Slack thread in `wiki/index.md`.
 
 The implementation lives entirely in Strata. Onyx is only a reference for Slack API mechanics; gBrain is only a reference for deterministic collector and recurring-job architecture.
 
@@ -57,6 +60,15 @@ Polling/reconciliation uses the checkpoint plus a recent lookback window:
 bun run strata ingest slack sync --lookback-minutes 360
 ```
 
+Index pulled raw snapshots into source/wiki pages and refresh retrieval:
+
+```bash
+bun run strata ingest raw index --source slack
+bun run strata wiki archive-generated-slack-threads
+bun run strata wiki compact-index
+bun run strata wiki search-index refresh --source slack
+```
+
 Socket Mode tailing:
 
 ```bash
@@ -76,4 +88,3 @@ summaries such as `hello`, `events_api`, and ignored event reasons without print
 - Add scheduled polling jobs once the scheduler/proposal milestone is ready.
 - Add user/profile resolution so raw snapshots show names in addition to Slack IDs.
 - Add explicit edit/delete tombstone handling from message subtypes.
-- Route raw Slack snapshots into the wiki proposal pipeline instead of only storing raw source material.

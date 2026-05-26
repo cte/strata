@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+
 import os from "node:os";
 import path from "node:path";
 import {
@@ -72,9 +73,183 @@ describe("web api", () => {
           provider: "openai-compatible",
           model: "gpt-test",
           codexLoggedIn: false,
+          anthropicLoggedIn: false,
           apiKeyConfigured: true,
         });
+
         expect(JSON.stringify(status)).not.toContain("secret_should_not_render");
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("manages MCP settings without exposing API keys", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: {},
+        now: new Date("2026-05-26T10:00:00.000Z"),
+      });
+      const { client, close } = createTestClient(handler);
+      try {
+        const before = await client.mcps.status.query();
+        expect(before.servers[0]).toEqual(
+          expect.objectContaining({
+            slug: "exa",
+            enabled: false,
+          }),
+        );
+
+        const after = await client.mcps.update.mutate({
+          slug: "exa",
+          enabled: true,
+          serverUrl: "https://mcp.exa.ai/mcp",
+          selectedTools: ["web_search_exa"],
+          apiKey: "secret_should_not_render",
+        });
+        expect(after.servers[0]).toEqual(
+          expect.objectContaining({
+            slug: "exa",
+            enabled: true,
+            apiKeyConfigured: true,
+            selectedTools: ["web_search_exa"],
+            headerNames: ["x-api-key"],
+          }),
+        );
+
+        expect(JSON.stringify(after)).not.toContain("secret_should_not_render");
+
+        const custom = await client.mcps.update.mutate({
+          slug: "custom-search",
+          displayName: "Custom Search",
+          serverUrl: "https://example.com/mcp",
+          selectedTools: ["search"],
+        });
+        expect(custom.servers).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ slug: "custom-search", displayName: "Custom Search" }),
+          ]),
+        );
+
+        const removed = await client.mcps.delete.mutate({ slug: "custom-search" });
+        expect(removed.servers.some((server) => server.slug === "custom-search")).toBe(false);
+
+        const stored = await readFile(
+          path.join(repoRoot, ".strata", "secrets", "mcp-servers.json"),
+          "utf8",
+        );
+        expect(stored).toContain("secret_should_not_render");
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("starts and disconnects browser model auth without exposing tokens", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const tokenRequests: Request[] = [];
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: {},
+        fetchImpl: fakeAnthropicTokenFetch(tokenRequests),
+      });
+      const { client, close } = createTestClient(handler);
+      try {
+        const before = await client.auth.models.status.query();
+        expect(before.providers).toEqual([
+          expect.objectContaining({
+            provider: "openai-codex",
+            authenticated: false,
+            state: "not_connected",
+          }),
+          expect.objectContaining({
+            provider: "anthropic-claude",
+            authenticated: false,
+            state: "not_connected",
+          }),
+        ]);
+
+        const start = await client.auth.models.start.mutate({
+          provider: "anthropic-claude",
+          origin: "https://vivid-bear.exe.xyz",
+        });
+        expect(start.provider).toBe("anthropic-claude");
+        const authorizationUrl = new URL(start.authorizationUrl);
+        expect(authorizationUrl.origin).toBe("https://claude.ai");
+
+        expect(start.callbackUrl).toBe("https://platform.claude.com/oauth/code/callback");
+        expect(authorizationUrl.searchParams.get("client_id")).toBe(
+          "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        );
+        expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(
+          "https://platform.claude.com/oauth/code/callback",
+        );
+        expect(authorizationUrl.searchParams.get("scope")).toBe(
+          "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+        );
+
+        expect(JSON.stringify(start)).not.toContain("verifier");
+
+        const pending = await client.auth.models.status.query();
+        expect(
+          pending.providers.find((provider) => provider.provider === "anthropic-claude"),
+        ).toMatchObject({ state: "auth_pending", authenticated: false });
+
+        const state = authorizationUrl.searchParams.get("state");
+        expect(state).toBeTruthy();
+        const connectedFromPaste = await client.auth.models.complete.mutate({
+          provider: "anthropic-claude",
+          authorizationResponse: `https://platform.claude.com/oauth/code/callback?code=code_123&state=${state}`,
+        });
+        expect(
+          connectedFromPaste.providers.find((provider) => provider.provider === "anthropic-claude"),
+        ).toMatchObject({ state: "connected", authenticated: true });
+        expect(tokenRequests).toHaveLength(1);
+        expect(await tokenRequests[0]?.text()).toContain(
+          "redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback",
+        );
+
+        await writeFile(
+          path.join(repoRoot, ".strata", "auth.json"),
+          JSON.stringify({
+            version: 1,
+            credentials: {
+              "anthropic-claude": {
+                type: "anthropic_oauth",
+                accessToken: "secret_access",
+                refreshToken: "secret_refresh",
+                expiresAt: 4_102_444_800_000,
+                scopes: ["user:inference"],
+                createdAt: "2026-05-25T00:00:00.000Z",
+                updatedAt: "2026-05-25T00:00:00.000Z",
+              },
+            },
+          }),
+        );
+        const connected = await client.auth.models.status.query();
+        expect(
+          connected.providers.find((provider) => provider.provider === "anthropic-claude"),
+        ).toMatchObject({ state: "connected", authenticated: true, expiresAt: 4_102_444_800_000 });
+        expect(JSON.stringify(connected)).not.toContain("secret_access");
+        expect(JSON.stringify(connected)).not.toContain("secret_refresh");
+
+        const disconnected = await client.auth.models.disconnect.mutate({
+          provider: "anthropic-claude",
+        });
+        expect(
+          disconnected.providers.find((provider) => provider.provider === "anthropic-claude"),
+        ).toMatchObject({ state: "not_connected", authenticated: false });
+        const authStore = JSON.parse(
+          await readFile(path.join(repoRoot, ".strata", "auth.json"), "utf8"),
+        ) as { credentials: Record<string, unknown> };
+        expect(authStore.credentials["anthropic-claude"]).toBeUndefined();
       } finally {
         close();
       }
@@ -106,6 +281,52 @@ describe("web api", () => {
 
         const limited = await client.chat.files.list.query({ query: "", limit: 1 });
         expect(limited.entries).toHaveLength(1);
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("lists and expands chat skill slash commands", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      await mkdir(path.join(repoRoot, ".agents/skills/diagnose"), { recursive: true });
+      await writeFile(
+        path.join(repoRoot, ".agents/skills/diagnose/SKILL.md"),
+        [
+          "---",
+          "name: diagnose",
+          "description: Debug carefully",
+          "---",
+          "",
+          "# Diagnose",
+          "Reproduce first.",
+          "",
+        ].join("\n"),
+      );
+
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        const skills = await client.chat.skills.list.query({ query: "diag", limit: 10 });
+        expect(skills.skills).toContainEqual(
+          expect.objectContaining({
+            name: "diagnose",
+            description: "Debug carefully",
+            path: path.join(".agents", "skills", "diagnose", "SKILL.md"),
+          }),
+        );
+
+        const invocation = await client.chat.skills.invoke.query({
+          name: "diagnose",
+          args: "fix the bug",
+        });
+        expect(invocation.name).toBe("diagnose");
+        expect(invocation.prompt).toContain('<skill name="diagnose"');
+        expect(invocation.prompt).toContain("# Diagnose");
+        expect(invocation.prompt).toContain("fix the bug");
       } finally {
         close();
       }
@@ -547,7 +768,7 @@ describe("web api", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: {
         code: "bad_request",
-        message: "provider must be openai-codex or openai-compatible.",
+        message: "provider must be openai-codex, openai-compatible, or anthropic-claude.",
       },
     });
   });
@@ -570,6 +791,22 @@ function createTestClient(handler: (request: Request) => Response | Promise<Resp
     client,
     close: () => server.stop(true),
   };
+}
+
+function fakeAnthropicTokenFetch(requests: Request[]): typeof fetch {
+  return Object.assign(
+    async (...args: Parameters<typeof fetch>) => {
+      const request = args[0] instanceof Request ? args[0] : new Request(String(args[0]), args[1]);
+      requests.push(request);
+      return Response.json({
+        access_token: "secret_access",
+        refresh_token: "secret_refresh",
+        expires_in: 3600,
+        scope: "user:inference",
+      });
+    },
+    { preconnect: fetch.preconnect },
+  ) satisfies typeof fetch;
 }
 
 function fakeNotionFetch(): typeof fetch {

@@ -22,6 +22,7 @@ import type {
   SessionStatus,
   StrataPaths,
   TokenUsage,
+  TraceEvent,
 } from "./types.js";
 
 type Schema = typeof schema;
@@ -36,6 +37,7 @@ export class SessionStore {
     this.paths = paths;
     this.db = new Database(paths.stateDbPath, { create: true });
     this.db.run("PRAGMA journal_mode = WAL");
+    this.db.run("PRAGMA busy_timeout = 10000");
     this.db.run("PRAGMA foreign_keys = ON");
     this.drizzle = drizzle(this.db, { schema });
     const migrationOutcome = applyEmbeddedMigrations(this.db);
@@ -85,6 +87,33 @@ export class SessionStore {
     await this.appendEvent(sessionId, "session.ended", { status, endedAt: ts });
   }
 
+  /** Current max event id across all sessions (0 if no events yet). */
+  latestEventId(): number {
+    const row = this.db
+      .query<{ maxId: number | null }, []>("select max(id) as maxId from events")
+      .get();
+    return row?.maxId ?? 0;
+  }
+
+  /**
+   * Tail the shared event log for cross-process change notification. Returns the
+   * distinct sessions with events after `afterEventId` plus the new high-water
+   * mark. Cheap (indexed primary key) and synchronous; intended for a polling
+   * change feed that fans out "session changed" notices to live clients.
+   */
+  sessionChangesSince(afterEventId: number): { maxEventId: number; sessionIds: string[] } {
+    const maxEventId = this.latestEventId();
+    if (maxEventId <= afterEventId) {
+      return { maxEventId: afterEventId, sessionIds: [] };
+    }
+    const rows = this.db
+      .query<{ sessionId: string }, [number, number]>(
+        "select distinct session_id as sessionId from events where id > ? and id <= ?",
+      )
+      .all(afterEventId, maxEventId);
+    return { maxEventId, sessionIds: rows.map((row) => row.sessionId) };
+  }
+
   async appendEvent(sessionId: string, type: string, payload: JsonObject = {}): Promise<number> {
     const ts = nowIso();
     const payloadJson = safeJsonStringify(payload);
@@ -101,6 +130,28 @@ export class SessionStore {
       "utf8",
     );
     return id;
+  }
+
+  listEvents(sessionId: string, type?: string): TraceEvent[] {
+    const rows =
+      type === undefined
+        ? this.db
+            .query<{ id: number; ts: string; type: string; payloadJson: string }, [string]>(
+              "select id, ts, type, payload_json as payloadJson from events where session_id = ? order by id asc",
+            )
+            .all(sessionId)
+        : this.db
+            .query<{ id: number; ts: string; type: string; payloadJson: string }, [string, string]>(
+              "select id, ts, type, payload_json as payloadJson from events where session_id = ? and type = ? order by id asc",
+            )
+            .all(sessionId, type);
+    return rows.map((row) => ({
+      id: row.id,
+      sessionId,
+      ts: row.ts,
+      type: row.type,
+      payload: parseEventPayload(row.payloadJson),
+    }));
   }
 
   async appendMessage(input: MessageInput): Promise<number> {
@@ -518,6 +569,18 @@ function messageRowToRecord(row: schema.MessageRow): MessageRecord {
     usage: row.usageJson ?? null,
     ts: row.ts,
   };
+}
+
+function parseEventPayload(payloadJson: string): JsonObject {
+  try {
+    const parsed = JSON.parse(payloadJson) as unknown;
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as JsonObject;
+    }
+  } catch {
+    // Fall through.
+  }
+  return {};
 }
 
 function escapeLike(value: string): string {

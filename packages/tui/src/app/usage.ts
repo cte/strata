@@ -82,6 +82,13 @@ export function contextWindowForModel(provider: string, model: string): number |
     return override;
   }
 
+  if (provider === "anthropic-claude") {
+    if (model.includes("opus-4-7") || model.includes("sonnet-4-6")) {
+      return 1_000_000;
+    }
+    return 200_000;
+  }
+
   if (provider === "openai-codex") {
     if (model === "gpt-5.3-codex-spark") {
       return 128_000;

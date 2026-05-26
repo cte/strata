@@ -1,12 +1,16 @@
+import path from "node:path";
 import {
   defaultModel,
+  getAnthropicCredentials,
   getChatGptCredentials,
   inferDefaultProvider,
   listModels,
   parseModelProvider,
 } from "@strata/agent";
+
 import { findRepoFiles } from "@strata/core/repo-files";
 import { SessionStore } from "@strata/core/session-store";
+import { listSkills, readSkill, type SkillMetadata } from "@strata/core/skill-store";
 import type { MessageRecord, SessionRecord } from "@strata/core/types";
 import { repoRoot, runtimeEnv, type WebApiOptions } from "./runtime.js";
 import type {
@@ -24,6 +28,10 @@ import type {
   ChatSessionSummary,
   ChatSessionsListInput,
   ChatSessionsSearchInput,
+  ChatSkillEntry,
+  ChatSkillInvocation,
+  ChatSkillInvokeInput,
+  ChatSkillsListInput,
 } from "./trpc.js";
 
 const CHAT_SESSION_KINDS = new Set(["chat", "query"]);
@@ -39,14 +47,19 @@ export async function chatModelStatus(options: WebApiOptions): Promise<ChatModel
     (await inferDefaultProvider({ repoRoot: root, env }));
   const model = defaultModel(provider, { env });
   const credentials = await getChatGptCredentials(root);
+  const anthropicCredentials = await getAnthropicCredentials(root);
   const status: ChatModelStatus = {
     provider,
     model,
     codexLoggedIn: credentials !== undefined,
     apiKeyConfigured: env.STRATA_API_KEY !== undefined || env.OPENAI_API_KEY !== undefined,
+    anthropicLoggedIn: anthropicCredentials !== undefined,
   };
   if (credentials?.expiresAt !== undefined) {
     status.codexExpiresAt = credentials.expiresAt;
+  }
+  if (anthropicCredentials?.expiresAt !== undefined) {
+    status.anthropicExpiresAt = anthropicCredentials.expiresAt;
   }
   return status;
 }
@@ -73,6 +86,47 @@ export function listChatFiles(
       query: input.query,
       limit: input.limit,
     }),
+  };
+}
+
+export async function listChatSkills(
+  input: ChatSkillsListInput,
+  options: WebApiOptions,
+): Promise<{ skills: ChatSkillEntry[] }> {
+  const query = input.query.trim().toLowerCase();
+  const skills = await listSkills(repoRoot(options));
+  return {
+    skills: skills
+      .filter((skill) => skill.status === "active")
+      .filter(
+        (skill) =>
+          query === "" ||
+          skill.name.toLowerCase().includes(query) ||
+          skill.description.toLowerCase().includes(query),
+      )
+      .slice(0, input.limit)
+      .map(skillToChatEntry),
+  };
+}
+
+export async function invokeChatSkill(
+  input: ChatSkillInvokeInput,
+  options: WebApiOptions,
+): Promise<ChatSkillInvocation> {
+  const root = repoRoot(options);
+  const document = await readSkill(root, input.name);
+  const trimmedArgs = input.args.trim();
+  const location = path.resolve(root, document.metadata.path);
+  const skillBlock = [
+    `<skill name="${escapeXmlAttribute(document.metadata.name)}" location="${escapeXmlAttribute(location)}">`,
+    `References are relative to ${path.dirname(location)}.`,
+    "",
+    stripFrontmatter(document.content).trim(),
+    "</skill>",
+  ].join("\n");
+  return {
+    name: document.metadata.name,
+    prompt: trimmedArgs === "" ? skillBlock : `${skillBlock}\n\n${trimmedArgs}`,
   };
 }
 
@@ -157,6 +211,35 @@ export async function searchChatSessions(
 
 function sessionScanLimit(limit: number): number {
   return Math.max(limit, Math.min(MAX_SESSION_SCAN, limit * 4));
+}
+
+function skillToChatEntry(skill: SkillMetadata): ChatSkillEntry {
+  return {
+    name: skill.name,
+    description: skill.description,
+    path: skill.path,
+    source: skill.source,
+    disableModelInvocation: skill.disableModelInvocation,
+  };
+}
+
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith("---\n")) {
+    return content;
+  }
+  const end = content.indexOf("\n---", 4);
+  if (end === -1) {
+    return content;
+  }
+  return content.slice(end + "\n---".length).replace(/^\s*\n/, "");
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function isChatSessionKind(kind: string): kind is ChatSessionSummary["kind"] {

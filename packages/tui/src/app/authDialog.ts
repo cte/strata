@@ -1,9 +1,14 @@
 import {
+  AnthropicLoginCancelled,
   ChatGptLoginCancelled,
+  clearAnthropicCredentials,
   clearChatGptCredentials,
+  loginAnthropic,
   loginChatGpt,
+  setAnthropicCredentials,
   setChatGptCredentials,
 } from "@strata/agent";
+
 import { padToWidth, theme, truncateToWidth } from "../ansi.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import type { InputEvent } from "../keys.js";
@@ -23,21 +28,26 @@ export class AuthDialog implements Component {
   private resolveManual: ((value: string) => void) | undefined;
   private rejectManual: ((error: Error) => void) | undefined;
   private controller: AbortController | undefined;
+  private provider: "openai-codex" | "anthropic-claude" = "openai-codex";
   private onChange: () => void;
 
   constructor(onChange: () => void) {
     this.onChange = onChange;
   }
 
-  start(onResult: (result: AuthDialogResult) => void): void {
+  start(
+    onResult: (result: AuthDialogResult) => void,
+    provider: "openai-codex" | "anthropic-claude" = "openai-codex",
+  ): void {
     this.active = true;
     this.status = "Starting login flow…";
     this.url = "";
     this.input = "";
     this.cursor = 0;
+    this.provider = provider;
     this.controller = new AbortController();
-    void loginChatGpt({
-      onAuth: (info) => {
+    const callbacks = {
+      onAuth: (info: { url: string; instructions: string }) => {
         this.url = info.url;
         this.status = "Open the URL in a browser, then paste the redirect.";
         this.onChange();
@@ -50,20 +60,30 @@ export class AuthDialog implements Component {
       onManualCodeInput: async () => {
         return await this.waitForManual();
       },
-      onProgress: (message) => {
+      onProgress: (message: string) => {
         this.status = message;
         this.onChange();
       },
       signal: this.controller.signal,
-    })
-      .then(async (credentials) => {
+    };
+    const loginPromise = (async () => {
+      if (provider === "anthropic-claude") {
+        const credentials = await loginAnthropic(callbacks);
+        await setAnthropicCredentials(credentials);
+      } else {
+        const credentials = await loginChatGpt(callbacks);
         await setChatGptCredentials(credentials);
+      }
+    })();
+    void loginPromise
+      .then(() => {
         this.close();
-        onResult({ ok: true, message: "Logged in to openai-codex." });
+        onResult({ ok: true, message: `Logged in to ${provider}.` });
       })
+
       .catch((error: unknown) => {
         this.close();
-        if (error instanceof ChatGptLoginCancelled) {
+        if (error instanceof ChatGptLoginCancelled || error instanceof AnthropicLoginCancelled) {
           onResult({ ok: false, message: "Login cancelled." });
           return;
         }
@@ -75,7 +95,12 @@ export class AuthDialog implements Component {
     this.active = false;
     this.controller?.abort();
     this.controller = undefined;
-    this.rejectManual?.(new ChatGptLoginCancelled());
+    this.rejectManual?.(
+      this.provider === "anthropic-claude"
+        ? new AnthropicLoginCancelled()
+        : new ChatGptLoginCancelled(),
+    );
+
     this.resolveManual = undefined;
     this.rejectManual = undefined;
     this.onChange();
@@ -90,7 +115,10 @@ export class AuthDialog implements Component {
     const out: string[] = [];
     const push = (line: string) =>
       out.push(padToWidth(truncateToWidth(line, ctx.width), ctx.width));
-    push(theme.bold("Sign in to ChatGPT"));
+    push(
+      theme.bold(this.provider === "anthropic-claude" ? "Sign in to Claude" : "Sign in to ChatGPT"),
+    );
+
     if (this.url !== "") {
       push(theme.accent(this.url));
     }
@@ -177,4 +205,8 @@ export class AuthDialog implements Component {
 
 export async function logoutChatGpt(): Promise<void> {
   await clearChatGptCredentials();
+}
+
+export async function logoutAnthropic(): Promise<void> {
+  await clearAnthropicCredentials();
 }

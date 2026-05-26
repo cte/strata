@@ -12,7 +12,14 @@ import {
   type ThinkingLevel,
 } from "@strata/agent";
 import { getStrataPaths, type JsonObject, type JsonValue, SessionStore } from "@strata/core";
+import { createConfiguredMcpToolPack } from "@strata/integration-mcp/exa";
+
+import { createToolRegistryWithPacks, type ToolPack, type ToolRegistry } from "@strata/tools";
+
 import {
+  type AddChatQueuedMessageInput,
+  type ChatQueuedMessageRecord,
+  type ChatQueueTarget,
   type ChatRunEventRecord,
   type ChatRunRecord,
   type ChatRunStatus,
@@ -65,6 +72,10 @@ export interface ChatService {
   getRun(runId: string): ActiveChatRunSnapshot | undefined;
   getActiveRunForSession(sessionId: string): ActiveChatRunSnapshot | undefined;
   listActiveRuns(): ActiveChatRunSnapshot[];
+  listQueuedMessages(target: ChatQueueTarget): ChatQueuedMessageRecord[];
+  addQueuedMessage(input: AddChatQueuedMessageInput): Promise<ChatQueuedMessageRecord>;
+  removeQueuedMessage(id: string): Promise<boolean>;
+  clearQueuedMessages(target: ChatQueueTarget): Promise<number>;
   subscribeRunEvents(
     runId: string,
     afterEventId?: number,
@@ -75,12 +86,18 @@ export type ChatStreamCloseReason = "request_aborted" | "reader_cancelled";
 
 type ModelAdapterFactory = (options: CreateModelAdapterOptions) => Promise<ModelAdapter>;
 type AgentLoopEventsRunner = (config: AgentRunConfig) => AsyncGenerator<AgentRunEvent>;
+type ToolRegistryFactory = (options: {
+  repoRoot: string;
+  env: Record<string, string | undefined>;
+  signal?: AbortSignal;
+}) => Promise<ToolRegistry>;
 
 export interface CreateChatServiceOptions {
   repoRoot?: string;
   env?: Record<string, string | undefined>;
   createModelAdapter?: ModelAdapterFactory;
   runAgentLoopEvents?: AgentLoopEventsRunner;
+  createToolRegistry?: ToolRegistryFactory;
   createRunId?: () => string;
 }
 
@@ -109,12 +126,31 @@ export function createChatService(options: CreateChatServiceOptions = {}): ChatS
   return new DefaultChatService(options);
 }
 
+async function createChatToolRegistry(options: {
+  repoRoot: string;
+  env: Record<string, string | undefined>;
+  signal?: AbortSignal;
+}): Promise<ToolRegistry> {
+  const packs: ToolPack[] = [createConfiguredMcpToolPack()];
+
+  return createToolRegistryWithPacks({
+    context: {
+      repoRoot: options.repoRoot,
+      env: options.env,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    },
+    packs,
+  });
+}
+
 class DefaultChatService implements ChatService {
   private readonly repoRoot: string;
   private readonly env: Record<string, string | undefined>;
   private readonly createModelAdapter: ModelAdapterFactory;
   private readonly runAgentLoopEvents: AgentLoopEventsRunner;
+  private readonly createToolRegistry: ToolRegistryFactory;
   private readonly createRunId: () => string;
+
   private readonly runStore: ChatRunStore;
   private readonly runsById = new Map<string, ActiveChatRun>();
   private readonly runIdsBySessionId = new Map<string, string>();
@@ -124,7 +160,9 @@ class DefaultChatService implements ChatService {
     this.env = options.env ?? Bun.env;
     this.createModelAdapter = options.createModelAdapter ?? createSharedModelAdapter;
     this.runAgentLoopEvents = options.runAgentLoopEvents ?? runSharedAgentLoopEvents;
+    this.createToolRegistry = options.createToolRegistry ?? createChatToolRegistry;
     this.createRunId = options.createRunId ?? randomUUID;
+
     this.runStore = new ChatRunStore(this.repoRoot);
     this.runStore.recoverAbandonedRuns();
   }
@@ -180,7 +218,24 @@ class DefaultChatService implements ChatService {
       this.unregisterRun(active);
       throw error;
     }
-    this.startRunEvents(active, input, model);
+    let tools: ToolRegistry;
+    try {
+      const registryOptions = {
+        repoRoot: this.repoRoot,
+        env: this.env,
+        signal: active.controller.signal,
+      };
+      tools = await this.createToolRegistry(registryOptions);
+    } catch (error: unknown) {
+      this.runStore.finishRun(runId, {
+        status: "failed",
+        stoppedReason: "tool_registry_error",
+        errorMessage: messageFromError(error),
+      });
+      this.unregisterRun(active);
+      throw error;
+    }
+    this.startRunEvents(active, input, model, tools);
 
     return {
       runId,
@@ -194,6 +249,11 @@ class DefaultChatService implements ChatService {
       return false;
     }
     this.runStore.markCancelRequested(runId);
+    const queueTarget = {
+      ...(active.sessionId === undefined ? {} : { sessionId: active.sessionId }),
+      runId: active.runId,
+    };
+    this.runStore.clearQueuedMessages(queueTarget);
     active.controller.abort({ source: "web.cancel_endpoint", runId: active.runId });
     await this.recordRunEvent(active, "web.chat.run.cancel_requested", {
       runId: active.runId,
@@ -236,6 +296,33 @@ class DefaultChatService implements ChatService {
     return this.runStore.listRuns("running").map(snapshot);
   }
 
+  listQueuedMessages(target: ChatQueueTarget): ChatQueuedMessageRecord[] {
+    return this.runStore.listQueuedMessages(target);
+  }
+
+  async addQueuedMessage(input: AddChatQueuedMessageInput): Promise<ChatQueuedMessageRecord> {
+    const record = this.runStore.addQueuedMessage(input);
+    await this.recordQueueChanged(input, "added");
+    return record;
+  }
+
+  async removeQueuedMessage(id: string): Promise<boolean> {
+    const record = this.runStore.getQueuedMessage(id);
+    const removed = this.runStore.removeQueuedMessage(id);
+    if (removed && record !== undefined) {
+      await this.recordQueueChanged(record, "removed");
+    }
+    return removed;
+  }
+
+  async clearQueuedMessages(target: ChatQueueTarget): Promise<number> {
+    const count = this.runStore.clearQueuedMessages(target);
+    if (count > 0) {
+      await this.recordQueueChanged(target, "cleared");
+    }
+    return count;
+  }
+
   subscribeRunEvents(
     runId: string,
     afterEventId = 0,
@@ -255,20 +342,22 @@ class DefaultChatService implements ChatService {
     active: ActiveChatRun,
     input: StartChatRunInput,
     model: ModelAdapter,
+    tools: ToolRegistry,
   ): void {
-    void this.runEvents(active, input, model);
+    void this.runEvents(active, input, model, tools);
   }
 
   private async runEvents(
     active: ActiveChatRun,
     input: StartChatRunInput,
     model: ModelAdapter,
+    tools: ToolRegistry,
   ): Promise<void> {
     let terminal: FinishChatRunInput | undefined;
     try {
       this.publishRunEvent(active, { type: "run.started", runId: active.runId });
       for await (const event of this.runAgentLoopEvents(
-        this.agentRunConfig(active, input, model),
+        this.agentRunConfig(active, input, model, tools),
       )) {
         if (event.type === "session.started") {
           await this.bindSession(active, event.sessionId);
@@ -306,6 +395,9 @@ class DefaultChatService implements ChatService {
       this.runStore.finishRun(active.runId, finish);
       this.unregisterRun(active);
       active.events.close();
+      if (finish.status === "completed" && active.sessionId !== undefined) {
+        void this.drainQueuedMessages(active.sessionId, input);
+      }
     }
   }
 
@@ -327,13 +419,16 @@ class DefaultChatService implements ChatService {
     active: ActiveChatRun,
     input: StartChatRunInput,
     model: ModelAdapter,
+    tools: ToolRegistry,
   ): AgentRunConfig {
     const config: AgentRunConfig = {
       question: input.message,
       model,
       repoRoot: this.repoRoot,
       signal: active.controller.signal,
+      tools,
     };
+
     if (input.continueSessionId !== undefined) {
       config.continueSessionId = input.continueSessionId;
     }
@@ -384,6 +479,14 @@ class DefaultChatService implements ChatService {
     active.sessionId = sessionId;
     this.runIdsBySessionId.set(sessionId, active.runId);
     this.runStore.bindSession(active.runId, sessionId);
+    const migrated = this.runStore.migrateQueuedMessagesToSession(active.runId, sessionId);
+    if (migrated > 0) {
+      await this.recordRunEvent(active, "web.chat.queue.changed", {
+        runId: active.runId,
+        sessionId,
+        action: "migrated",
+      });
+    }
     await this.recordRunEvent(active, "web.chat.run.started", {
       runId: active.runId,
       startedAt: active.startedAt,
@@ -440,6 +543,57 @@ class DefaultChatService implements ChatService {
     return envelopes;
   }
 
+  private async drainQueuedMessages(sessionId: string, defaults: StartChatRunInput): Promise<void> {
+    const next = this.runStore.peekNextQueuedMessage(sessionId);
+    if (next === undefined) {
+      return;
+    }
+    if (this.getActiveRunForSession(sessionId) !== undefined) {
+      return;
+    }
+    if (!this.runStore.removeQueuedMessage(next.id)) {
+      return;
+    }
+    await this.recordSessionEvent(sessionId, "web.chat.queue.changed", {
+      sessionId,
+      queuedMessageId: next.id,
+      action: "dequeued",
+    });
+    try {
+      await this.startRun(startInputFromQueuedMessage(next, sessionId, defaults));
+    } catch (error: unknown) {
+      this.runStore.addQueuedMessage({
+        id: next.id,
+        sessionId,
+        message: next.message,
+        attachments: next.attachments,
+        ...(next.provider === undefined ? {} : { provider: next.provider }),
+        ...(next.model === undefined ? {} : { model: next.model }),
+        ...(next.reasoningEffort === undefined ? {} : { reasoningEffort: next.reasoningEffort }),
+      });
+      await this.recordSessionEvent(sessionId, "web.chat.queue.changed", {
+        sessionId,
+        queuedMessageId: next.id,
+        action: "requeued",
+        errorMessage: messageFromError(error),
+      });
+    }
+  }
+
+  private async recordQueueChanged(
+    target: ChatQueueTarget,
+    action: "added" | "removed" | "cleared",
+  ): Promise<boolean> {
+    if (target.sessionId === undefined) {
+      return false;
+    }
+    return this.recordSessionEvent(target.sessionId, "web.chat.queue.changed", {
+      sessionId: target.sessionId,
+      action,
+      ...(target.runId === undefined ? {} : { runId: target.runId }),
+    });
+  }
+
   private async recordRunEvent(
     active: ActiveChatRun,
     type: string,
@@ -448,10 +602,18 @@ class DefaultChatService implements ChatService {
     if (active.sessionId === undefined) {
       return false;
     }
+    return this.recordSessionEvent(active.sessionId, type, payload);
+  }
+
+  private async recordSessionEvent(
+    sessionId: string,
+    type: string,
+    payload: JsonObject,
+  ): Promise<boolean> {
     let store: SessionStore | undefined;
     try {
       store = await SessionStore.open(this.repoRoot);
-      await store.appendEvent(active.sessionId, type, payload);
+      await store.appendEvent(sessionId, type, payload);
       return true;
     } catch {
       return false;
@@ -459,6 +621,64 @@ class DefaultChatService implements ChatService {
       store?.close();
     }
   }
+}
+
+function startInputFromQueuedMessage(
+  queued: ChatQueuedMessageRecord,
+  sessionId: string,
+  defaults: StartChatRunInput,
+): StartChatRunInput {
+  const input: StartChatRunInput = {
+    message: queued.message,
+    continueSessionId: sessionId,
+  };
+  if (queued.provider !== undefined) {
+    input.provider = queued.provider as ModelProviderName;
+  } else if (defaults.provider !== undefined) {
+    input.provider = defaults.provider;
+  }
+  const model = queued.model ?? defaults.model;
+  if (model !== undefined) {
+    input.model = model;
+  }
+  if (queued.reasoningEffort !== undefined) {
+    input.reasoningEffort = queued.reasoningEffort as ThinkingLevel;
+  } else if (defaults.reasoningEffort !== undefined) {
+    input.reasoningEffort = defaults.reasoningEffort;
+  }
+  const attachments = attachmentsFromQueuedMessage(queued) ?? defaults.attachments;
+  if (attachments !== undefined) {
+    input.attachments = attachments;
+  }
+  return input;
+}
+
+function attachmentsFromQueuedMessage(
+  queued: ChatQueuedMessageRecord,
+): AgentAttachment[] | undefined {
+  if (!Array.isArray(queued.attachments)) {
+    return undefined;
+  }
+  const attachments: AgentAttachment[] = [];
+  for (const item of queued.attachments) {
+    if (isAgentAttachment(item)) {
+      attachments.push(item);
+    }
+  }
+  return attachments.length === 0 ? undefined : attachments;
+}
+
+function isAgentAttachment(value: unknown): value is AgentAttachment {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record.kind === "image" &&
+    typeof record.mimeType === "string" &&
+    typeof record.dataBase64 === "string" &&
+    (record.name === undefined || typeof record.name === "string")
+  );
 }
 
 function snapshot(run: ChatRunRecord): ActiveChatRunSnapshot {
@@ -599,7 +819,11 @@ const KNOWN_CHAT_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "model.retry",
   "assistant.delta",
   "model.response",
+  "compaction.started",
+  "compaction.completed",
+  "compaction.failed",
   "tool.call.started",
+  "tool.output",
   "tool.call.completed",
   "agent.completed",
   "agent.failed",

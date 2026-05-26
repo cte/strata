@@ -161,3 +161,40 @@ describe("SessionStore.deleteSession", () => {
     });
   });
 });
+
+describe("SessionStore.sessionChangesSince", () => {
+  test("reports distinct changed sessions and advances the high-water mark", async () => {
+    await withTempStore(async (store) => {
+      // createSession already appends a `session.started` event.
+      const a = await store.createSession({ kind: "chat", title: "A" });
+      const b = await store.createSession({ kind: "chat", title: "B" });
+      const baseline = store.latestEventId();
+      expect(baseline).toBeGreaterThan(0);
+
+      // No new events yet → no changes, watermark unchanged.
+      const quiet = store.sessionChangesSince(baseline);
+      expect(quiet.sessionIds).toEqual([]);
+      expect(quiet.maxEventId).toBe(baseline);
+
+      await store.appendEvent(a.id, "model.response", { iteration: 1 });
+      await store.appendEvent(a.id, "tool.call", { iteration: 1 });
+      await store.appendEvent(b.id, "model.response", { iteration: 1 });
+
+      const changed = store.sessionChangesSince(baseline);
+      expect(changed.maxEventId).toBe(store.latestEventId());
+      expect(changed.maxEventId).toBeGreaterThan(baseline);
+      // Distinct sessions, not one entry per event.
+      expect([...changed.sessionIds].sort()).toEqual([a.id, b.id].sort());
+
+      // Polling again from the new watermark sees nothing.
+      expect(store.sessionChangesSince(changed.maxEventId).sessionIds).toEqual([]);
+    });
+  });
+
+  test("latestEventId is 0 for a store with no events", async () => {
+    await withTempStore(async (store) => {
+      expect(store.latestEventId()).toBe(0);
+      expect(store.sessionChangesSince(0)).toEqual({ maxEventId: 0, sessionIds: [] });
+    });
+  });
+});

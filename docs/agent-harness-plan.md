@@ -19,7 +19,7 @@ The end state is not "a chatbot over Markdown." The end state is a durable work 
 ## 2. Non-Goals
 
 - Do not clone Hermes wholesale.
-- Do not build gateways, plugin marketplaces, multi-provider routing, subagents, browser automation, or a web control plane in the first version.
+- Do not build gateways, plugin marketplaces, multi-provider routing, subagents, browser automation, a web control plane, or dynamic extension loading in the first version.
 - Do not fine-tune models. "Learning" means improving durable context artifacts and retrieval indexes.
 - Do not give the model a generic shell tool by default. Wiki tools should be narrow and auditable.
 - Do not auto-edit `wiki/raw/` under any circumstance.
@@ -52,7 +52,7 @@ Hermes mechanisms to defer:
 - TUI and ACP adapters.
 - Generic terminal/browser tool surface.
 - Multi-provider fallback matrix.
-- Plugin loading system.
+- Plugin marketplace or remote package loading system.
 - Cron/kanban/subagent systems.
 - External memory providers such as Honcho or Mem0.
 
@@ -204,6 +204,7 @@ Responsibilities:
 - Validate tool names and JSON arguments.
 - Execute tool calls through the registry in Pi-style parallel mode by default.
 - Append tool result messages in assistant source order, even when completion events arrive in completion order.
+- Apply shared Pi-style auto-compaction when a known model context window is over `contextWindow - reserveTokens`, and recover from detected context-overflow errors with a one-time compact-and-retry.
 - Stop on final answer, cancellation, model error, or guardrail halt.
 - Persist events throughout the run.
 - Trigger the post-run reflection loop.
@@ -215,6 +216,7 @@ Current execution constraints:
 - A called `ToolDefinition` with `executionMode: "sequential"` forces the whole batch sequential.
 - In parallel mode, `tool.call.started` events emit in assistant source order, `tool.call.completed` events emit as tools finish, and persisted tool messages remain in assistant source order.
 - Tools may stream incremental output while running: `ToolContext.onOutput(chunk)` (e.g. `shell.run` stdout/stderr) is surfaced as interleaved `tool.output` run events. The batch generators merge these callback-driven events into the yield sequence via an async channel, so live output reaches UIs without disturbing the started/completed/result ordering above. `tool.output` is an ephemeral event, not a persisted tool message; the full output still lands in the final `tool.call.completed` result.
+- Auto-compaction is owned by the shared loop, not by individual surfaces: a continued session is compacted before the next user turn is seeded when trusted post-compaction usage crosses the threshold, and a successful final-answer turn is compacted before the run is marked complete. Compaction appends durable checkpoint events rather than deleting history, rebuilds future model context from the latest summary plus kept recent messages, uses keep-recent cut points, summarizes split-turn prefixes, and retries once after detected context-overflow errors.
 - Tool results above a size threshold are summarized or persisted to trace files and replaced with a preview.
 - Model adapters request provider-side parallel tool calls when supported.
 
@@ -262,6 +264,8 @@ The registry must:
 - Enforce policy checks before writes.
 
 External third-party tools should use the same registry rather than adding protocol-specific branches to the agent loop. Optional integrations, including MCP servers, should live in integration/tool-pack packages that register ordinary `ToolDefinition`s into a registry constructed by CLI/TUI/web callers. The detailed plan is [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md).
+
+Trusted local extensions should also register ordinary `ToolDefinition`s rather than bypassing the registry. Extension loading, lifecycle hooks, slash commands, provider registration, UI hooks, and Pi-style examples are planned separately in [extensions-plan.md](./extensions-plan.md). The agent loop should expose lifecycle seams for extension runtimes to compose around it, but it should not import arbitrary extension modules directly.
 
 ### 6.5 Policy Layer
 

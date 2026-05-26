@@ -41,7 +41,7 @@ describe("StrataApp", () => {
           model: "gpt-test",
           initialSession: { type: "continue" },
         },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       app.startInitialSession();
@@ -80,7 +80,7 @@ describe("StrataApp", () => {
           model: "gpt-test",
           initialSession: { type: "session", selector: session.id.slice(0, 12) },
         },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       app.startInitialSession();
@@ -122,7 +122,7 @@ describe("StrataApp", () => {
           model: "current-good-model",
           initialSession: { type: "session", selector: session.id.slice(0, 12) },
         },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       app.startInitialSession();
@@ -156,7 +156,7 @@ describe("StrataApp", () => {
           model: "gpt-test",
           initialSession: { type: "resume" },
         },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       app.startInitialSession();
@@ -193,7 +193,7 @@ describe("StrataApp", () => {
           model: "gpt-test",
           initialSession: { type: "fork", selector: source.id.slice(0, 12) },
         },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       app.startInitialSession();
@@ -226,7 +226,7 @@ describe("StrataApp", () => {
       const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       runtime.start();
@@ -259,7 +259,7 @@ describe("StrataApp", () => {
       const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       runtime.start();
@@ -283,7 +283,7 @@ describe("StrataApp", () => {
       const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       runtime.start();
@@ -314,7 +314,7 @@ describe("StrataApp", () => {
       const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       runtime.start();
@@ -356,7 +356,7 @@ describe("StrataApp", () => {
       const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       runtime.start();
@@ -388,7 +388,7 @@ describe("StrataApp", () => {
       const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-5.5" },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       runtime.start();
@@ -442,7 +442,7 @@ describe("StrataApp", () => {
       const app = new StrataApp(
         runtime,
         { repoRoot, provider: "openai-codex", model: "gpt-test" },
-        { codexLoggedIn: false, apiKeyConfigured: false },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
       );
       runtime.setRoot(app);
       runtime.start();

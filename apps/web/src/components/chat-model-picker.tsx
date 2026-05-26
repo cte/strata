@@ -209,5 +209,7 @@ function ReasoningEffortSelector({
 }
 
 function providerShortLabel(provider: ChatModelChoice["provider"]): string {
-  return provider === "openai-codex" ? "codex" : "api";
+  if (provider === "openai-codex") return "codex";
+  if (provider === "anthropic-claude") return "claude";
+  return "api";
 }

@@ -22,6 +22,7 @@ describe("recordModelUsage", () => {
   test("normalizes OpenAI responses usage into pi-style token buckets", () => {
     const state = initialAppState("openai-codex", "gpt-5.5", {
       codexLoggedIn: false,
+      anthropicLoggedIn: false,
       apiKeyConfigured: false,
     });
 
@@ -43,6 +44,7 @@ describe("recordModelUsage", () => {
   test("normalizes chat completions usage with cache writes", () => {
     const state = initialAppState("openai-compatible", "gpt-4o", {
       codexLoggedIn: false,
+      anthropicLoggedIn: false,
       apiKeyConfigured: true,
     });
 
@@ -66,6 +68,7 @@ describe("assistant streaming", () => {
   function makeState() {
     return initialAppState("openai-codex", "gpt-5.5", {
       codexLoggedIn: false,
+      anthropicLoggedIn: false,
       apiKeyConfigured: false,
     });
   }

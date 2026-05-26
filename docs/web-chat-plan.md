@@ -276,6 +276,18 @@ Because the store outlives any view, runs started in one session keep streaming 
 
 `useRunningSessionIds()` exposes the set of sessions with a live run; the sidebar and cmd-k session pickers render a pulsing accent dot for those in real time (ahead of the sessions-list query), and `session.started` refreshes that list so a brand-new run's indicator appears immediately.
 
+### Local realtime change feed (cross-process / cross-tab)
+
+Per-run SSE only covers runs this browser started. To reflect sessions advanced **anywhere** — another tab, or the CLI/TUI/maintenance/ingest writing directly to the shared `.strata/state.sqlite` — the web-api runs a local realtime hub instead of moving data off the box.
+
+- `packages/core` `SessionStore.sessionChangesSince(afterEventId)` / `latestEventId()` tail the shared append-only `events` table (every process appends there, including `session.started`/`session.ended`, so new sessions, message/tool progress, and status flips are all observable).
+- `packages/web-api/src/changeFeed.ts` `SessionChangeFeed` polls that tail (~750ms), establishes a high-water baseline so it never replays history, and fans out `{ sessionIds, maxEventId }` notices to subscribers. `GET /api/changes` streams them as SSE with heartbeats.
+- The browser store opens `/api/changes` once (reconnecting on drop). On a notice it invalidates the sessions-list query (sidebar/cmd-k freshness), pokes `discoverActiveRuns` (instant attach for newly-started web runs), and `reloadSession()`s any loaded session this tab isn't itself streaming — refetching its persisted transcript so CLI/TUI-driven (and other-tab) progress appears live. `reloadSession` skips client-streamed sessions and never mutates `runState`, so it can't race the discovery reconciler.
+
+This keeps everything local (it's a notification layer over the existing SQLite event log, not a new datastore), so a session advanced by the CLI shows its messages filling in live in every open web tab.
+
+When the viewed session has a run active server-side that this tab isn't streaming itself (a CLI/TUI run, since those aren't web runs the client can attach to), `SessionRunState.externallyRunning` is set from the persisted session status. The chat view surfaces a "running elsewhere" badge and locks the composer/submit so the user doesn't trigger the server's one-run-per-session conflict; it clears to idle when the external run finishes. This flag is deliberately separate from `runState` (which only reflects a stream this tab owns) so it never races the discovery reconciler.
+
 ## Tool Rendering
 
 The first web version should render every tool generically:
