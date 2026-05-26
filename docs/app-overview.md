@@ -9,7 +9,7 @@ Read this before starting implementation work, then use [roadmap.md](./roadmap.m
 Strata is a local, agent-maintained personal work system. It has two connected parts:
 
 - A Markdown work wiki under `wiki/` that stores priorities, projects, people, meetings, decisions, open threads, actions, and immutable raw source snapshots.
-- A Bun/TypeScript agentic harness that can query, maintain, and improve the wiki through tools, session traces, memory, skills, scheduled maintenance jobs, a TUI, and local browser UIs.
+- A Bun/TypeScript agentic harness that can query, maintain, improve, and locally extend the wiki through tools, session traces, memory, skills, scheduled maintenance jobs, extensions, a TUI, and local browser UIs.
 
 The wiki is the durable knowledge base. The harness is the operating system that keeps the knowledge base useful.
 
@@ -21,6 +21,7 @@ The wiki is the durable knowledge base. The harness is the operating system that
 - `apps/web`: Vite + React + TanStack Router browser app for connector setup and initial agent chat.
 - `packages/ingest`: connector contracts, source pullers, checkpointing, raw snapshot writers for Notion, Granola, and Slack, plus automated raw-to-wiki indexing for meeting/entity pages across those sources.
 - Planned `packages/integrations/*`: optional third-party tool packs, starting with Notion MCP, that register external capabilities as ordinary Strata tools without adding provider-specific code to the agent loop.
+- Planned `packages/extensions`: Pi-style trusted local extension runtime for tools, commands, hooks, prompt/resources, providers, UI affordances, and subagent-style workflows.
 
 The CLI, TUI, and web chat should be presentation layers over the same agent runtime. Do not duplicate agent-loop behavior inside an interface package.
 
@@ -31,6 +32,7 @@ Core packages:
 - `packages/core`: paths, runtime directories, SQLite-backed `SessionStore`, memory/proposal/skill/todo stores, AGENTS.md instruction loading, and shared JSON/session types.
 - `packages/agent`: model adapters, ChatGPT/OpenAI Codex auth, OpenAI-compatible adapter, `runAgentLoopEvents()`, run-context injection, compaction, reflection, and maintenance jobs.
 - `packages/tools`: `ToolRegistry`, tool policy/profile handling, wiki tools, filesystem tools, shell tool, memory/todo/session/skill tools.
+- Planned `packages/extensions`: extension loader, trust/config handling, lifecycle hooks, extension command/resource registries, and surface adapters.
 
 Key invariant:
 
@@ -51,7 +53,7 @@ Near-term work is returning to connector bring-up and raw-to-wiki automation now
 1. Keep Slack ingestion running and continue connector validation in parallel.
 2. Treat [web-feature-parity-plan.md](./web-feature-parity-plan.md) as complete: `listModels` lives in `@strata/agent`, repo-file enumeration lives in `@strata/core` as `findRepoFiles`, `chat.files.list` / `chat.models.list` expose those data sources through tRPC, and the web composer now has file `@`-mentions, a persisted model/reasoning picker, slash commands, and prompt history.
 3. Treat the web chat polish slice as complete: dropped-stream reconnect/recovery and responsive mobile/tablet/narrow-desktop behavior have been browser-verified.
-4. Apply wiki entity consolidation and improve raw-to-wiki extraction quality. `wiki.search` is now curated-first and `wiki.entities` can audit duplicate project topics; next work should merge duplicate canonical topics and strengthen decision/action extraction before expanding connector UI depth.
+4. Apply wiki entity consolidation and improve raw-to-wiki extraction quality. `wiki.search` now uses the local curated-first search index when refreshed, legacy generated Slack thread pages have been archived out of `wiki/threads`, and `wiki.entities` can audit duplicate project topics; next work should merge duplicate canonical topics and strengthen decision/action extraction before expanding connector UI depth.
 
 Use [status.md](./status.md) for the exact handoff and next concrete implementation step.
 

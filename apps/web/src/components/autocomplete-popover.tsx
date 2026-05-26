@@ -1,5 +1,6 @@
 import { FileText, FolderClosed, Terminal } from "lucide-react";
 import type * as React from "react";
+import { useEffect, useRef } from "react";
 import type { AutocompleteItem } from "@/lib/useAutocomplete";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,15 @@ export function AutocompletePopover({
   onAccept,
   onSelect,
 }: AutocompletePopoverProps): React.ReactElement | null {
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    optionRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
+  }, [open, selectedIndex]);
+
   if (!open || items.length === 0) {
     return null;
   }
@@ -39,6 +49,9 @@ export function AutocompletePopover({
         return (
           <button
             key={`${item.value}:${index}`}
+            ref={(node) => {
+              optionRefs.current[index] = node;
+            }}
             type="button"
             role="option"
             aria-selected={selected}

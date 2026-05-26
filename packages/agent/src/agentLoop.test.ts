@@ -5,15 +5,24 @@ import path from "node:path";
 import { SessionStore } from "@strata/core";
 import { createDefaultToolRegistry, ToolRegistry } from "@strata/tools";
 import { runAgentLoop, runAgentLoopEvents } from "./agentLoop.js";
+import { buildCompactedMessageRecords } from "./compaction.js";
 import { ModelAdapterError } from "./model.js";
 import type { AgentRunEvent, ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
 class SequenceModelAdapter implements ModelAdapter {
   readonly name = "sequence-test";
+  readonly contextWindow?: number;
   readonly requests: ModelRequest[] = [];
   private index = 0;
 
-  constructor(private readonly responses: ModelResponse[]) {}
+  constructor(
+    private readonly responses: ModelResponse[],
+    contextWindow?: number,
+  ) {
+    if (contextWindow !== undefined) {
+      this.contextWindow = contextWindow;
+    }
+  }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     // Drop the streaming callback before snapshotting — structuredClone
@@ -588,6 +597,215 @@ describe("runAgentLoop", () => {
       expect(nonSystem[0]?.content).toBe("Who are you?");
       expect(nonSystem[1]?.content).toBe("Hi, I'm Strata.");
       expect(nonSystem[2]?.content).toBe("What did you just say?");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("auto-compacts after a completed turn when context usage crosses the reserve threshold", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-compact-"));
+    try {
+      const model = new SequenceModelAdapter(
+        [
+          {
+            content: "final answer",
+            finishReason: "stop",
+            toolCalls: [],
+            usage: { total_tokens: 950 },
+          },
+          {
+            content: "## Goal\nsummarized",
+            finishReason: "stop",
+            toolCalls: [],
+          },
+        ],
+        1_000,
+      );
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "Use a lot of context.",
+        model,
+        repoRoot,
+        autoCompactReserveTokens: 100,
+      })) {
+        events.push(event);
+      }
+
+      expect(events.some((event) => event.type === "compaction.started")).toBe(true);
+      expect(events.some((event) => event.type === "compaction.completed")).toBe(true);
+      expect(model.requests).toHaveLength(2);
+      expect(model.requests[1]?.messages[1]?.content).toContain("<conversation>");
+
+      const completed = events.find((event) => event.type === "agent.completed");
+      if (completed?.type !== "agent.completed") {
+        throw new Error("missing completion event");
+      }
+      const store = await SessionStore.open(repoRoot);
+      try {
+        const remaining = store.listMessages(completed.result.sessionId);
+        expect(remaining.filter((message) => message.role === "system")).not.toHaveLength(0);
+        expect(
+          remaining.filter((message) => message.role !== "system").map((message) => message.role),
+        ).toEqual(["user", "assistant"]);
+        const compacted = buildCompactedMessageRecords(store, completed.result.sessionId);
+        expect(compacted).toHaveLength(1);
+        expect(compacted[0]?.content).toContain("Summary of our earlier conversation");
+        expect(compacted[0]?.content).toContain("summarized");
+      } finally {
+        store.close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("auto-compacts a continued session before seeding the next user turn", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-precompact-"));
+    try {
+      const firstModel = new SequenceModelAdapter([
+        {
+          content: "large prior answer",
+          finishReason: "stop",
+          toolCalls: [],
+          usage: { total_tokens: 950 },
+        },
+      ]);
+      const first = await runAgentLoop({
+        question: "Build context.",
+        model: firstModel,
+        repoRoot,
+        autoCompact: false,
+      });
+
+      const secondModel = new SequenceModelAdapter(
+        [
+          {
+            content: "## Goal\nprior context summarized",
+            finishReason: "stop",
+            toolCalls: [],
+          },
+          {
+            content: "continued",
+            finishReason: "stop",
+            toolCalls: [],
+          },
+        ],
+        1_000,
+      );
+      await runAgentLoop({
+        question: "Continue.",
+        model: secondModel,
+        repoRoot,
+        continueSessionId: first.sessionId,
+        autoCompactReserveTokens: 100,
+      });
+
+      expect(secondModel.requests).toHaveLength(2);
+      expect(secondModel.requests[0]?.messages[1]?.content).toContain("<conversation>");
+      const seeded = secondModel.requests[1]?.messages ?? [];
+      const nonSystem = seeded.filter((message) => message.role !== "system");
+      expect(nonSystem.map((message) => message.role)).toEqual(["user", "user"]);
+      expect(nonSystem[0]?.content).toContain("Summary of our earlier conversation");
+      expect(nonSystem[0]?.content).toContain("prior context summarized");
+      expect(nonSystem[1]?.content).toBe("Continue.");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("compacts and retries once after a context overflow error", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-overflow-"));
+    try {
+      const model = new FlakyModelAdapter([
+        new ModelAdapterError(
+          "model_http_error",
+          "Model request failed with HTTP 400: context length exceeded",
+        ),
+        {
+          content: "## Goal\noverflow context summarized",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+        {
+          content: "Recovered after compaction.",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "This prompt is too large.",
+        model,
+        repoRoot,
+      })) {
+        events.push(event);
+      }
+
+      const completed = events.find((event) => event.type === "agent.completed");
+      if (completed?.type !== "agent.completed") {
+        throw new Error("missing completion event");
+      }
+      expect(completed.result.status).toBe("completed");
+      expect(completed.result.finalAnswer).toBe("Recovered after compaction.");
+      expect(model.requests).toHaveLength(3);
+      expect(model.requests[1]?.messages[1]?.content).toContain("<conversation>");
+      const retriedMessages = model.requests[2]?.messages.filter(
+        (message) => message.role !== "system",
+      );
+      expect(retriedMessages).toHaveLength(1);
+      expect(retriedMessages?.[0]?.content).toContain("Summary of our earlier conversation");
+      expect(retriedMessages?.[0]?.content).toContain("overflow context summarized");
+      expect(
+        events.filter((event) => event.type === "compaction.started").map((event) => event.reason),
+      ).toEqual(["overflow"]);
+      expect(
+        events
+          .filter((event) => event.type === "compaction.completed")
+          .map((event) => event.reason),
+      ).toEqual(["overflow"]);
+      expect(events.some((event) => event.type === "model.retry")).toBe(false);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("does not attempt overflow recovery more than once in a run", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-overflow-fail-"));
+    try {
+      const model = new FlakyModelAdapter([
+        new ModelAdapterError(
+          "model_http_error",
+          "Model request failed with HTTP 400: context length exceeded",
+        ),
+        {
+          content: "## Goal\noverflow context summarized",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+        new ModelAdapterError(
+          "model_http_error",
+          "Model request failed with HTTP 400: prompt is too long",
+        ),
+      ]);
+
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "Still too large.",
+        model,
+        repoRoot,
+      })) {
+        events.push(event);
+      }
+
+      const failed = events.find((event) => event.type === "agent.failed");
+      if (failed?.type !== "agent.failed") {
+        throw new Error("missing failure event");
+      }
+      expect(failed.message).toContain("after one compact-and-retry attempt");
+      expect(model.requests).toHaveLength(3);
+      expect(events.filter((event) => event.type === "compaction.completed")).toHaveLength(1);
+      expect(events.some((event) => event.type === "model.retry")).toBe(false);
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

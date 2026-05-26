@@ -1,6 +1,9 @@
 export * from "./agentLoop.js";
+export * from "./anthropic.js";
+export * from "./anthropicOAuth.js";
 export * from "./authStore.js";
 export * from "./chatgptOAuth.js";
+
 export * from "./compaction.js";
 export * from "./maintenance.js";
 export * from "./model.js";

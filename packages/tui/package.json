@@ -11,7 +11,9 @@
   "dependencies": {
     "@strata/agent": "workspace:*",
     "@strata/core": "workspace:*",
+    "@strata/integration-mcp": "workspace:*",
     "@strata/tools": "workspace:*",
+
     "cli-highlight": "^2.1.11",
     "marked": "^18.0.3"
   },

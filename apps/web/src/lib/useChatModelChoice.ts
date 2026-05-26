@@ -41,7 +41,12 @@ export interface StorageLike {
 }
 
 export const CHAT_MODEL_CHOICE_STORAGE_KEY = "strata:chat:model";
-export const CHAT_PROVIDERS: readonly ChatProviderName[] = ["openai-codex", "openai-compatible"];
+export const CHAT_PROVIDERS: readonly ChatProviderName[] = [
+  "openai-codex",
+  "anthropic-claude",
+  "openai-compatible",
+];
+
 export const CHAT_REASONING_EFFORTS: readonly ChatReasoningEffort[] = [
   "off",
   "minimal",
@@ -73,6 +78,12 @@ export function useChatModelChoice(
     queryKey: ["chat", "models", "list", "openai-compatible"],
     queryFn: () => listChatModels("openai-compatible"),
     enabled: status?.apiKeyConfigured === true,
+    staleTime: 5 * 60_000,
+  });
+  const anthropicModelsQuery = useQuery({
+    queryKey: ["chat", "models", "list", "anthropic-claude"],
+    queryFn: () => listChatModels("anthropic-claude"),
+    enabled: status?.anthropicLoggedIn === true,
     staleTime: 5 * 60_000,
   });
 
@@ -118,13 +129,24 @@ export function useChatModelChoice(
         label: "OpenAI Codex",
         available: status?.codexLoggedIn === true,
         message:
-          status?.codexLoggedIn === true
-            ? "ChatGPT auth ready"
-            : "Sign in with `strata auth login`",
+          status?.codexLoggedIn === true ? "ChatGPT auth ready" : "Connect in Model auth settings",
         models: codexModelsQuery.data ?? [],
         loading: codexModelsQuery.isFetching,
         error: errorMessage(codexModelsQuery.error),
       },
+      {
+        provider: "anthropic-claude",
+        label: "Anthropic Claude",
+        available: status?.anthropicLoggedIn === true,
+        message:
+          status?.anthropicLoggedIn === true
+            ? "Claude auth ready"
+            : "Connect in Model auth settings",
+        models: anthropicModelsQuery.data ?? [],
+        loading: anthropicModelsQuery.isFetching,
+        error: errorMessage(anthropicModelsQuery.error),
+      },
+
       {
         provider: "openai-compatible",
         label: "OpenAI-compatible",
@@ -142,6 +164,9 @@ export function useChatModelChoice(
       codexModelsQuery.data,
       codexModelsQuery.error,
       codexModelsQuery.isFetching,
+      anthropicModelsQuery.data,
+      anthropicModelsQuery.error,
+      anthropicModelsQuery.isFetching,
       compatibleModelsQuery.data,
       compatibleModelsQuery.error,
       compatibleModelsQuery.isFetching,
@@ -224,11 +249,14 @@ function providerAvailable(provider: ChatProviderName, status: ChatModelStatus):
   if (provider === "openai-codex") {
     return status.codexLoggedIn;
   }
+  if (provider === "anthropic-claude") {
+    return status.anthropicLoggedIn;
+  }
   return status.apiKeyConfigured;
 }
 
 function isProviderName(value: unknown): value is ChatProviderName {
-  return value === "openai-codex" || value === "openai-compatible";
+  return value === "openai-codex" || value === "openai-compatible" || value === "anthropic-claude";
 }
 
 function isReasoningEffort(value: unknown): value is ChatReasoningEffort {

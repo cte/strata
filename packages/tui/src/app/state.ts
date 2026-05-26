@@ -10,11 +10,13 @@ import {
   type TokenUsageTotals,
 } from "./usage.js";
 
-export type ProviderName = "openai-codex" | "openai-compatible";
+export type ProviderName = "openai-codex" | "openai-compatible" | "anthropic-claude";
 
 export interface AuthStatusSummary {
   codexLoggedIn: boolean;
   codexExpiresAt?: number;
+  anthropicLoggedIn: boolean;
+  anthropicExpiresAt?: number;
   apiKeyConfigured: boolean;
 }
 
@@ -62,7 +64,8 @@ export interface AppState {
   pendingAttachments: AgentAttachment[];
   /**
    * Messages queued via alt+enter while the agent was running. Sent in order
-   * after the current run finishes (auto-compaction first).
+   * after the current run finishes; shared-loop auto-compaction has already
+   * completed by then if it was needed.
    */
   queuedMessages: string[];
 }

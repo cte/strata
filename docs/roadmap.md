@@ -2,7 +2,7 @@
 
 Status: canonical top-level planning document.
 
-This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [tui-plan.md](./tui-plan.md), [web-chat-plan.md](./web-chat-plan.md), [web-feature-parity-plan.md](./web-feature-parity-plan.md), [web-control-plane-plan.md](./web-control-plane-plan.md), and [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md). Those documents contain implementation details. This document defines what Strata is, what we are building first, and how the pieces fit together.
+This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [tui-plan.md](./tui-plan.md), [web-chat-plan.md](./web-chat-plan.md), [web-feature-parity-plan.md](./web-feature-parity-plan.md), [web-control-plane-plan.md](./web-control-plane-plan.md), [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md), and [extensions-plan.md](./extensions-plan.md). Those documents contain implementation details. This document defines what Strata is, what we are building first, and how the pieces fit together.
 
 Current implementation status: [status.md](./status.md).
 
@@ -13,7 +13,7 @@ Strata is a local, agent-maintained personal work system.
 It has two tightly connected parts:
 
 1. A Markdown work wiki that captures the user's priorities, projects, people, decisions, meetings, open threads, action items, and source material.
-2. A Bun/TypeScript agentic harness that can query, maintain, and improve that wiki through explicit tools, persistent traces, memory, skills, scheduled maintenance jobs, a TUI, a local browser chat UI, and a local web control plane for connector setup.
+2. A Bun/TypeScript agentic harness that can query, maintain, improve, and locally extend that wiki through explicit tools, persistent traces, memory, skills, scheduled maintenance jobs, extensions, a TUI, a local browser chat UI, and a local web control plane for connector setup.
 
 The wiki is the durable knowledge base. The harness is the working system that keeps the knowledge base useful.
 
@@ -90,6 +90,14 @@ The first target is a Notion MCP tool pack that reuses the current Notion MCP OA
 
 Detailed plan: [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md).
 
+### 7. Extensions
+
+Extensions are trusted local TypeScript modules that can add tools, commands, hooks, prompt/context resources, provider definitions, and eventually TUI/web UI affordances without requiring every workflow to land in core packages. Pi is the exact behavioral guide: Strata should adapt Pi's extension API shape and examples, but implement them in Strata's package boundaries over the shared `runAgentLoopEvents()`, `ToolRegistry`, and `SessionStore`.
+
+Extensions are distinct from external tool packs: tool packs are narrow integration packages such as Notion MCP, while extensions are the broader local customization mechanism that can implement workflows such as permission gates, plan mode, subagent orchestration, prompt customizers, custom providers, and remote-execution wrappers. Extension loading must be explicit, local, trust-aware, profile-gated, and trace-backed.
+
+Detailed plan: [extensions-plan.md](./extensions-plan.md).
+
 ## Learning Loops
 
 Learning is not model training. In Strata, learning means improving durable local artifacts that future sessions can use.
@@ -111,7 +119,7 @@ Strata is not trying to be:
 - A general-purpose clone of Hermes, Claude Code, Codex, or Pi.
 - A cloud SaaS product.
 - A multi-user team knowledge base.
-- A full automation platform with arbitrary integrations by default.
+- A full automation platform with arbitrary integrations enabled by default.
 - A web server exposed to the public internet.
 - A replacement for the user's source systems such as Slack, Notion, or Granola.
 - A model fine-tuning system.
@@ -125,6 +133,7 @@ We should copy good implementation ideas from Hermes and Pi. Pi is especially re
 - Explicit tools: the agent acts through named, auditable tools, not hidden side effects.
 - Shared agent runtime: CLI, TUI, and web chat should call the same agent loop and tool registry rather than implementing separate behavior.
 - Integration isolation: third-party agent tools such as MCP servers should live in explicit integration/tool-pack packages that register ordinary Strata tools; the agent loop should not import provider-specific SDKs.
+- Local extensibility: trusted local extensions should be able to add tools, commands, hooks, resources, providers, and UI affordances through an explicit Pi-shaped API without bypassing the shared agent loop, session store, or policy layer.
 - Shared connector contracts: CLI, TUI, scheduler, and web surfaces should call the same connector APIs.
 - Safe writes: raw sources are immutable, broad writes are guarded, and risky changes should be staged for review.
 - Durable traces: completed work should be inspectable and searchable later.
@@ -147,11 +156,12 @@ The next implementation sequence is:
 6. Wire reflection so learning artifacts improve after useful sessions. Status: basic slice complete.
 7. Add scheduled maintenance jobs for wiki hygiene, memory review, skill curation, stale actions, and index refreshes.
 8. Continue improving the TUI around the richer agent runtime.
-9. Return to source ingestion and wiki automation once the harness can maintain the wiki with observable tools and learning loops. Status: Notion, Granola, and Slack raw snapshots now run through the shared connector runner; Slack also has initial checkpointed sync and Socket Mode tailing. Granola raw backfill now handles official cursor pagination/detail transcript fetches, `strata ingest granola propose` stages review proposals, and `strata ingest raw index --source all|granola|notion|slack` automatically creates curated meeting, project, thread, people, decision, action, index, and log pages from supported raw snapshots. Slack raw-to-wiki now dedupes snapshots, filters low-signal threads, and has been applied to the current local raw Slack corpus. `--index` hooks are present on Granola, Notion, and Slack pulls.
+9. Return to source ingestion and wiki automation once the harness can maintain the wiki with observable tools and learning loops. Status: Notion, Granola, and Slack raw snapshots now run through the shared connector runner; Slack also has initial checkpointed sync and Socket Mode tailing. Granola raw backfill now handles official cursor pagination/detail transcript fetches, `strata ingest granola propose` stages review proposals, and `strata ingest raw index --source all|granola|notion|slack` automatically creates curated meeting, project, source, people, decision, action, index, and log pages from supported raw snapshots. Slack raw-to-wiki now dedupes snapshots, filters low-signal threads, writes material Slack snapshots to `wiki/sources/slack/` instead of bulk `wiki/threads/`, and has been applied to the current local raw Slack corpus. `strata wiki archive-generated-slack-threads` archives legacy generated Slack thread pages out of `wiki/threads`, `strata wiki compact-index` keeps `wiki/index.md` human-scale, and `strata wiki search-index refresh` builds the local curated-first SQLite FTS retrieval index over curated pages, source pages, and raw evidence. `--index` hooks are present on Granola, Notion, and Slack pulls.
 10. Add a browser chat interface over the shared agent runtime so agent sessions can be driven from `apps/web` while Slack ingestion and connector validation continue in the background. Status: foundation live-verified; backend streaming/cancel endpoints, durable web chat run/event storage, replayable SSE reconnects, chat metadata procedures, and the `/chat` route are present, with tool-call rendering, session continuation, persistence, cancellation, file `@`-mention autocomplete, model/reasoning controls, slash commands, prompt history, context/token metrics, learning-tool renderers, dropped-stream reconnect/recovery behavior, and responsive mobile/tablet/narrow-desktop behavior verified in the browser. Core specialized renderers now cover wiki search/read, file read/edit, wiki patch, shell command, memory, todo, and skills tools. Maintain this surface while returning to connector/raw-to-wiki work.
 11. Bring the web composer up to TUI feature parity: file `@`-mention autocomplete, model picker, slash commands, and prompt history. Status: complete in [web-feature-parity-plan.md](./web-feature-parity-plan.md); `listModels` lives in `@strata/agent`, repo file search lives in `@strata/core` as `findRepoFiles`, `chat.files.list` and `chat.models.list` expose those shared data sources through tRPC, `chat.sessions.fork` supports `/fork`, and the web composer has the shared autocomplete primitive plus file mentions, slash commands, persisted model/reasoning selection, and local prompt history.
 12. After connector contracts and automated source-to-wiki flows are stable, deepen the local web control plane for connector setup, dry-runs, schedules, ingest history, and proposal review. Status: initial skeleton present with connector list, Notion operations, Granola key setup, Slack status, and Notion MCP auth.
 13. Add an external tool-pack layer for optional third-party agent tools, starting with Notion MCP tools. Status: planned in [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md); current code has Notion MCP OAuth/list-tools in `packages/web-api`, but no agent-facing MCP tool-pack registration yet.
+14. Add a Pi-style local extension runtime after the core registry/tool-pack composition path is stable. Status: planned in [extensions-plan.md](./extensions-plan.md); no dynamic extension loader, public `ExtensionAPI`, extension command registry, extension hooks, or extension UI API exists yet.
 
 ## Reference Implementations
 
@@ -162,6 +172,7 @@ Pi features to adapt:
 - File read, edit, write, grep, find, list, and shell tools.
 - Tool result truncation and command-output ergonomics.
 - TUI interaction patterns, especially transcript display, prompt editing, auth flow, session selection, and tool-call rendering.
+- Extension architecture: local TypeScript modules, `registerTool`, slash commands, lifecycle hooks, prompt/resource discovery, provider registration, UI hooks, and example workflows such as permission gates, plan mode, remote execution, and subagents.
 
 Hermes features to adapt:
 
@@ -186,6 +197,7 @@ Scheduled maintenance should be treated as a first-class product feature. The po
 - [web-feature-parity-plan.md](./web-feature-parity-plan.md): porting TUI composer features (file `@`-mentions, model picker, slash commands, prompt history) to the web chat by sharing data sources between the two surfaces.
 - [web-control-plane-plan.md](./web-control-plane-plan.md): local web UI for connector setup, operational status, scheduling, and proposal review.
 - [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md): external third-party tool-pack architecture and Notion MCP agent-tool plan.
+- [extensions-plan.md](./extensions-plan.md): Pi-style trusted local extension runtime for tools, commands, hooks, providers, UI affordances, and subagent-style workflows.
 - [slack-connector.md](./slack-connector.md): Slack backfill, checkpointing, Socket Mode, and app setup notes.
 
 When the plans conflict, update this document first, then reconcile the lower-level plan.

@@ -9,9 +9,11 @@ import {
   getChatRun,
   getChatSession,
   listActiveChatRuns,
+  type SessionChangeNotice,
   type StartChatRunRequest,
   startChatRun,
   streamChatRunEvents,
+  streamSessionChanges,
 } from "@/lib/api";
 import {
   agentCompletionMessage,
@@ -60,6 +62,13 @@ export interface SessionRunState {
   usageTotals: TokenUsageTotals;
   /** True once the persisted transcript has been seeded for this view. */
   loaded: boolean;
+  /**
+   * The session has a run active server-side that this tab is *not* streaming
+   * itself (e.g. advanced by the CLI/TUI, or a non-web run). Distinct from
+   * `runState`, which only reflects a stream this tab owns; kept separate so it
+   * never races the discovery reconciler.
+   */
+  externallyRunning: boolean;
 }
 
 /** Mutable streaming bookkeeping; never read during render. */
@@ -100,6 +109,7 @@ function blankState(key: string): SessionRunState {
     error: null,
     usageTotals: createTokenUsageTotals(),
     loaded: false,
+    externallyRunning: false,
   };
 }
 
@@ -120,9 +130,11 @@ class ChatRunsStore {
   private queryClient: QueryClient | null = null;
   private discoverTimer: ReturnType<typeof setInterval> | null = null;
   private discovering = false;
+  private changeFeedStarted = false;
 
   // Cached so the running-set selector keeps a stable identity between renders.
   private runningSnapshot: ReadonlySet<string> = new Set();
+  private queueRefreshVersion = 0;
 
   setQueryClient(client: QueryClient): void {
     this.queryClient = client;
@@ -131,6 +143,7 @@ class ChatRunsStore {
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     this.ensureDiscovering();
+    this.ensureChangeFeed();
     return () => {
       this.listeners.delete(listener);
     };
@@ -139,6 +152,8 @@ class ChatRunsStore {
   getState = (key: string): SessionRunState | undefined => this.states.get(key);
 
   getRunningSessionIds = (): ReadonlySet<string> => this.runningSnapshot;
+
+  getQueueRefreshVersion = (): number => this.queueRefreshVersion;
 
   // --- React notification --------------------------------------------------
   private emit(): void {
@@ -255,6 +270,8 @@ class ChatRunsStore {
         transcript,
         usageTotals: usageTotalsFromMessages(detail.messages),
         loaded: true,
+        externallyRunning:
+          detail.session.status === "running" && this.refs.get(sessionId)?.abort == null,
         error:
           detail.session.status === "failed" || detail.session.status === "interrupted"
             ? agentCompletionMessage(detail.session.status)
@@ -284,7 +301,7 @@ class ChatRunsStore {
       return;
     }
     const state = this.states.get(viewKey);
-    if (state !== undefined && state.runState !== "idle") {
+    if (state !== undefined && (state.runState !== "idle" || state.externallyRunning)) {
       return;
     }
 
@@ -304,6 +321,7 @@ class ChatRunsStore {
       runState: "starting",
       error: null,
       loaded: true,
+      externallyRunning: false,
       ...(continuingSessionId === null ? { usageTotals: createTokenUsageTotals() } : {}),
     });
     this.updateTranscript(viewKey, (current) => [
@@ -476,6 +494,15 @@ class ChatRunsStore {
         });
         break;
       }
+      case "compaction.started":
+        this.update(key, { runState: "streaming" });
+        break;
+      case "compaction.completed":
+        this.update(key, { usageTotals: createTokenUsageTotals() });
+        break;
+      case "compaction.failed":
+        this.update(key, { error: event.message });
+        break;
       case "tool.call.started":
         this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
         break;
@@ -609,6 +636,96 @@ class ChatRunsStore {
     );
   }
 
+  // --- Local realtime change feed -----------------------------------------
+
+  /**
+   * Subscribe to the server's `/api/changes` feed once. Notices arrive whenever
+   * any process advances a session (this tab, another tab, or the CLI/TUI), so
+   * the UI reflects external progress live. Reconnects on drop.
+   */
+  private ensureChangeFeed(): void {
+    if (this.changeFeedStarted) {
+      return;
+    }
+    this.changeFeedStarted = true;
+    const connect = (): void => {
+      const controller = new AbortController();
+      streamSessionChanges((notice) => this.handleExternalChanges(notice), controller.signal).then(
+        () => {
+          // Stream ended cleanly; reconnect after a short delay.
+          setTimeout(connect, 1_000);
+        },
+        () => {
+          setTimeout(connect, 2_000);
+        },
+      );
+    };
+    connect();
+  }
+
+  private handleExternalChanges(notice: SessionChangeNotice): void {
+    // Refresh the sidebar / cmd-k session list (new sessions, status flips).
+    void this.queryClient?.invalidateQueries({ queryKey: ["chat", "sessions"] });
+    // Attach instantly to any newly-started web run (instead of waiting for the
+    // discovery poll); deduped by the `discovering` guard.
+    void this.discoverActiveRuns();
+    if (notice.queue !== undefined) {
+      this.queueRefreshVersion += 1;
+      this.emit();
+    }
+    // Refresh transcripts for sessions we're showing that this tab isn't itself
+    // streaming (CLI/TUI-driven runs, or runs owned by another tab).
+    for (const sessionId of notice.sessionIds) {
+      if (this.states.has(sessionId) && this.refs.get(sessionId)?.abort == null) {
+        void this.reloadSession(sessionId);
+      }
+    }
+  }
+
+  /**
+   * Re-fetch a session's persisted transcript after an external change. Skips
+   * sessions this tab is actively streaming (their live buffer is authoritative)
+   * and never changes `runState`, so it can't race the discovery reconciler.
+   */
+  private async reloadSession(sessionId: string): Promise<void> {
+    if (this.refs.get(sessionId)?.abort != null) {
+      return;
+    }
+    const existing = this.states.get(sessionId);
+    if (existing === undefined) {
+      return;
+    }
+    try {
+      const detail = await getChatSession(sessionId);
+      if (detail === null) {
+        return;
+      }
+      // A live stream may have started while the fetch was in flight.
+      if (this.refs.get(sessionId)?.abort != null) {
+        return;
+      }
+      const current = this.states.get(sessionId);
+      const stored = messagesToTranscript(detail.messages, current?.transcript);
+      const transcript =
+        detail.session.status === "failed" || detail.session.status === "interrupted"
+          ? markPendingMessagesErrored(stored)
+          : detail.session.status === "completed"
+            ? markPendingMessagesComplete(stored)
+            : stored;
+      this.update(sessionId, {
+        sessionId: detail.session.id,
+        sessionTitle: sanitizeDisplayText(detail.session.title),
+        transcript,
+        usageTotals: usageTotalsFromMessages(detail.messages),
+        loaded: true,
+        externallyRunning:
+          detail.session.status === "running" && this.refs.get(sessionId)?.abort == null,
+      });
+    } catch {
+      // Transient; the next change notice retries.
+    }
+  }
+
   // --- Background discovery (cross-tab / reload recovery) ------------------
 
   private ensureDiscovering(): void {
@@ -692,7 +809,7 @@ class ChatRunsStore {
     refs.reconnectAttempts = 0;
     refs.runTerminal = false;
     const keyRef: KeyRef = { current: sessionId };
-    this.update(sessionId, { runState: "streaming", activeRunId: runId });
+    this.update(sessionId, { runState: "streaming", activeRunId: runId, externallyRunning: false });
     if (!this.resumeStream(keyRef, refs, runId, controller, noopNavigate)) {
       refs.abort = null;
       this.update(sessionId, { runState: "disconnected", error: DISCONNECT_MESSAGE });

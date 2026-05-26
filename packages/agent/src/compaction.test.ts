@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { SessionStore } from "@strata/core";
 import { runAgentLoop } from "./agentLoop.js";
-import { compactSession, shouldAutoCompact } from "./compaction.js";
+import {
+  buildCompactedMessageRecords,
+  compactSession,
+  latestCompactionRecord,
+  shouldAutoCompact,
+} from "./compaction.js";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./types.js";
 
 class SequenceModelAdapter implements ModelAdapter {
@@ -27,7 +32,7 @@ class SequenceModelAdapter implements ModelAdapter {
 }
 
 describe("compactSession", () => {
-  test("replaces the session message log with a single user-role summary", async () => {
+  test("appends a compaction checkpoint without deleting the message log", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-compact-"));
     try {
       const initial = new SequenceModelAdapter([
@@ -62,10 +67,24 @@ describe("compactSession", () => {
       const store = await SessionStore.open(repoRoot);
       try {
         const remaining = store.listMessages(first.sessionId);
-        expect(remaining).toHaveLength(1);
-        expect(remaining[0]?.role).toBe("user");
-        expect(remaining[0]?.content).toContain("Summary of our earlier conversation");
-        expect(remaining[0]?.content).toContain("Goal");
+        expect(remaining.filter((message) => message.role === "system")).not.toHaveLength(0);
+        expect(
+          remaining.filter((message) => message.role !== "system").map((message) => message.role),
+        ).toEqual(["user", "assistant"]);
+        expect(remaining.find((message) => message.role === "user")?.content).toBe("hi");
+        expect(remaining.find((message) => message.role === "assistant")?.content).toBe(
+          "Strata here.",
+        );
+
+        const checkpoint = latestCompactionRecord(store, first.sessionId);
+        expect(checkpoint?.summary).toContain("Goal");
+        expect(checkpoint?.firstKeptMessageId).toBeGreaterThan(0);
+
+        const compacted = buildCompactedMessageRecords(store, first.sessionId);
+        expect(compacted).toHaveLength(1);
+        expect(compacted[0]?.role).toBe("user");
+        expect(compacted[0]?.content).toContain("Summary of our earlier conversation");
+        expect(compacted[0]?.content).toContain("Goal");
       } finally {
         store.close();
       }
@@ -120,6 +139,8 @@ describe("compactSession", () => {
       const updatePrompt = String(updateSummarizer.requests[0]?.messages[1]?.content ?? "");
       expect(updatePrompt).toContain("<previous-summary>");
       expect(updatePrompt).toContain("greet"); // includes the prior summary text
+      expect(updatePrompt).toContain("q2");
+      expect(updatePrompt).toContain("ok2");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
@@ -143,9 +164,15 @@ describe("compactSession", () => {
   });
 
   test("shouldAutoCompact crosses the threshold", () => {
-    expect(shouldAutoCompact({ contextWindow: 1000, latestContextTokens: 750 })).toBe(true);
-    expect(shouldAutoCompact({ contextWindow: 1000, latestContextTokens: 749 })).toBe(false);
-    // Default threshold 0.75; explicit threshold overrides.
+    expect(shouldAutoCompact({ contextWindow: 100_000, latestContextTokens: 83_617 })).toBe(true);
+    expect(shouldAutoCompact({ contextWindow: 100_000, latestContextTokens: 83_616 })).toBe(false);
+    expect(
+      shouldAutoCompact({ contextWindow: 1000, latestContextTokens: 900, reserveTokens: 100 }),
+    ).toBe(false);
+    expect(
+      shouldAutoCompact({ contextWindow: 1000, latestContextTokens: 901, reserveTokens: 100 }),
+    ).toBe(true);
+    // Explicit threshold remains available as a ratio override.
     expect(shouldAutoCompact({ contextWindow: 100, latestContextTokens: 50, threshold: 0.4 })).toBe(
       true,
     );
@@ -181,6 +208,56 @@ describe("compactSession", () => {
       expect(nonSystem.map((m) => m.role)).toEqual(["user", "user"]);
       expect(nonSystem[0]?.content).toContain("Summary of our earlier conversation");
       expect(nonSystem[1]?.content).toBe("follow-up");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("summarizes a split turn prefix while keeping the suffix", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-compact-split-"));
+    try {
+      const model = new SequenceModelAdapter([
+        {
+          content: "assistant suffix ".repeat(200),
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+      const first = await runAgentLoop({
+        question: "user prefix ".repeat(200),
+        model,
+        repoRoot,
+      });
+
+      const summarizer = new SequenceModelAdapter([
+        {
+          content: "original request and early progress",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+      const result = await compactSession({
+        sessionId: first.sessionId,
+        model: summarizer,
+        repoRoot,
+        keepRecentTokens: 1,
+      });
+
+      expect(result.isSplitTurn).toBe(true);
+      expect(result.turnPrefixMessagesSummarized).toBe(1);
+      expect(result.summary).toContain("Turn Context (split turn)");
+      expect(summarizer.requests).toHaveLength(1);
+      expect(summarizer.requests[0]?.messages[1]?.content).toContain("PREFIX of a turn");
+
+      const store = await SessionStore.open(repoRoot);
+      try {
+        const compacted = buildCompactedMessageRecords(store, first.sessionId);
+        expect(compacted.map((message) => message.role)).toEqual(["user", "assistant"]);
+        expect(compacted[0]?.content).toContain("Turn Context (split turn)");
+        expect(compacted[1]?.content).toContain("assistant suffix");
+      } finally {
+        store.close();
+      }
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

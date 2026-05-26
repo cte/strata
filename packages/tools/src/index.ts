@@ -7,6 +7,7 @@ export * from "./sessionTools.js";
 export * from "./shellTools.js";
 export * from "./skillTools.js";
 export * from "./todoTools.js";
+export * from "./toolPacks.js";
 export * from "./types.js";
 export * from "./wikiTools.js";
 

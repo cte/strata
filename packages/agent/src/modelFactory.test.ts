@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChatGptCredentials } from "./authStore.js";
-import { setChatGptCredentials } from "./authStore.js";
+import type { AnthropicCredentials, ChatGptCredentials } from "./authStore.js";
+import { setAnthropicCredentials, setChatGptCredentials } from "./authStore.js";
+
 import {
   createModelAdapter,
   defaultModel,
@@ -18,8 +19,9 @@ describe("model factory", () => {
     expect(parseModelProvider("")).toBeUndefined();
     expect(parseModelProvider("openai-codex")).toBe("openai-codex");
     expect(parseModelProvider("openai-compatible")).toBe("openai-compatible");
+    expect(parseModelProvider("anthropic-claude")).toBe("anthropic-claude");
     expect(() => parseModelProvider("other")).toThrow(
-      "STRATA_PROVIDER must be openai-codex or openai-compatible",
+      "STRATA_PROVIDER must be openai-codex, openai-compatible, or anthropic-claude",
     );
   });
 
@@ -42,7 +44,9 @@ describe("model factory", () => {
 
   test("resolves default display models from env", () => {
     expect(defaultModel("openai-codex", { env: {} })).toBe("gpt-5.5");
+    expect(defaultModel("anthropic-claude", { env: {} })).toBe("claude-sonnet-4-6");
     expect(defaultModel("openai-compatible", { env: {} })).toBe("gpt-4o-mini");
+
     expect(defaultModel("openai-compatible", { env: { OPENAI_MODEL: "gpt-test" } })).toBe(
       "gpt-test",
     );
@@ -72,6 +76,32 @@ describe("model factory", () => {
       await expect(
         createModelAdapter({ provider: "openai-codex", repoRoot, env: {} }),
       ).rejects.toThrow("Not logged in with ChatGPT");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("creates Anthropic Claude adapters from repo-local auth", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-model-factory-"));
+    try {
+      await setAnthropicCredentials(fakeAnthropicCredentials(), repoRoot);
+      const adapter = await createModelAdapter({
+        provider: "anthropic-claude",
+        repoRoot,
+        env: { STRATA_MODEL: "claude-test" },
+      });
+      expect(adapter.name).toBe("anthropic-claude:claude-test");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("reports missing Anthropic auth", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-model-factory-"));
+    try {
+      await expect(
+        createModelAdapter({ provider: "anthropic-claude", repoRoot, env: {} }),
+      ).rejects.toThrow("Not logged in with Anthropic");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
@@ -139,8 +169,67 @@ describe("model factory", () => {
     }
   });
 
+  test("lists Anthropic Claude models", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-model-factory-"));
+    const originalFetch = globalThis.fetch;
+    const seen: Array<{
+      url: string;
+      authorization: string | null;
+      version: string | null;
+      beta: string | null;
+      directBrowserAccess: string | null;
+      app: string | null;
+    }> = [];
+    globalThis.fetch = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        const request = requestFromFetchArgs(args);
+        seen.push({
+          url: request.url,
+          authorization: request.headers.get("authorization"),
+          version: request.headers.get("anthropic-version"),
+          beta: request.headers.get("anthropic-beta"),
+          directBrowserAccess: request.headers.get("anthropic-dangerous-direct-browser-access"),
+          app: request.headers.get("x-app"),
+        });
+        return Response.json({
+          data: [
+            { id: "claude-zeta", display_name: "Zeta" },
+            { id: "claude-alpha", display_name: "Alpha" },
+          ],
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    ) satisfies typeof fetch;
+    try {
+      await setAnthropicCredentials(fakeAnthropicCredentials(), repoRoot);
+      await expect(
+        listModels("anthropic-claude", {
+          repoRoot,
+          env: { STRATA_ANTHROPIC_BASE_URL: "https://anthropic.example/v1/" },
+        }),
+      ).resolves.toEqual([
+        { id: "claude-alpha", description: "Alpha" },
+        { id: "claude-zeta", description: "Zeta" },
+      ]);
+      expect(seen).toEqual([
+        {
+          url: "https://anthropic.example/v1/models",
+          authorization: "Bearer access",
+          version: "2023-06-01",
+          beta: "claude-code-20250219,oauth-2025-04-20",
+          directBrowserAccess: "true",
+          app: "cli",
+        },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("lists non-deprecated Codex models", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-model-factory-"));
+
     const originalFetch = globalThis.fetch;
     const seen: Array<{ url: string; authorization: string | null }> = [];
     globalThis.fetch = Object.assign(
@@ -192,6 +281,18 @@ function fakeCredentials(): ChatGptCredentials {
     refreshToken: "refresh",
     expiresAt: Date.now() + 60 * 60 * 1000,
     accountId: "acct",
+    createdAt: "2026-05-09T00:00:00.000Z",
+    updatedAt: "2026-05-09T00:00:00.000Z",
+  };
+}
+
+function fakeAnthropicCredentials(): AnthropicCredentials {
+  return {
+    type: "anthropic_oauth",
+    accessToken: "access",
+    refreshToken: "refresh",
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    scopes: ["user:inference", "user:profile"],
     createdAt: "2026-05-09T00:00:00.000Z",
     updatedAt: "2026-05-09T00:00:00.000Z",
   };

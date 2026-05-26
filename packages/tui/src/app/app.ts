@@ -8,7 +8,6 @@ import {
   getValidChatGptCredentials,
   type ModelAdapter,
   runAgentLoopEvents,
-  shouldAutoCompact,
   THINKING_LEVELS,
 } from "@strata/agent";
 import {
@@ -18,13 +17,18 @@ import {
   type SessionRecord,
   SessionStore,
 } from "@strata/core";
+import { createConfiguredMcpToolPack } from "@strata/integration-mcp/exa";
+
+import { createToolRegistryWithPacks, type ToolPack } from "@strata/tools";
 import { sanitizeTerminalText } from "../ansi.js";
+
 import { SlashCommandRegistry } from "../commands.js";
 import type { Component, Frame, RenderContext } from "../component.js";
 import { DynamicBorder } from "../components.js";
 import { Editor } from "../editor.js";
 import { TuiRuntime } from "../runtime.js";
-import { AuthDialog, logoutChatGpt } from "./authDialog.js";
+import { AuthDialog, logoutAnthropic, logoutChatGpt } from "./authDialog.js";
+
 import { Footer, StatusLine } from "./chrome.js";
 import { copyToClipboard } from "./clipboard.js";
 import { CombinedAutocompleteProvider } from "./combinedAutocomplete.js";
@@ -373,16 +377,21 @@ export class StrataApp implements Component {
           `openai-codex: ${this.state.auth.codexLoggedIn ? `logged in (expires ${this.state.auth.codexExpiresAt !== undefined ? new Date(this.state.auth.codexExpiresAt).toISOString() : "unknown"})` : "not logged in"}`,
         );
         lines.push(
+          `anthropic-claude: ${this.state.auth.anthropicLoggedIn ? `logged in (expires ${this.state.auth.anthropicExpiresAt !== undefined ? new Date(this.state.auth.anthropicExpiresAt).toISOString() : "unknown"})` : "not logged in"}`,
+        );
+        lines.push(
           `openai-compatible: ${this.state.auth.apiKeyConfigured ? "API key configured" : "not configured"}`,
         );
+
         appendTranscript(this.state, { kind: "status", content: lines.join("  ·  ") });
         this.invalidate();
       },
     });
     this.registry.register({
       name: "login",
-      description: "sign in to openai-codex",
-      run: () => {
+      description: "sign in to openai-codex or anthropic-claude",
+      run: (args) => {
+        const provider = args.trim() === "anthropic-claude" ? "anthropic-claude" : "openai-codex";
         this.authDialog.start((result) => {
           appendTranscript(this.state, {
             kind: result.ok ? "status" : "error",
@@ -391,25 +400,31 @@ export class StrataApp implements Component {
           void loadAuthStatus().then((auth) => {
             this.state.auth = auth;
             if (result.ok) {
-              this.state.provider = "openai-codex";
+              setModelSelection(this.state, provider, defaultModel(provider));
               this.persistPreferences();
             }
             this.invalidate();
           });
-        });
+        }, provider);
         this.invalidate();
       },
     });
     this.registry.register({
       name: "logout",
-      description: "remove openai-codex credentials",
-      run: async () => {
-        await logoutChatGpt();
+      description: "remove openai-codex or anthropic-claude credentials",
+      run: async (args) => {
+        const provider = args.trim() === "anthropic-claude" ? "anthropic-claude" : "openai-codex";
+        if (provider === "anthropic-claude") {
+          await logoutAnthropic();
+        } else {
+          await logoutChatGpt();
+        }
         this.state.auth = await loadAuthStatus();
-        appendTranscript(this.state, { kind: "status", content: "Logged out of openai-codex." });
+        appendTranscript(this.state, { kind: "status", content: `Logged out of ${provider}.` });
         this.invalidate();
       },
     });
+
     this.registry.register({
       name: "model",
       description: "pick a model for the current provider",
@@ -447,10 +462,14 @@ export class StrataApp implements Component {
     });
     this.registry.register({
       name: "provider",
-      description: "switch provider (openai-codex|openai-compatible)",
+      description: "switch provider (openai-codex|openai-compatible|anthropic-claude)",
       run: (args) => {
         const value = args.trim();
-        if (value !== "openai-codex" && value !== "openai-compatible") {
+        if (
+          value !== "openai-codex" &&
+          value !== "openai-compatible" &&
+          value !== "anthropic-claude"
+        ) {
           appendTranscript(this.state, {
             kind: "error",
             content: `unknown provider: ${value || "(none)"}`,
@@ -615,6 +634,19 @@ export class StrataApp implements Component {
     await this.runAgent(trimmed);
   }
 
+  private async createToolRegistry(signal: AbortSignal) {
+    const packs: ToolPack[] = [createConfiguredMcpToolPack()];
+
+    return createToolRegistryWithPacks({
+      context: {
+        repoRoot: this.repoRoot,
+        env: Bun.env,
+        signal,
+      },
+      packs,
+    });
+  }
+
   private async runAgent(question: string): Promise<void> {
     let model: ModelAdapter;
     try {
@@ -659,7 +691,9 @@ export class StrataApp implements Component {
         model,
         repoRoot: this.repoRoot,
         signal,
+        tools: await this.createToolRegistry(signal),
         reasoningEffort: this.state.reasoningEffort,
+
         ...(attachments.length > 0 ? { attachments } : {}),
         ...(this.state.currentSessionId !== undefined
           ? { continueSessionId: this.state.currentSessionId }
@@ -683,7 +717,6 @@ export class StrataApp implements Component {
   }
 
   private async afterRun(): Promise<void> {
-    await this.maybeAutoCompact();
     await this.drainQueuedMessages();
   }
 
@@ -718,45 +751,6 @@ export class StrataApp implements Component {
     await this.onSubmit(next);
   }
 
-  private async maybeAutoCompact(): Promise<void> {
-    const sessionId = this.state.currentSessionId;
-    if (sessionId === undefined) return;
-    const trigger = shouldAutoCompact({
-      contextWindow: this.state.contextWindow,
-      latestContextTokens: this.state.usage.latestContextTokens,
-    });
-    if (!trigger) return;
-    let model: ModelAdapter;
-    try {
-      model = await createModelAdapter({
-        provider: this.state.provider,
-        model: this.state.model,
-      });
-    } catch {
-      return;
-    }
-    appendTranscript(this.state, {
-      kind: "status",
-      content: "context window getting full — auto-compacting…",
-    });
-    this.invalidate();
-    try {
-      const result = await compactSession({ sessionId, model, repoRoot: this.repoRoot });
-      appendTranscript(this.state, {
-        kind: "status",
-        content: `auto-compacted ${result.messagesSummarized} messages${result.incremental ? " (incremental)" : ""}`,
-      });
-      resetTokenUsage(this.state.usage);
-    } catch (error: unknown) {
-      appendTranscript(this.state, {
-        kind: "error",
-        content: `auto-compact failed: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    } finally {
-      this.invalidate();
-    }
-  }
-
   private applyAgentEvent(event: AgentRunEvent): void {
     switch (event.type) {
       case "session.started":
@@ -783,6 +777,25 @@ export class StrataApp implements Component {
         this.clearRetryCountdown();
         recordModelUsage(this.state, event.usage);
         finalizeAssistantStream(this.state, event.iteration, event.content);
+        return;
+      case "compaction.started":
+        appendTranscript(this.state, {
+          kind: "status",
+          content: "context window getting full — auto-compacting…",
+        });
+        return;
+      case "compaction.completed":
+        appendTranscript(this.state, {
+          kind: "status",
+          content: `auto-compacted ${event.messagesSummarized} messages${event.incremental ? " (incremental)" : ""}`,
+        });
+        resetTokenUsage(this.state.usage);
+        return;
+      case "compaction.failed":
+        appendTranscript(this.state, {
+          kind: "error",
+          content: `auto-compact failed: ${event.message}`,
+        });
         return;
       case "tool.call.started":
         recordToolStart(this.state, {
@@ -1395,7 +1408,7 @@ function parseProviderEnv(): ProviderName | undefined {
 }
 
 function parseProviderName(value: string): ProviderName | undefined {
-  if (value === "openai-codex" || value === "openai-compatible") {
+  if (value === "openai-codex" || value === "openai-compatible" || value === "anthropic-claude") {
     return value;
   }
   return undefined;

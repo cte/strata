@@ -182,7 +182,7 @@ describe("Granola raw-to-wiki proposals", () => {
     });
   });
 
-  test("indexes raw Slack threads into thread wiki pages", async () => {
+  test("indexes raw Slack threads into source pages without root thread fanout", async () => {
     await withTempRepo(async (repoRoot) => {
       await mkdir(path.join(repoRoot, "wiki/raw/slack"), { recursive: true });
       const rawPath = path.join(repoRoot, "wiki/raw/slack/2026-05-08-self-serve-pricing.md");
@@ -198,28 +198,28 @@ describe("Granola raw-to-wiki proposals", () => {
       expect(result.scanned).toBe(1);
       expect(result.indexed).toHaveLength(1);
       expect(result.indexed[0]?.source).toBe("slack");
-      expect(result.indexed[0]?.primaryKind).toBe("thread");
+      expect(result.indexed[0]?.primaryKind).toBe("source");
       expect(result.indexed[0]?.primaryPath).toBe(
-        "wiki/threads/c123-1778304572568589-can-we-enable-self-serve-pricing.md",
+        "wiki/sources/slack/c123/2026-05-08-1778304572568589-can-we-enable-self-serve-pricing.md",
       );
       expect(result.indexed[0]?.projectPaths).toContain("wiki/projects/self-serve.md");
       expect(result.indexed[0]?.projectPaths).toContain("wiki/projects/pricing.md");
+      expect(result.indexed[0]?.threadPaths).toEqual([]);
 
-      const thread = await readFile(
+      const source = await readFile(
         path.join(
           repoRoot,
-          "wiki/threads/c123-1778304572568589-can-we-enable-self-serve-pricing.md",
+          "wiki/sources/slack/c123/2026-05-08-1778304572568589-can-we-enable-self-serve-pricing.md",
         ),
         "utf8",
       );
-      expect(thread).toContain("type: thread");
-      expect(thread).toContain("Raw source:");
-      expect(thread).toContain("Can we enable self serve pricing?");
+      expect(source).toContain("type: slack_source");
+      expect(source).toContain("Raw source:");
+      expect(source).toContain("Can we enable self serve pricing?");
 
       const index = await readFile(path.join(repoRoot, "wiki/index.md"), "utf8");
-      expect(index).toContain(
-        "[[threads/c123-1778304572568589-can-we-enable-self-serve-pricing|Can we enable self serve pricing?]]",
-      );
+      expect(index).toContain("[[projects/self-serve|Self Serve]]");
+      expect(index).not.toContain("[[sources/slack/c123/");
     });
   });
 

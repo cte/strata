@@ -9,7 +9,7 @@ Strata is a local, agent-maintained personal work system.
 It has two connected parts:
 
 1. A Markdown work wiki that captures the user's priorities, projects, people, meetings, decisions, open threads, action items, and source material.
-2. A Bun/TypeScript agentic harness that can query, maintain, and improve that wiki through explicit tools, durable traces, memory, skills, scheduled maintenance jobs, a TUI, a local browser chat UI, and a local web control plane for connector setup.
+2. A Bun/TypeScript agentic harness that can query, maintain, improve, and locally extend that wiki through explicit tools, durable traces, memory, skills, scheduled maintenance jobs, extensions, a TUI, a local browser chat UI, and a local web control plane for connector setup.
 
 The wiki is the durable knowledge base. The harness is the working system that keeps that knowledge base useful.
 
@@ -28,10 +28,12 @@ The detailed plans are subordinate to the roadmap:
 - [docs/tui-plan.md](docs/tui-plan.md): terminal UI architecture and implementation direction.
 - [docs/web-chat-plan.md](docs/web-chat-plan.md): local browser chat over the shared agent loop.
 - [docs/web-control-plane-plan.md](docs/web-control-plane-plan.md): local browser UI for connector setup, schedules, ingest history, and proposal review.
+- [docs/tool-packs-mcp-plan.md](docs/tool-packs-mcp-plan.md): external third-party tool-pack architecture and Notion MCP agent-tool plan.
+- [docs/extensions-plan.md](docs/extensions-plan.md): Pi-style trusted local extension runtime for tools, commands, hooks, providers, UI affordances, and subagent-style workflows.
 
 When plans conflict, update `docs/roadmap.md` first, then reconcile `docs/status.md` and the relevant detailed plan.
 
-The current implementation focus is documented in `docs/status.md`. At the time this file was last updated, raw-to-wiki indexing could automatically create curated meeting/entity wiki pages from Granola, Notion, and material Slack raw snapshots, and the next milestone was improving classification quality, entity consolidation, and curated-first retrieval/indexing depth.
+The current implementation focus is documented in `docs/status.md`. At the time this file was last updated, raw-to-wiki indexing could automatically create curated meeting/entity wiki pages from Granola and Notion, material Slack snapshots were routed through `wiki/sources/slack/` before selective promotion into curated folders, and the next milestone was improving classification quality, entity consolidation, and curated-first retrieval/indexing depth.
 
 If you change the core roadmap path, milestone sequencing, package boundaries, runtime architecture, agent-loop behavior, tool architecture, connector architecture, or any other load-bearing design decision, use `$maintain-documentation` and update the relevant docs in the same change.
 
@@ -98,14 +100,15 @@ The CLI currently exposes `auth status|login|logout`, `init`, `query`, `tui` wit
 
 ```text
 packages/
-  core/    SessionStore, JsonValue/SessionRecord types, paths, runtime dirs
-  tools/   ToolRegistry, policy guards, current wiki read/search tools
-  agent/   ModelAdapter contract, OpenAI adapters, ChatGPT OAuth, agent loop
-  tui/     First-party terminal UI runtime, components, editor, app
-  cli/     strata command-line entrypoint
-  ingest/  Source and wiki scripts: lintWiki, pullGranola, pullSlack, pullNotion
-  web-api/ Local HTTP API for connector setup and operations
-  e2e/     End-to-end TUI/agent tests driven through FakeTerminal
+  core/        SessionStore, JsonValue/SessionRecord types, paths, runtime dirs
+  tools/       ToolRegistry, policy guards, current wiki read/search tools
+  agent/       ModelAdapter contract, OpenAI adapters, ChatGPT OAuth, agent loop
+  tui/         First-party terminal UI runtime, components, editor, app
+  cli/         strata command-line entrypoint
+  ingest/      Source and wiki scripts: lintWiki, pullGranola, pullSlack, pullNotion
+  web-api/     Local HTTP API for connector setup and operations
+  e2e/         End-to-end TUI/agent tests driven through FakeTerminal
+  extensions/  Planned Pi-style local extension runtime
 apps/
   web/     Vite/React/TanStack Router local control-plane UI
 docs/      Roadmap and implementation status
@@ -130,7 +133,11 @@ Web chat SSE streams must stay alive while the model is thinking. `packages/web-
 
 Web chat lifecycle diagnostics are durable trace events. Run start, browser stream close, explicit cancel requests, and run finish should be appended to the associated `.strata/traces/<sessionId>.jsonl` trace so stopped browser tasks can be debugged after the request is gone.
 
+Cross-process realtime stays local and event-log-driven. The web UI reflects sessions advanced by any process (other browser tabs, CLI, TUI, maintenance, ingest) via a local change feed — `packages/web-api/src/changeFeed.ts` tails the shared `events` table through `SessionStore.sessionChangesSince` and fans out notices over `GET /api/changes`; the browser store reacts by refreshing the sessions list and reloading affected non-client-streamed sessions. This depends on every writer appending to `SessionStore`'s `events` table (which `session.started`/`session.ended`/messages/tools already do). Do not route run persistence around `SessionStore.appendEvent`, and do not replace this with an external/cloud datastore — it is a notification layer over the local SQLite event log, preserving locality.
+
 Run context includes durable local guidance. `packages/agent/src/runContext.ts` injects root `AGENTS.md`, memory, active todos, and the prompt-visible skill index on every run, including continued sessions.
+
+Auto-compaction is owned by the shared agent loop and is append-only. `packages/agent/src/compaction.ts` appends `compaction.completed` checkpoint events instead of deleting historical messages; continued runs rebuild model context through `buildCompactedMessageRecords()` as fresh system context, the latest summary checkpoint, and kept recent messages. Threshold compaction uses Pi's `contextWindow - reserveTokens` rule, overflow errors compact and retry once, and stale pre-compaction usage must not immediately retrigger compaction.
 
 Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), optional `maxResultChars`, and optional `executionMode` (`parallel` or `sequential`). The agent loop executes multiple tool calls in Pi-style `parallel` mode by default: starts are emitted in assistant source order, completions are emitted as tools finish, and persisted tool-result messages remain in assistant source order. Any called tool with `executionMode: "sequential"` forces the whole batch sequential. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values.
 

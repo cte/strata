@@ -11,8 +11,10 @@ import {
 import {
   BookOpen,
   GitPullRequest,
+  KeyRound,
   LoaderCircle,
   MessageSquare,
+  Network,
   Plus,
   Search,
   Trash2,
@@ -63,6 +65,9 @@ import { ConnectorsPage } from "@/routes/connectors";
 import { ConnectorsGranolaPage } from "@/routes/connectors-granola";
 import { ConnectorsNotionPage } from "@/routes/connectors-notion";
 import { ConnectorsSlackPage } from "@/routes/connectors-slack";
+import { SettingsMcpsPage } from "@/routes/settings-mcps";
+import { SettingsModelsPage } from "@/routes/settings-models";
+
 import { WikiPage } from "@/routes/wiki";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "strata:sidebar:collapsed";
@@ -126,6 +131,8 @@ function AppSidebar(): React.ReactElement {
               <ChatNavItem />
               <NavItem to="/wiki" label="Wiki" icon={BookOpen} />
               <NavItem to="/connectors" label="Connectors" icon={GitPullRequest} />
+              <NavItem to="/settings/models" label="Model auth" icon={KeyRound} />
+              <NavItem to="/settings/mcps" label="MCP servers" icon={Network} />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -151,9 +158,10 @@ function NavItem({
   label,
   icon: Icon,
 }: {
-  to: "/connectors" | "/wiki";
+  to: "/connectors" | "/settings/mcps" | "/settings/models" | "/wiki";
 
   label: string;
+
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
 }): React.ReactElement {
   const matchRoute = useMatchRoute();
@@ -832,6 +840,18 @@ const connectorsSlackRoute = createRoute({
   component: ConnectorsSlackPage,
 });
 
+const settingsModelsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/models",
+  component: SettingsModelsPage,
+});
+
+const settingsMcpsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/mcps",
+  component: SettingsMcpsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   chatRoute,
@@ -841,6 +861,8 @@ const routeTree = rootRoute.addChildren([
   connectorsNotionRoute,
   connectorsGranolaRoute,
   connectorsSlackRoute,
+  settingsModelsRoute,
+  settingsMcpsRoute,
 ]);
 
 export const router = createRouter({ routeTree });

@@ -254,17 +254,17 @@ We agreed to test pricing with a small cohort.
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("indexed: 1");
       expect(result.stdout).toContain(
-        "wrote thread wiki/threads/c123-1778304572568589-can-we-enable-self-serve-pricing.md",
+        "wrote source wiki/sources/slack/c123/2026-05-08-1778304572568589-can-we-enable-self-serve-pricing.md",
       );
-      const thread = await readFile(
+      const source = await readFile(
         path.join(
           repoRoot,
-          "wiki/threads/c123-1778304572568589-can-we-enable-self-serve-pricing.md",
+          "wiki/sources/slack/c123/2026-05-08-1778304572568589-can-we-enable-self-serve-pricing.md",
         ),
         "utf8",
       );
-      expect(thread).toContain("type: thread");
-      expect(thread).toContain("source: raw/slack/2026-05-08-self-serve-pricing.md");
+      expect(source).toContain("type: slack_source");
+      expect(source).toContain("source: raw/slack/2026-05-08-self-serve-pricing.md");
     });
   });
 });

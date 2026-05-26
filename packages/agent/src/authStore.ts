@@ -4,6 +4,7 @@ import path from "node:path";
 import { getStrataPaths } from "@strata/core";
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+export const ANTHROPIC_CLAUDE_PROVIDER_ID = "anthropic-claude";
 
 export interface ChatGptCredentials {
   type: "chatgpt_oauth";
@@ -15,10 +16,23 @@ export interface ChatGptCredentials {
   updatedAt: string;
 }
 
+export interface AnthropicCredentials {
+  type: "anthropic_oauth";
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  scopes: string[];
+  subscriptionType?: string;
+  rateLimitTier?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AuthStoreData {
   version: 1;
   credentials: {
     [OPENAI_CODEX_PROVIDER_ID]?: ChatGptCredentials;
+    [ANTHROPIC_CLAUDE_PROVIDER_ID]?: AnthropicCredentials;
   };
 }
 
@@ -45,6 +59,28 @@ export async function setChatGptCredentials(
 export async function clearChatGptCredentials(repoRoot?: string): Promise<void> {
   const data = await loadAuthStore(repoRoot);
   delete data.credentials[OPENAI_CODEX_PROVIDER_ID];
+  await saveAuthStore(data, repoRoot);
+}
+
+export async function getAnthropicCredentials(
+  repoRoot?: string,
+): Promise<AnthropicCredentials | undefined> {
+  const data = await loadAuthStore(repoRoot);
+  return data.credentials[ANTHROPIC_CLAUDE_PROVIDER_ID];
+}
+
+export async function setAnthropicCredentials(
+  credentials: AnthropicCredentials,
+  repoRoot?: string,
+): Promise<void> {
+  const data = await loadAuthStore(repoRoot);
+  data.credentials[ANTHROPIC_CLAUDE_PROVIDER_ID] = credentials;
+  await saveAuthStore(data, repoRoot);
+}
+
+export async function clearAnthropicCredentials(repoRoot?: string): Promise<void> {
+  const data = await loadAuthStore(repoRoot);
+  delete data.credentials[ANTHROPIC_CLAUDE_PROVIDER_ID];
   await saveAuthStore(data, repoRoot);
 }
 

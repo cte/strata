@@ -94,6 +94,7 @@
         "@strata/agent": "workspace:*",
         "@strata/core": "workspace:*",
         "@strata/ingest": "workspace:*",
+        "@strata/integration-mcp": "workspace:*",
         "@strata/tools": "workspace:*",
         "@strata/tui": "workspace:*",
       },
@@ -125,6 +126,15 @@
         "@strata/core": "workspace:*",
       },
     },
+    "packages/integration-mcp": {
+      "name": "@strata/integration-mcp",
+      "version": "0.1.0",
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@strata/core": "workspace:*",
+        "@strata/tools": "workspace:*",
+      },
+    },
     "packages/tools": {
       "name": "@strata/tools",
       "version": "0.1.0",
@@ -138,6 +148,7 @@
       "dependencies": {
         "@strata/agent": "workspace:*",
         "@strata/core": "workspace:*",
+        "@strata/integration-mcp": "workspace:*",
         "@strata/tools": "workspace:*",
         "cli-highlight": "^2.1.11",
         "marked": "^18.0.3",
@@ -152,6 +163,8 @@
         "@strata/agent": "workspace:*",
         "@strata/core": "workspace:*",
         "@strata/ingest": "workspace:*",
+        "@strata/integration-mcp": "workspace:*",
+        "@strata/tools": "workspace:*",
         "@trpc/server": "^11.17.0",
         "hono": "^4.12.18",
         "zod": "^4.4.3",
@@ -519,6 +532,8 @@
     "@strata/e2e": ["@strata/e2e@workspace:packages/e2e"],
 
     "@strata/ingest": ["@strata/ingest@workspace:packages/ingest"],
+
+    "@strata/integration-mcp": ["@strata/integration-mcp@workspace:packages/integration-mcp"],
 
     "@strata/tools": ["@strata/tools@workspace:packages/tools"],
 

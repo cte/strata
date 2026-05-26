@@ -20,6 +20,8 @@ export interface UseChatRunResult {
   sessionTitle: string | null;
   transcript: ChatMessageView[];
   runState: ChatRunState;
+  /** A run is advancing this session in another process/tab (not streamed here). */
+  externallyRunning: boolean;
   activeRunId: string | null;
   error: string | null;
   setError(message: string | null): void;
@@ -78,6 +80,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
       error: null,
       usageTotals: createTokenUsageTotals(),
       loaded: false,
+      externallyRunning: false,
     }),
     [runKey, urlSessionId],
   );
@@ -123,6 +126,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     sessionTitle: view.sessionTitle,
     transcript: view.transcript,
     runState: view.runState,
+    externallyRunning: view.externallyRunning,
     activeRunId: view.activeRunId,
     error: view.error,
     setError,

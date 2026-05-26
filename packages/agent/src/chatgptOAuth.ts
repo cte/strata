@@ -30,6 +30,13 @@ export interface ChatGptLoginCallbacks {
   signal?: AbortSignal;
 }
 
+export interface ChatGptAuthorizationRequest {
+  url: string;
+  state: string;
+  verifier: string;
+  redirectUri: string;
+}
+
 interface TokenResponse {
   access_token?: string;
   refresh_token?: string;
@@ -51,9 +58,8 @@ export async function loginChatGpt(callbacks: ChatGptLoginCallbacks): Promise<Ch
   };
 
   ensureNotCancelled();
-  const { verifier, challenge } = await generatePkce();
-  const state = createState();
-  const authUrl = createAuthUrl(state, challenge);
+  const { url: authUrl, state, verifier } = await createChatGptAuthorizationRequest();
+
   const server = await startCallbackServer(state);
 
   const onAbort = (): void => {
@@ -100,6 +106,26 @@ export async function loginChatGpt(callbacks: ChatGptLoginCallbacks): Promise<Ch
     signal?.removeEventListener("abort", onAbort);
     await server.close();
   }
+}
+
+export async function createChatGptAuthorizationRequest(): Promise<ChatGptAuthorizationRequest> {
+  const { verifier, challenge } = await generatePkce();
+  const state = createState();
+  return {
+    url: createAuthUrl(state, challenge),
+    state,
+    verifier,
+    redirectUri: REDIRECT_URI,
+  };
+}
+
+export async function completeChatGptAuthorizationCode(
+  code: string,
+  verifier: string,
+  signal?: AbortSignal,
+): Promise<ChatGptCredentials> {
+  const token = await exchangeAuthorizationCode(code, verifier, signal);
+  return credentialsFromToken(token);
 }
 
 export async function refreshChatGptCredentials(

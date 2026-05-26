@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import type * as React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AttachmentData } from "@/components/ai-elements/attachments";
 import {
   Attachment,
@@ -98,12 +98,19 @@ import { ChatModelPicker } from "@/components/chat-model-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  appendQueuedChatMessage,
-  dequeueQueuedChatMessage,
+  addChatQueuedMessage,
+  clearChatQueuedMessages,
+  invokeChatSkill,
+  listChatQueuedMessages,
+  removeChatQueuedMessage,
+  type ChatQueueTarget,
+} from "@/lib/api";
+import { chatComposerSubmitState } from "@/lib/chatComposer";
+import {
   type QueuedChatMessage,
   queuedChatMessageDescription,
+  queuedChatMessageFromSummary,
   queuedChatMessageLabel,
-  removeQueuedChatMessage,
 } from "@/lib/chatMessageQueue";
 import {
   type ChatMessageView,
@@ -120,6 +127,7 @@ import {
   type TokenUsageTotals,
 } from "@/lib/chatUsage";
 import { createFileMentionProvider } from "@/lib/fileMentionProvider";
+import { createSkillCommandProvider } from "@/lib/skillCommandProvider";
 import {
   createSlashCommandProvider,
   parseSlashCommand,
@@ -127,8 +135,10 @@ import {
 } from "@/lib/slashCommandProvider";
 import type { AutocompleteItem } from "@/lib/useAutocomplete";
 import { useAutocomplete } from "@/lib/useAutocomplete";
+import { chatRunsStore } from "@/lib/chatRunsStore";
 import { useChatModelChoice } from "@/lib/useChatModelChoice";
 import { useChatPromptHistory } from "@/lib/useChatPromptHistory";
+
 import { useChatRun } from "@/lib/useChatRun";
 import { cn } from "@/lib/utils";
 
@@ -147,7 +157,7 @@ export function ChatPage(): React.ReactElement {
   const [showCommandHelp, setShowCommandHelp] = useState(false);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const autocompleteProviders = useMemo(
-    () => [createSlashCommandProvider(), createFileMentionProvider()],
+    () => [createSkillCommandProvider(), createSlashCommandProvider(), createFileMentionProvider()],
     [],
   );
   const {
@@ -158,6 +168,11 @@ export function ChatPage(): React.ReactElement {
   } = useChatModelChoice();
   const { record: recordPromptHistory, onKeyDown: onPromptHistoryKeyDown } =
     useChatPromptHistory(setPrompt);
+  const queueRefreshNonce = useSyncExternalStore(
+    chatRunsStore.subscribe,
+    chatRunsStore.getQueueRefreshVersion,
+    chatRunsStore.getQueueRefreshVersion,
+  );
 
   useEffect(() => {
     if (routeSessionId !== null || legacySessionId === null) {
@@ -201,8 +216,10 @@ export function ChatPage(): React.ReactElement {
     onSessionChange: handleSessionChange,
   });
   const {
+    sessionId,
     transcript,
     runState,
+    externallyRunning,
     activeRunId,
     error,
     setError,
@@ -213,7 +230,32 @@ export function ChatPage(): React.ReactElement {
     forkSession,
   } = chatRun;
 
+  const queueTarget = useMemo<ChatQueueTarget>(() => {
+    if (sessionId !== null) {
+      return { sessionId };
+    }
+    if (activeRunId !== null) {
+      return { runId: activeRunId };
+    }
+    return {};
+  }, [activeRunId, sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void refreshQueuedMessages(queueTarget).then((messages) => {
+      if (!cancelled) {
+        setQueuedMessages(messages);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [queueRefreshNonce, queueTarget]);
+
   const isRunning = runState !== "idle";
+  // A run is advancing this session in another process/tab; lock the composer
+  // since the server allows only one active run per session.
+  const composerDisabled = runState === "cancelling" || externallyRunning;
   const selectedProvider = selectedModelChoice?.provider ?? null;
   const selectedModel = selectedModelChoice?.model ?? null;
   const contextWindow = useMemo(
@@ -222,6 +264,31 @@ export function ChatPage(): React.ReactElement {
         ? undefined
         : contextWindowForModel(selectedProvider, selectedModel),
     [selectedProvider, selectedModel],
+  );
+
+  const submitSkillCommand = useCallback(
+    async (args: string) => {
+      const [name, ...rest] = args.trim().split(/\s+/);
+      if (name === undefined || name === "") {
+        setError("Usage: /skill:<name> [instructions]");
+        return;
+      }
+      try {
+        const invocation = await invokeChatSkill(name, rest.join(" "));
+        if (isRunning) {
+          void enqueueChatMessage(queueTarget, {
+            id: clientId("queued"),
+            message: invocation.prompt,
+            attachments: [],
+          }).then(setQueuedMessages, (error: unknown) => setError(errorMessage(error)));
+          return;
+        }
+        submit({ message: invocation.prompt, attachments: [] });
+      } catch (error: unknown) {
+        setError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [isRunning, queueTarget, setError, submit],
   );
 
   const handleSlashCommand = useCallback(
@@ -234,7 +301,7 @@ export function ChatPage(): React.ReactElement {
       switch (parsed.name) {
         case "clear":
           if (!isRunning) {
-            setQueuedMessages([]);
+            void clearChatQueuedMessages(queueTarget).then(() => setQueuedMessages([]));
           }
           clearSession();
           setShowCommandHelp(false);
@@ -252,9 +319,14 @@ export function ChatPage(): React.ReactElement {
           setShowCommandHelp(false);
           setModelPickerOpen(true);
           return;
+        case "skill":
+          setError(null);
+          setShowCommandHelp(false);
+          void submitSkillCommand(parsed.args);
+          return;
       }
     },
-    [clearSession, forkSession, isRunning, setError],
+    [clearSession, forkSession, isRunning, queueTarget, setError, submitSkillCommand],
   );
 
   const handleAutocompleteCommit = useCallback(
@@ -304,36 +376,33 @@ export function ChatPage(): React.ReactElement {
         handleSlashCommand(message);
         return;
       }
+      if (externallyRunning) {
+        return;
+      }
       recordPromptHistory(message);
       setPrompt("");
       setShowCommandHelp(false);
       setModelPickerOpen(false);
       if (isRunning) {
-        setQueuedMessages((current) =>
-          appendQueuedChatMessage(current, {
-            id: clientId("queued"),
-            message,
-            attachments,
-          }),
-        );
+        void enqueueChatMessage(queueTarget, {
+          id: clientId("queued"),
+          message,
+          attachments,
+        }).then(setQueuedMessages, (error: unknown) => setError(errorMessage(error)));
         return;
       }
       submit({ message, attachments });
     },
-    [handleSlashCommand, isRunning, recordPromptHistory, submit],
+    [
+      externallyRunning,
+      handleSlashCommand,
+      isRunning,
+      queueTarget,
+      recordPromptHistory,
+      setError,
+      submit,
+    ],
   );
-
-  useEffect(() => {
-    if (runState !== "idle" || queuedMessages.length === 0) {
-      return;
-    }
-
-    const { next, queue } = dequeueQueuedChatMessage(queuedMessages);
-    setQueuedMessages(queue);
-    if (next !== null) {
-      submit({ message: next.message, attachments: next.attachments });
-    }
-  }, [queuedMessages, runState, submit]);
 
   const handlePromptInputError = useCallback(
     (inputError: { code: string; message: string }) => {
@@ -349,13 +418,17 @@ export function ChatPage(): React.ReactElement {
   );
 
   const handleRemoveQueuedMessage = useCallback((id: string) => {
-    setQueuedMessages((current) => removeQueuedChatMessage(current, id));
+    void removeChatQueuedMessage(id).then((removed) => {
+      if (removed) {
+        setQueuedMessages((current) => current.filter((message) => message.id !== id));
+      }
+    });
   }, []);
 
   const handleCancel = useCallback(() => {
-    setQueuedMessages([]);
+    void clearChatQueuedMessages(queueTarget).then(() => setQueuedMessages([]));
     cancel();
-  }, [cancel]);
+  }, [cancel, queueTarget]);
 
   const modelLine = useMemo(() => {
     if (selectedModelChoice === null) {
@@ -395,7 +468,11 @@ export function ChatPage(): React.ReactElement {
         <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-3 md:px-6 md:pb-4">
           <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
             <div className="flex justify-end px-1">
-              <RunStatusBadge runState={runState} runId={activeRunId} />
+              <RunStatusBadge
+                runState={runState}
+                runId={activeRunId}
+                externallyRunning={externallyRunning}
+              />
             </div>
             <PromptInput
               accept="image/*"
@@ -425,14 +502,14 @@ export function ChatPage(): React.ReactElement {
                   onChange={(event) => setPrompt(event.currentTarget.value)}
                   onFocus={autocomplete.refresh}
                   onKeyDown={handlePromptUnhandledKeyDown}
-                  disabled={runState === "cancelling"}
+                  disabled={composerDisabled}
                   className="min-h-12 text-[13px] leading-5 md:text-[13px]"
                 />
               </PromptInputBody>
               <PromptInputFooter>
                 <PromptInputTools>
                   <PromptInputActionMenu>
-                    <PromptInputActionMenuTrigger disabled={runState === "cancelling"} />
+                    <PromptInputActionMenuTrigger disabled={composerDisabled} />
                     <PromptInputActionMenuContent>
                       <PromptInputActionAddAttachments label="Attach image" />
                       <PromptInputActionAddScreenshot />
@@ -445,12 +522,17 @@ export function ChatPage(): React.ReactElement {
                     onOpenChange={setModelPickerOpen}
                     onSelect={setModelChoice}
                     onReasoningEffortChange={setModelReasoningEffort}
-                    disabled={runState === "cancelling"}
+                    disabled={composerDisabled}
                   />
                 </PromptInputTools>
                 <PromptInputTools className="shrink-0 justify-end gap-2">
                   <ContextUsageIndicator usage={usageTotals} contextWindow={contextWindow} />
-                  <ChatPromptSubmit prompt={prompt} runState={runState} onStop={handleCancel} />
+                  <ChatPromptSubmit
+                    prompt={prompt}
+                    runState={runState}
+                    externallyRunning={externallyRunning}
+                    onStop={handleCancel}
+                  />
                 </PromptInputTools>
               </PromptInputFooter>
             </PromptInput>
@@ -459,6 +541,34 @@ export function ChatPage(): React.ReactElement {
       </section>
     </div>
   );
+}
+
+async function refreshQueuedMessages(target: ChatQueueTarget): Promise<QueuedChatMessage[]> {
+  if (target.sessionId === undefined && target.runId === undefined) {
+    return [];
+  }
+  const messages = await listChatQueuedMessages(target);
+  return messages.map(queuedChatMessageFromSummary);
+}
+
+async function enqueueChatMessage(
+  target: ChatQueueTarget,
+  message: QueuedChatMessage,
+): Promise<QueuedChatMessage[]> {
+  if (target.sessionId === undefined && target.runId === undefined) {
+    return [];
+  }
+  await addChatQueuedMessage({
+    ...target,
+    id: message.id,
+    message: message.message,
+    attachments: message.attachments,
+  });
+  return refreshQueuedMessages(target);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function ChatPromptHeader({
@@ -595,36 +705,29 @@ function QueuedPromptAttachment({
 function ChatPromptSubmit({
   prompt,
   runState,
+  externallyRunning,
   onStop,
 }: {
   prompt: string;
   runState: ChatRunState;
+  externallyRunning: boolean;
   onStop(): void;
 }): React.ReactElement {
   const attachments = usePromptInputAttachments();
-  const isRunning = runState !== "idle";
-  const disabled =
-    runState === "cancelling" ||
-    (!isRunning && prompt.trim() === "" && attachments.files.length === 0);
-  const status = promptSubmitStatus(runState);
+  const submitState = chatComposerSubmitState({
+    prompt,
+    attachmentCount: attachments.files.length,
+    runState,
+    externallyRunning,
+  });
   return (
     <PromptInputSubmit
-      disabled={disabled}
+      disabled={submitState.disabled}
       onStop={onStop}
       className="size-7 [&>svg]:!size-3.5"
-      {...(status ? { status } : {})}
+      {...(submitState.status ? { status: submitState.status } : {})}
     />
   );
-}
-
-function promptSubmitStatus(runState: ChatRunState): "submitted" | "streaming" | undefined {
-  if (runState === "starting") {
-    return "submitted";
-  }
-  if (runState === "streaming" || runState === "disconnected" || runState === "cancelling") {
-    return "streaming";
-  }
-  return undefined;
 }
 
 function TranscriptMessage({ message }: { message: ChatMessageView }): React.ReactElement {
@@ -1401,11 +1504,28 @@ function toLanguageModelUsage(usage: TokenUsageTotals): LanguageModelUsage {
 function RunStatusBadge({
   runState,
   runId,
+  externallyRunning,
 }: {
   runState: ChatRunState;
   runId: string | null;
+  externallyRunning: boolean;
 }): React.ReactElement {
   if (runState === "idle") {
+    if (externallyRunning) {
+      return (
+        <span
+          className="inline-flex items-center gap-2"
+          title="Advanced by the CLI, TUI, or another tab"
+        >
+          <LoaderCircle
+            size={13}
+            strokeWidth={1.75}
+            className="animate-spin text-[var(--accent)]"
+          />
+          <span className="label-eyebrow text-[var(--fg-dim)]">running elsewhere</span>
+        </span>
+      );
+    }
     return <Badge tone="muted">idle</Badge>;
   }
   return (

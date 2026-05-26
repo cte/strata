@@ -809,17 +809,23 @@ export const PromptInput = ({
             const formData = new FormData(form);
             return (formData.get("message") as string) || "";
           })();
+      const submittedFiles = files;
 
-      // Reset form immediately after capturing text to avoid race condition
-      // where user input during async blob conversion would be lost
-      if (!usingProvider) {
+      // Reset inputs immediately after capturing the submitted draft. This lets
+      // users type a queued follow-up while blob conversion/onSubmit completes;
+      // without this, a running chat still shows the old text until the async
+      // path returns and the next draft can be lost when we clear.
+      if (usingProvider) {
+        controller.textInput.clear();
+      } else {
         form.reset();
       }
+      clear();
 
       try {
         // Convert blob URLs to data URLs asynchronously
         const convertedFiles: FileUIPart[] = await Promise.all(
-          files.map(async ({ id: _id, ...item }) => {
+          submittedFiles.map(async ({ id: _id, ...item }) => {
             if (item.url?.startsWith("blob:")) {
               const dataUrl = await convertBlobUrlToDataUrl(item.url);
               // If conversion failed, keep the original blob URL
@@ -838,22 +844,13 @@ export const PromptInput = ({
         if (result instanceof Promise) {
           try {
             await result;
-            clear();
-            if (usingProvider) {
-              controller.textInput.clear();
-            }
           } catch {
-            // Don't clear on error - user may want to retry
-          }
-        } else {
-          // Sync function completed without throwing, clear inputs
-          clear();
-          if (usingProvider) {
-            controller.textInput.clear();
+            // The draft was already handed to the submit owner; keep the input
+            // clear so a follow-up typed after submission is not clobbered.
           }
         }
       } catch {
-        // Don't clear on error - user may want to retry
+        // Don't interrupt the composer if attachment conversion fails.
       }
     },
     [usingProvider, controller, files, onSubmit, clear],

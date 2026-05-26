@@ -63,13 +63,14 @@ strata/
 └── wiki/                       # User-facing Markdown knowledge base
     ├── priorities.md           # Current priorities — read first every session
     ├── me.md                   # Role, active projects, current focus, prefs
-    ├── index.md                # Catalog of all wiki pages
+    ├── index.md                # Compact human navigation index
     ├── log.md                  # Append-only chronological history
     │
     ├── raw/                    # IMMUTABLE source material
     │   ├── granola/            # Meeting transcripts (YYYY-MM-DD-slug.md)
     │   ├── slack/              # Captured threads (YYYY-MM-DD-channel-slug.md)
     │   └── notion/             # Notion doc snapshots at ingest time
+    ├── sources/                # Generated source indexes/pages for material raw snapshots
     │
     ├── people/                 # One page per colleague
     ├── projects/               # One page per active project
@@ -99,7 +100,7 @@ Create the directory structure in §4. Materialize:
 - root `AGENTS.md` plus `CLAUDE.md` compatibility symlink (full content in §10 below)
 - `wiki/priorities.md` — start as a placeholder; the user will populate or dictate.
 - `wiki/me.md` — populated from the Phase 0 conversation.
-- `wiki/index.md` — empty catalog with section headers (People, Projects, Teams, Meetings, Decisions, Threads).
+- `wiki/index.md` — compact navigation page with section headers (People, Projects, Teams, Meetings, Decisions, Threads, Source Coverage). It is not a complete machine index.
 - `wiki/log.md` — empty, with header `# Strata — Activity Log`.
 - `wiki/actions/mine.md`, `wiki/actions/theirs.md` — empty checklists.
 - `.gitignore` — exclude `wiki/raw/.cache/`, `.env`, anything secret.
@@ -149,8 +150,8 @@ Implement each ingest workflow as documented in §10. The pattern is the same fo
 3. Write or update the relevant pages (meeting summary, project, person).
 4. Extract decisions → `decisions/`.
 5. Extract action items → `actions/mine.md` or `actions/theirs.md`.
-6. Surface open threads → `threads/`.
-7. Update `index.md`. Append to `log.md`.
+6. Surface only durable unresolved questions → `threads/`. For high-volume sources such as Slack, keep material source context under `sources/<source>/` unless the item clearly deserves a curated open-thread page.
+7. Update `index.md` as human navigation, refresh the local search index for machine retrieval, and append to `log.md`.
 8. Commit. Discuss with the user what changed and what they should attend to.
 
 A single Granola or Notion ingest typically touches 8–15 files. A single Slack ingest may touch 0 files (most threads add nothing). That's correct behavior.
@@ -165,7 +166,7 @@ When the user asks a question:
 4. Synthesize an answer with citations to the wiki pages used.
 5. **If the answer is reusable**, offer to file it back as a new wiki page (e.g., `projects/foo/comparison.md`, `decisions/YYYY-MM-DD-bar.md`). Don't let useful synthesis disappear into chat history.
 
-For larger queries (more than ~5 candidate pages), shell out to a search tool over the wiki — `grep -r`, `ripgrep`, or a local search index — rather than reading `index.md` linearly.
+For larger queries (more than ~5 candidate pages), use the local wiki search index instead of reading `index.md` linearly. Refresh it with `strata wiki search-index refresh`; it indexes curated pages, generated source pages, and raw snapshots while ranking curated pages first and raw evidence last.
 
 ### Phase 5 — Lint workflow
 

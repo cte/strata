@@ -4,15 +4,18 @@ import {
   disconnectGranola,
   getGranolaStatus,
 } from "@strata/ingest/granola-connector";
+import { SessionChangeFeed } from "./changeFeed.js";
 import { createChatService } from "./chat.js";
 import {
   chatModelStatus,
   deleteChatSession,
   forkChatSession,
   getChatSession,
+  invokeChatSkill,
   listChatFiles,
   listChatModels,
   listChatSessions,
+  listChatSkills,
   searchChatSessions,
 } from "./chatServices.js";
 import {
@@ -21,13 +24,33 @@ import {
   startNotionMcp,
   validateNotion,
 } from "./connectorServices.js";
+import {
+  deleteMcpSettings,
+  getMcpSettingsStatus,
+  listMcpTools,
+  updateMcpSettings,
+} from "./mcpSettings.js";
+import {
+  completeModelAuth,
+  disconnectModelAuth,
+  getModelAuthStatus,
+  startModelAuth,
+} from "./modelAuth.js";
+
 import { disconnectNotionMcp, getNotionMcpStatus, listNotionMcpTools } from "./notionMcp.js";
 import { repoRoot, type WebApiOptions } from "./runtime.js";
-import type { GranolaConfigureRpcInput, WebApiServices } from "./trpc.js";
+
+import type {
+  ChatQueueAddInput,
+  ChatQueueTargetInput,
+  GranolaConfigureRpcInput,
+  WebApiServices,
+} from "./trpc.js";
 import { getWikiPage, getWikiTree } from "./wikiServices.js";
 
 export interface WebApiServiceContainer extends WebApiServices {
   chat: ReturnType<typeof createChatService>;
+  changes: SessionChangeFeed;
 }
 
 export function createWebApiServices(options: WebApiOptions = {}): WebApiServiceContainer {
@@ -39,8 +62,10 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     }
     return sessionStorePromise;
   };
+  const changes = new SessionChangeFeed(getSessionStore, undefined, repoRoot(options));
   return {
     chat,
+    changes,
     health: () => ({
       ok: true,
       repoRoot: repoRoot(options),
@@ -48,8 +73,16 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     chatModelStatus: () => chatModelStatus(options),
     listChatModels: (input) => listChatModels(input, options),
     listChatFiles: (input) => listChatFiles(input, options),
+    listChatSkills: (input) => listChatSkills(input, options),
+    invokeChatSkill: (input) => invokeChatSkill(input, options),
     listActiveChatRuns: () => ({ runs: chat.listActiveRuns() }),
     getChatRun: (input) => ({ run: chat.getRun(input.runId) ?? null }),
+    listChatQueuedMessages: (input) => ({ messages: chat.listQueuedMessages(queueTarget(input)) }),
+    addChatQueuedMessage: (input) => chat.addQueuedMessage(queueAddInput(input)),
+    removeChatQueuedMessage: (input) =>
+      chat.removeQueuedMessage(input.id).then((removed) => ({ removed })),
+    clearChatQueuedMessages: (input) =>
+      chat.clearQueuedMessages(queueTarget(input)).then((removed) => ({ removed })),
     listChatSessions: (input) => listChatSessions(input, getSessionStore),
     getChatSession: (input) => getChatSession(input, getSessionStore),
     forkChatSession: (input) => forkChatSession(input, getSessionStore),
@@ -63,6 +96,19 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     searchChatSessions: (input) => searchChatSessions(input, getSessionStore),
     getWikiTree: (input) => getWikiTree(input, options),
     getWikiPage: (input) => getWikiPage(input, options),
+
+    modelAuthStatus: () => getModelAuthStatus(options),
+    startModelAuth: (input) => startModelAuth(input, input.origin, options),
+    completeModelAuth: async (input) => {
+      await completeModelAuth(input, options);
+      return getModelAuthStatus(options);
+    },
+    disconnectModelAuth: (input) => disconnectModelAuth(input.provider, options),
+
+    mcpSettingsStatus: () => getMcpSettingsStatus(options),
+    updateMcpSettings: (input) => updateMcpSettings(input, options),
+    deleteMcpSettings: (input) => deleteMcpSettings(input, options),
+    listMcpTools: (input) => listMcpTools(input, options),
 
     connectorSummaries: () => connectorSummaries(options),
 
@@ -78,14 +124,35 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
   };
 }
 
+function queueTarget(input: ChatQueueTargetInput): { sessionId?: string; runId?: string } {
+  return {
+    ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
+  };
+}
+
+function queueAddInput(input: ChatQueueAddInput) {
+  return {
+    ...queueTarget(input),
+    id: input.id,
+    message: input.message,
+    attachments: input.attachments,
+    ...(input.provider === undefined ? {} : { provider: input.provider }),
+    ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
+  };
+}
+
 export {
   chatModelStatus,
   deleteChatSession,
   forkChatSession,
   getChatSession,
+  invokeChatSkill,
   listChatFiles,
   listChatModels,
   listChatSessions,
+  listChatSkills,
   searchChatSessions,
 } from "./chatServices.js";
 export {

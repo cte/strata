@@ -10,7 +10,9 @@
     "@strata/agent": "workspace:*",
     "@strata/core": "workspace:*",
     "@strata/ingest": "workspace:*",
+    "@strata/integration-mcp": "workspace:*",
     "@strata/tools": "workspace:*",
+
     "@strata/tui": "workspace:*"
   },
   "scripts": {
