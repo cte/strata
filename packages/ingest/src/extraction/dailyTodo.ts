@@ -470,7 +470,10 @@ export async function runDailyTodoExtractionBackfillApply(
 }
 
 async function runDailyTodoExtractionBackfill(
-  options: (RunDailyTodoExtractionBackfillDryRunOptions | RunDailyTodoExtractionBackfillApplyOptions) & {
+  options: (
+    | RunDailyTodoExtractionBackfillDryRunOptions
+    | RunDailyTodoExtractionBackfillApplyOptions
+  ) & {
     mode: "dry_run" | "apply";
   },
 ): Promise<DailyTodoBackfillResult> {
@@ -573,7 +576,9 @@ async function runDailyTodoExtractionBackfill(
 
 function dailyTodoApplyOptions(
   runOptions: RunDailyTodoExtractionDryRunOptions,
-  backfillOptions: RunDailyTodoExtractionBackfillDryRunOptions | RunDailyTodoExtractionBackfillApplyOptions,
+  backfillOptions:
+    | RunDailyTodoExtractionBackfillDryRunOptions
+    | RunDailyTodoExtractionBackfillApplyOptions,
 ): RunDailyTodoExtractionApplyOptions {
   const applyOptions: RunDailyTodoExtractionApplyOptions = { ...runOptions };
   if ("now" in backfillOptions && backfillOptions.now !== undefined) {
@@ -597,18 +602,22 @@ export async function evaluateTodoCandidates(
       pending.push({ candidate, span });
     }
   }
-  return mapWithConcurrency(pending, DAILY_TODO_VERIFIER_CONCURRENCY, async ({ candidate, span }) => {
-    const verification =
-      hardRejectionVerification(candidate, span) ?? (await verifier.verify(candidate, span));
-    const status = statusForVerification(verification);
-    return {
-      status,
-      candidate,
-      evidence: span,
-      verification,
-      reasons: [...candidate.deterministicReasons, verification.rationale],
-    };
-  });
+  return mapWithConcurrency(
+    pending,
+    DAILY_TODO_VERIFIER_CONCURRENCY,
+    async ({ candidate, span }) => {
+      const verification =
+        hardRejectionVerification(candidate, span) ?? (await verifier.verify(candidate, span));
+      const status = statusForVerification(verification);
+      return {
+        status,
+        candidate,
+        evidence: span,
+        verification,
+        reasons: [...candidate.deterministicReasons, verification.rationale],
+      };
+    },
+  );
 }
 
 async function mapWithConcurrency<T, U>(
@@ -629,9 +638,7 @@ async function mapWithConcurrency<T, U>(
       results[index] = await mapper(item);
     }
   }
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
-  );
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
   return results;
 }
 

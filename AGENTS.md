@@ -162,6 +162,7 @@ The TUI must be testable without a real PTY. Use `FakeTerminal` and the e2e test
 ## Code Conventions
 
 - Relative imports use `.js` extensions.
+- Test files (`*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`) live under a `__tests__/` directory.
 - Cross-package imports use `@strata/<pkg>`.
 - Boundary errors should return typed results where possible instead of leaking raw exceptions.
 - The TUI runtime must restore terminal state after errors.
