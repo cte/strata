@@ -1,7 +1,7 @@
-import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import type * as React from "react";
 import { useEffect, useMemo, useState, useTransition } from "react";
+import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-
 import {
   deleteMcpSettings,
   getMcpSettingsStatus,
@@ -72,17 +71,17 @@ export function SettingsMcpsPage(): React.ReactElement {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <BackLink />
-
-      <header>
-        <h1 className="text-[15px] font-medium tracking-tight text-[var(--fg)]">MCP servers</h1>
-        <p className="mt-1 text-[13px] text-[var(--fg-dim)]">
-          Manage local Model Context Protocol tool servers. Secrets are stored locally in
-          <span className="font-mono text-[var(--fg)]"> .strata/secrets/mcp-servers.json</span>
-          and are never returned to the browser.
-        </p>
-      </header>
+    <PageContainer width="narrow">
+      <PageHeader
+        title="MCP servers"
+        description={
+          <>
+            Manage local Model Context Protocol tool servers. Secrets are stored locally in
+            <span className="font-mono text-[var(--fg)]"> .strata/secrets/mcp-servers.json</span>
+            and are never returned to the browser.
+          </>
+        }
+      />
 
       {notice ? (
         <div className="rounded-md border border-[var(--good)]/30 bg-[var(--accent-soft)] p-3 text-[13px] text-[var(--fg-dim)]">
@@ -109,7 +108,7 @@ export function SettingsMcpsPage(): React.ReactElement {
           <p className="mt-1 text-[13px] text-[var(--fg-dim)]">{error}</p>
         </div>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }
 
@@ -412,22 +411,6 @@ function LabeledInput({
         className="h-9 rounded-md border border-[var(--hairline)] bg-[var(--bg)] px-3 font-mono text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
       />
     </label>
-  );
-}
-
-function BackLink(): React.ReactElement {
-  return (
-    <Link
-      to="/chat"
-      className="group inline-flex items-center gap-1 text-[12px] text-[var(--fg-mute)] transition-colors duration-150 hover:text-[var(--fg-dim)]"
-    >
-      <ArrowLeft
-        size={12}
-        strokeWidth={1.75}
-        className="transition-transform duration-150 group-hover:-translate-x-0.5"
-      />
-      Chat
-    </Link>
   );
 }
 

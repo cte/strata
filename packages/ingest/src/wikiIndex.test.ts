@@ -77,6 +77,40 @@ describe("compact wiki index", () => {
     });
   });
 
+  test("keeps superseded project redirects out of the root project index", async () => {
+    await withTempRepo(async (repoRoot) => {
+      await writeFile(
+        path.join(repoRoot, "wiki", "projects", "pricing.md"),
+        "---\ntype: project\ntitle: Pricing\n---\n# Pricing\n\nCanonical page.\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(repoRoot, "wiki", "projects", "pricing-strategy.md"),
+        [
+          "---",
+          "type: project",
+          "title: Pricing Strategy",
+          "status: superseded",
+          "superseded_by: projects/pricing.md",
+          "---",
+          "",
+          "# Pricing Strategy",
+          "",
+          "Consolidated into [[projects/pricing|Pricing]].",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = await compactWikiIndex({ repoRoot, now: new Date("2026-05-27T00:00:00Z") });
+      expect(result.counts.projects).toBe(1);
+
+      const index = await readFile(path.join(repoRoot, "wiki", "index.md"), "utf8");
+      expect(index).toContain("[[projects/pricing|Pricing]]");
+      expect(index).not.toContain("[[projects/pricing-strategy|Pricing Strategy]]");
+    });
+  });
+
   test("archives generated Slack thread pages and rewrites wiki links to raw evidence", async () => {
     await withTempRepo(async (repoRoot) => {
       await writeFile(

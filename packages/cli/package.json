@@ -11,6 +11,7 @@
     "@strata/core": "workspace:*",
     "@strata/ingest": "workspace:*",
     "@strata/integration-mcp": "workspace:*",
+    "@strata/jobs": "workspace:*",
     "@strata/tools": "workspace:*",
 
     "@strata/tui": "workspace:*"

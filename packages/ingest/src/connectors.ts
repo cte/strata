@@ -5,6 +5,18 @@ export {
   readConnectorCheckpoint,
   writeConnectorCheckpoint,
 } from "./connectors/checkpointStore.js";
+export type { ConnectorConfigProfileRecord } from "./connectors/configStore.js";
+export {
+  deleteConnectorConfigProfile,
+  deleteConnectorConfigProfiles,
+  getConnectorConfigPath,
+  listConnectorConfigProfiles,
+  readConnectorConfigProfile,
+  readDefaultConnectorConfigProfile,
+  sanitizeConnectorConfig,
+  setDefaultConnectorConfigProfile,
+  writeConnectorConfigProfile,
+} from "./connectors/configStore.js";
 export {
   connectorDefinitions,
   getConnectorDefinition,
@@ -48,3 +60,14 @@ export {
   redactConnectorConfig,
   redactConnectorMessage,
 } from "./connectors/types.js";
+export type {
+  ConnectorWorkflowMetrics,
+  ConnectorWorkflowOperation,
+  ConnectorWorkflowResult,
+  RunConnectorWorkflowOptions,
+} from "./connectors/workflow.js";
+export {
+  cleanConnectorConfig,
+  connectorConfigWithLookback,
+  runConnectorWorkflow,
+} from "./connectors/workflow.js";

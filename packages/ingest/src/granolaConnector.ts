@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -305,8 +306,16 @@ async function runGranola(
   for (const originalMeeting of loaded.meetings) {
     const meeting = await fetchDetailIfNeeded(originalMeeting, config, options, loaded.apiToken);
     const rendered = renderMeeting(meeting, rawDir, runtime.repoRoot, pulledAt);
-    const written = dryRun ? false : await writeOnce(rendered.filePath, rendered.content);
-    const skipped = dryRun ? false : !written;
+    const writeResult = dryRun
+      ? {
+          relativePath: rendered.relativePath,
+          revision: false,
+          skipped: false,
+          written: false,
+        }
+      : await writeGranolaRawSnapshot(rendered, runtime.repoRoot);
+    const written = writeResult.written;
+    const skipped = writeResult.skipped;
     if (written) {
       writtenCount += 1;
     }
@@ -316,12 +325,14 @@ async function runGranola(
     items.push({
       sourceId: rendered.sourceId,
       title: rendered.title,
-      rawPath: rendered.relativePath,
+      rawPath: writeResult.relativePath,
       sourceUrl: rendered.sourceUrl,
       written,
       skipped,
       metadata: {
+        contentHash: rendered.contentHash,
         date: rendered.date,
+        revision: writeResult.revision,
       },
     });
   }
@@ -459,6 +470,7 @@ function renderMeeting(
   sourceId: string;
   title: string;
   sourceUrl: string | null;
+  contentHash: string;
 } {
   const date = meetingDate(item);
   const title = firstString(item, ["title", "name", "summary"], "Untitled meeting");
@@ -466,15 +478,18 @@ function renderMeeting(
   const sourceUrl = firstString(item, ["source_url", "url", "app_url", "web_url"]) || null;
   const body = meetingBody(item);
   const sourceId = firstString(item, ["id", "meeting_id", "uuid"], `${date}:${title}`);
+  const contentHash = meetingContentHash({ attendees, body, date, sourceId, sourceUrl, title });
   const filePath = path.join(rawDir, `${date}-${slugify(title, "meeting")}.md`);
   const metadata = frontmatter({
     type: "raw_granola_transcript",
     source: "granola",
+    source_id: sourceId,
     date,
     title,
     attendees,
     source_url: sourceUrl,
     pulled_at: pulledAt,
+    content_hash: contentHash,
   });
   return {
     filePath,
@@ -484,7 +499,77 @@ function renderMeeting(
     sourceId,
     title,
     sourceUrl,
+    contentHash,
   };
+}
+
+async function writeGranolaRawSnapshot(
+  rendered: ReturnType<typeof renderMeeting>,
+  repoRoot: string,
+): Promise<{ relativePath: string; revision: boolean; skipped: boolean; written: boolean }> {
+  if (await writeOnce(rendered.filePath, rendered.content)) {
+    return {
+      relativePath: rendered.relativePath,
+      revision: false,
+      skipped: false,
+      written: true,
+    };
+  }
+
+  const existing = await readFile(rendered.filePath, "utf8").catch(() => "");
+  if (sameGranolaSnapshot(existing, rendered)) {
+    return {
+      relativePath: rendered.relativePath,
+      revision: false,
+      skipped: true,
+      written: false,
+    };
+  }
+
+  const revisionPath = revisionFilePath(rendered.filePath, rendered.contentHash);
+  const written = await writeOnce(revisionPath, rendered.content);
+  return {
+    relativePath: path.relative(repoRoot, revisionPath),
+    revision: true,
+    skipped: !written,
+    written,
+  };
+}
+
+function sameGranolaSnapshot(
+  existing: string,
+  rendered: ReturnType<typeof renderMeeting>,
+): boolean {
+  if (existing.includes(`content_hash: ${rendered.contentHash}`)) {
+    return true;
+  }
+  return comparableGranolaSnapshot(existing) === comparableGranolaSnapshot(rendered.content);
+}
+
+function comparableGranolaSnapshot(content: string): string {
+  return content
+    .replace(/^pulled_at:.*$/gm, "")
+    .replace(/^content_hash:.*$/gm, "")
+    .replace(/^source_id:.*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function revisionFilePath(filePath: string, contentHash: string): string {
+  const ext = path.extname(filePath);
+  const base = filePath.slice(0, -ext.length);
+  return `${base}-${contentHash.slice(0, 10)}${ext}`;
+}
+
+function meetingContentHash(input: {
+  attendees: string[];
+  body: string;
+  date: string;
+  sourceId: string;
+  sourceUrl: string | null;
+  title: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
 function normalizeAttendees(value: unknown): string[] {

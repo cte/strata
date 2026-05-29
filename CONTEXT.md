@@ -18,6 +18,42 @@ _Avoid_: turn, iteration, execution.
 The server-side job persisted in `ChatRunStore` (`packages/web-api/src/chatRunStore.ts`) that wraps a Run on behalf of a browser SSE client, allowing reconnect and event replay independent of the browser request lifetime.
 _Avoid_: "stream" or "request" when meaning the persisted job record.
 
+**Job**:
+A registered local operation that Strata can run outside the model loop, such as `connector.pull`, `raw.index`, `wiki.search-index.refresh`, `wiki.hygiene`, or `maintenance.run`. Jobs live behind the `@strata/jobs` registry/runner interface, persist an enclosing `kind = "job"` Session, and may call lower-level connector, raw-to-wiki, search-index, or maintenance modules that create their own domain-specific Sessions.
+_Avoid_: cron task, background command, automation when meaning the registered operation.
+
+**Schedule**:
+A persisted `.strata/state.sqlite` record that binds a Job plus JSON input to an interval or cron trigger. Schedules are local-only, enabled/disabled independently from the Job definition, and run through the shared Job runner so results are trace-backed.
+_Avoid_: crontab entry when meaning Strata's first-party schedule record.
+
+**Ingest activity**:
+The normalized, browser-safe view of connector, raw-to-wiki, and Job Sessions that answers what source content was pulled, skipped, indexed, failed, and which trace explains it. Built from `SessionStore` Events through `@strata/ingest/activity`; not parsed from `wiki/log.md`.
+_Avoid_: wiki log, audit log when meaning the normalized DTO surface.
+
+**Ingest taxonomy**:
+The local workspace vocabulary used by raw-to-wiki indexing, loaded from `.strata/ingest/taxonomy.json` by `@strata/ingest/ingest-taxonomy`. It contains user/workspace-specific aliases such as canonical project names, self-name ownership hints, and Slack materiality/ignore patterns. The product code should keep generic source parsing and extraction grammar; subject-matter vocabulary belongs in the Ingest taxonomy or reviewed schema Proposals. The loader may read legacy `.strata/ingest/profile.json` files, but new tooling should write `taxonomy.json`.
+_Avoid_: hard-coded classifier rules, built-in project aliases, workspace vocabulary in TypeScript.
+
+**Extraction**:
+The evidence-backed process that turns wiki/source material into reviewable artifacts such as TODOs. An Extraction is defined by source selection, segmentation, candidate generation, optional verifier policy, dedupe, publication rules, and trace events. Planned in [docs/extraction-framework-plan.md](docs/extraction-framework-plan.md), with `daily.todo` as the first extractor.
+_Avoid_: one-off parser, hidden classifier, browser-only detection logic.
+
+**Evidence span**:
+A bounded source excerpt considered by an Extraction, with source path, source kind/type, date, line/message bounds, speaker metadata when available, and enough surrounding context to review the decision without mutating raw material.
+_Avoid_: snippet when the source location and provenance matter.
+
+**Extraction candidate**:
+A normalized artifact proposed by an Extraction from one or more Evidence spans, before or after verifier review. For daily TODOs, candidates classify potential commitments or requests and carry owner, due-date, confidence, rationale, publication state, and stable dedupe keys.
+_Avoid_: action item when the candidate has not yet been accepted into `wiki/actions/`.
+
+**Extraction run**:
+A trace-backed execution of one Extraction over a specific source scope, usually a day for `daily.todo`. Stores extractor/verifier versions, counts, and candidate outcomes so historical wiki days can be re-indexed idempotently.
+_Avoid_: backfill when meaning the individual recorded run.
+
+**Wiki hygiene**:
+The scheduled-safe maintenance path that keeps curated wiki entities and retrieval quality healthy without silently rewriting pages. `wiki.entities` produces structured duplicate/over-specific project findings and deduplicated pending wiki Proposals; `wiki.hygiene` runs that proposal pass and refreshes the local search index.
+_Avoid_: auto-merge when meaning proposal-backed hygiene.
+
 ### Messages, events, and traces
 
 **Message**:
@@ -88,7 +124,7 @@ An open commitment entry stored in `.strata/todos.json` with `status ∈ {open, 
 _Avoid_: task, action item (those are wiki concepts under `wiki/actions/`).
 
 **Proposal**:
-A staged change to a Learning artifact or the wiki, created when a Run identifies a risky update that should be human-reviewed before applying. Stored under `.strata/proposals/<sessionId>/<kind>/<title>.md`. `LearningProposalKind = "memory" | "skill" | "schema" | "wiki"`; status starts `pending`. Apply/reject is a separate (planned) review flow.
+A staged change to a Learning artifact or the wiki, created when a Run identifies a risky update that should be human-reviewed before applying. Stored as Markdown under `.strata/proposals/`. `LearningProposalKind = "memory" | "skill" | "schema" | "wiki"`; status starts `pending`; producers may attach a `dedupe_key` so recurring maintenance reuses an existing pending proposal instead of creating duplicates. Apply/reject is a separate (planned) review flow.
 _Avoid_: suggestion, change request.
 
 ## Relationships
@@ -96,6 +132,10 @@ _Avoid_: suggestion, change request.
 - A **Session** contains many **Runs** in chronological order.
 - A **Run** writes **Messages** and **Events** back to the **Session** it belongs to.
 - A **Web chat run** wraps exactly one **Run** and stores its event stream durably for browser reconnects.
+- A **Schedule** triggers many **Jobs** over time.
+- A **Job** creates a trace-backed **Session** of kind `job`; domain adapters under the Job may create additional ingest or maintenance Sessions.
+- **Ingest activity** is derived from **Events** across Job and ingest Sessions, with parent/child links inferred from job output and schedule metadata.
+- An **Extraction run** reads **Evidence spans**, produces **Extraction candidates**, and may publish reviewed results into wiki artifacts such as `wiki/actions/`; raw source material remains immutable.
 - Every **Event** is mirrored to the **Trace** file for the same Session; SQLite is canonical, the Trace file is derived.
 - An **`AgentRunEvent`** is emitted in process as work happens; it may correspond to a persisted **Event** but is a separate type.
 - A **Tool** is declared as a **ToolDefinition** and held in the **ToolRegistry**.
@@ -117,4 +157,4 @@ _Avoid_: suggestion, change request.
 - **`SessionKind = "trace"`** is dead vocabulary — no producer creates one, and Pi (the design reference) has no `kind` discriminator at all. Slated for removal from `SessionKind` in `packages/core/src/types.ts`.
 - **Messages and Events as separate tables** is a Strata-local choice; Pi keeps a single typed entry stream per session. Open question for a future ADR: should Strata collapse the two into a unified entry stream, or keep them split for SQL queryability (FTS, joins for session search)?
 - **Mode and Profile share two values (`learning`, `dangerous`)** but they are different enums. `Mode` classifies a Tool; `Profile` filters which Tools a registry exposes (a Profile is a set of allowed Modes). At a glance the names look interchangeable; they aren't. Pi has no equivalent concept — Strata's Mode/Profile layering exists because one Strata process serves multiple capability budgets (CLI, ingest, web chat, scheduled maintenance) from a shared registry. The decision is to document the distinction here rather than rename the enums.
-- **`LearningProposalKind = "schema"`** is undefined territory in this glossary — the type exists in `proposalStore.ts` but no producer in the codebase emits a schema proposal yet. Likely refers to wiki-entity schema changes (matching the `docs/wiki-plan.md` schema discussion) but worth pinning the moment a real schema proposal gets created.
+- **`LearningProposalKind = "schema"`** now covers reviewed local-schema changes such as `ingest.taxonomy.*` operations. These are durable runtime-configuration changes, not wiki-page edits.

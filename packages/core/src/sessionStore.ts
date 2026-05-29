@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
-import { asc, desc, eq, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import { createSessionId, nowIso, safeJsonStringify } from "./events.js";
 import { MIGRATIONS } from "./migrations.js";
@@ -327,13 +327,13 @@ export class SessionStore {
     return { sessionsScanned: sessionRows.length, messagesUpdated };
   }
 
-  listSessions(limit = 20): SessionRecord[] {
-    const rows = this.drizzle
-      .select()
-      .from(sessions)
-      .orderBy(desc(sessions.startedAt))
-      .limit(limit)
-      .all();
+  listSessions(limit = 20, kinds?: readonly string[]): SessionRecord[] {
+    const query = this.drizzle.select().from(sessions);
+    const filtered =
+      kinds === undefined || kinds.length === 0
+        ? query
+        : query.where(inArray(sessions.kind, [...kinds]));
+    const rows = filtered.orderBy(desc(sessions.startedAt)).limit(limit).all();
     return rows.map(rowToSession);
   }
 
@@ -440,8 +440,19 @@ export class SessionStore {
     return row === undefined ? undefined : rowToSession(row);
   }
 
-  searchSessions(query: string, limit = 20): SessionRecord[] {
+  searchSessions(query: string, limit = 20, kinds?: readonly string[]): SessionRecord[] {
     const pattern = `%${escapeLike(query)}%`;
+    const matchesQuery = or(
+      sql`${sessions.title} like ${pattern} escape '\\'`,
+      sql`${sessions.kind} like ${pattern} escape '\\'`,
+      sql`${messages.content} like ${pattern} escape '\\'`,
+      sql`${events.type} like ${pattern} escape '\\'`,
+      sql`${events.payloadJson} like ${pattern} escape '\\'`,
+    );
+    const where =
+      kinds === undefined || kinds.length === 0
+        ? matchesQuery
+        : and(inArray(sessions.kind, [...kinds]), matchesQuery);
     const rows = this.drizzle
       .selectDistinct({
         id: sessions.id,
@@ -456,15 +467,7 @@ export class SessionStore {
       .from(sessions)
       .leftJoin(messages, eq(messages.sessionId, sessions.id))
       .leftJoin(events, eq(events.sessionId, sessions.id))
-      .where(
-        or(
-          sql`${sessions.title} like ${pattern} escape '\\'`,
-          sql`${sessions.kind} like ${pattern} escape '\\'`,
-          sql`${messages.content} like ${pattern} escape '\\'`,
-          sql`${events.type} like ${pattern} escape '\\'`,
-          sql`${events.payloadJson} like ${pattern} escape '\\'`,
-        ),
-      )
+      .where(where)
       .orderBy(desc(sessions.startedAt))
       .limit(limit)
       .all();

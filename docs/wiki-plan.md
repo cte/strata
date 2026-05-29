@@ -102,7 +102,7 @@ Create the directory structure in §4. Materialize:
 - `wiki/me.md` — populated from the Phase 0 conversation.
 - `wiki/index.md` — compact navigation page with section headers (People, Projects, Teams, Meetings, Decisions, Threads, Source Coverage). It is not a complete machine index.
 - `wiki/log.md` — empty, with header `# Strata — Activity Log`.
-- `wiki/actions/mine.md`, `wiki/actions/theirs.md` — empty checklists.
+- `wiki/actions/mine.md`, `wiki/actions/theirs.md` — Markdown task-list ledgers for what the user owes others and what others owe the user.
 - `.gitignore` — exclude `wiki/raw/.cache/`, `.env`, anything secret.
 
 Initialize git. First commit: "Initial wiki skeleton."
@@ -143,18 +143,55 @@ After connector contracts and at least one raw-to-wiki ingest path are stable, a
 
 ### Phase 3 — Ingest workflows
 
-Implement each ingest workflow as documented in §10. The pattern is the same for all three sources:
+Implement each ingest workflow as documented in §10. The pattern is the same for all three sources. Raw-to-wiki code must stay subject-matter agnostic; workspace-specific aliases and filters live in the local ingest taxonomy at `.strata/ingest/taxonomy.json`.
 
 1. Read the raw item.
-2. Identify which entities it touches (people, projects, teams).
+2. Identify which entities it touches (people, projects, teams), using generic extraction plus the local ingest taxonomy for canonical aliases and local ignore/materiality patterns.
 3. Write or update the relevant pages (meeting summary, project, person).
 4. Extract decisions → `decisions/`.
-5. Extract action items → `actions/mine.md` or `actions/theirs.md`.
+5. Extract action items → `actions/mine.md` or `actions/theirs.md`. This should migrate from raw-to-wiki-specific promotion into the generalized extraction framework in [extraction-framework-plan.md](./extraction-framework-plan.md), starting with the `daily.todo` extractor.
 6. Surface only durable unresolved questions → `threads/`. For high-volume sources such as Slack, keep material source context under `sources/<source>/` unless the item clearly deserves a curated open-thread page.
-7. Update `index.md` as human navigation, refresh the local search index for machine retrieval, and append to `log.md`.
+7. Update `index.md` as human navigation, refresh the local search index for machine retrieval, append a compact run-level summary to `log.md`, and record structured session events that explain each source item's organization.
 8. Commit. Discuss with the user what changed and what they should attend to.
 
-A single Granola or Notion ingest typically touches 8–15 files. A single Slack ingest may touch 0 files (most threads add nothing). That's correct behavior.
+`wiki/actions/mine.md` and `wiki/actions/theirs.md` are the canonical action-item store. The web `/actions` surface parses the Markdown task rows, can add manual rows, toggles `- [ ]` / `- [x]`, and stores additional browser-entered context in a hidden Markdown comment immediately below the task:
+
+```markdown
+- [ ] Follow up on the launch plan (source: [[meetings/2026-05-28-launch|Launch]])
+  <!-- strata:action-context {"context":"Sent a draft; waiting on finance.","updatedAt":"2026-05-28T12:00:00.000Z"} -->
+```
+
+Raw-to-wiki ingestion should continue appending ordinary task rows with source links. Browser action management must preserve those source links and must not move action state into a separate database.
+
+Action extraction should become evidence-backed and re-runnable day by day. The planned `daily.todo` extractor reads a day-scoped wiki corpus, records the source spans it considered, stores rejected/review/published candidates with extractor/verifier versions, and only publishes reviewed or high-confidence items back to the Markdown ledgers. Historical re-indexing should be resumable and idempotent: a backfill over `--from YYYY-MM-DD --to YYYY-MM-DD` must skip already-processed candidates unless explicitly forced, avoid republishing rejected candidates, and leave raw snapshots untouched.
+
+A single Granola or Notion ingest typically touches 8–15 files. A single Slack ingest may touch 0 files (most threads add nothing). That's correct behavior. Detailed ingest auditability should come from the structured activity feed in [ingest-activity-log-plan.md](./ingest-activity-log-plan.md), while `wiki/log.md` stays a compact human chronology. Raw-to-wiki item events should include classification reasons for taxonomy aliases, material signals, and low-signal skips. When false positives/false negatives reveal workspace-specific vocabulary, update `.strata/ingest/taxonomy.json` directly with `strata ingest taxonomy ...` or stage a reviewed schema proposal instead of adding hard-coded terms to TypeScript.
+
+#### Local ingest taxonomy
+
+The local ingest taxonomy is runtime state, not repo state. `@strata/ingest/ingest-taxonomy` loads `.strata/ingest/taxonomy.json` when raw-to-wiki indexing runs, with a compatibility fallback for legacy `.strata/ingest/profile.json`. The initial schema is intentionally small:
+
+```json
+{
+  "version": 1,
+  "selfNames": ["User Name"],
+  "projects": [
+    {
+      "label": "Example Project",
+      "aliases": ["example project", "internal codename"]
+    }
+  ],
+  "slack": {
+    "materialPatterns": [{ "value": "launch", "match": "literal" }],
+    "ignoredLogPatterns": [{ "value": "deploy bot", "match": "literal" }],
+    "transientCheckPatterns": [{ "value": "^all working now\\??$", "match": "regex" }],
+    "routineCoordinationPatterns": [{ "value": "move our meeting", "match": "literal" }],
+    "statusOnlyPatterns": [{ "value": "done for today", "match": "literal" }]
+  }
+}
+```
+
+`match` defaults to `literal`; use `regex` only for patterns that need it. Use `strata ingest taxonomy show` to inspect the file, `strata ingest taxonomy add-project-alias|add-self-name|add-slack-pattern` for typed local edits, and `--propose` when a reviewed dry-run sample should become a schema Proposal before applying. The web control plane exposes the same workflow at `/ingest-taxonomy`; schema proposals with `ingest.taxonomy.*` JSON operations can be accepted from `/proposals`.
 
 ### Phase 4 — Query workflow
 
@@ -334,13 +371,13 @@ Current harness automation can run this workflow directly with `strata ingest ra
 2. Write `meetings/<date>-<slug>.md` with summary.
 3. Update affected `projects/` and `people/` pages.
 4. Extract decisions → `decisions/`.
-5. Extract action items → `actions/mine.md` or `actions/theirs.md`.
+5. Extract action items → `actions/mine.md` or `actions/theirs.md`, eventually through the shared `daily.todo` extraction path.
 6. Open or close threads → `threads/`.
 7. Update `index.md`. Append `log.md`.
 8. Commit. Tell the user: what changed, what they should know about, anything that contradicts prior wiki claims.
 
 ### Ingest — Slack thread
-Same shape. `strata ingest raw index --source slack` maps raw Slack snapshots to `threads/` pages and related entity updates, and `strata ingest slack ... --index` can index newly pulled snapshots. But: many threads add nothing — that's correct, skip them. Surface only material content (decisions, commitments, new threads, factual updates). The deterministic path now dedupes Slack snapshots by channel/thread timestamp and skips empty exports, automation/log notifications, link-only shares, routine status updates, and threads with no material ask/decision/action/incident/project signal. Continue tuning the filter from false-positive/false-negative review rather than broadening capture by default.
+Same shape. `strata ingest raw index --source slack` maps material raw Slack snapshots to source pages and related entity updates, and `strata ingest slack ... --index` can index newly pulled snapshots. But: many threads add nothing — that's correct, skip them. Surface only material content (decisions, commitments, new threads, factual updates). The deterministic path now dedupes Slack snapshots by channel/thread timestamp, applies generic low-signal guards, and loads workspace-specific bot/log/status/coordination patterns from `.strata/ingest/taxonomy.json`. Continue tuning the filter from false-positive/false-negative review by evolving the local ingest taxonomy rather than broadening capture by default.
 
 ### Ingest — Notion doc
 First snapshot the page into `raw/notion/` with `strata ingest notion --page-id <id-or-url>`, optionally adding `--index` to immediately apply. `strata ingest raw index --source notion` maps raw Notion pages to project/source-backed project updates, extracts decisions and commitments, updates actions/threads, updates `index.md`, and appends `log.md`. Notion is already curated, so broad rewrites should usually be staged as proposals rather than applied silently.
@@ -356,7 +393,7 @@ First snapshot the page into `raw/notion/` with `strata ingest notion --page-id 
 - Stale priorities.
 - Decisions referenced but no page exists.
 - Orphan pages.
-- Duplicate or over-specific project/entity pages (`strata maintain run wiki.entities`).
+- Duplicate or over-specific project/entity pages (`strata maintain run wiki.entities`). This audit emits structured consolidation groups and deduplicated pending wiki proposals, including guarded exact append-only merge patches for conservative small project duplicates and manual-review fallbacks for ambiguous merges; `strata jobs run wiki.hygiene` runs the same safe proposal pass and refreshes retrieval without directly merging pages.
 - Contradictions across pages.
 - Action items past due.
 

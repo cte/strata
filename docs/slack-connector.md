@@ -9,7 +9,7 @@ The Slack connector is designed to become a continuous source for Strata: initia
 - `strata ingest slack thread` snapshots one explicit Slack thread.
 - `strata ingest slack sync` discovers conversations, pulls history with `conversations.history`, expands threads with `conversations.replies`, writes immutable Markdown snapshots under `wiki/raw/slack/`, and stores progress in `.strata/connectors/slack/checkpoint.json`.
 - `strata ingest slack listen` opens Slack Socket Mode, acknowledges event envelopes, and materializes the affected thread when message events arrive.
-- `strata ingest raw index --source slack` reads raw Slack snapshots, filters low-signal material, writes material source pages under `wiki/sources/slack/`, and only promotes durable decisions, actions, projects, people, or strongly unresolved open threads into the curated wiki folders.
+- `strata ingest raw index --source slack` reads raw Slack snapshots, filters low-signal material with generic guards plus the local ingest taxonomy at `.strata/ingest/taxonomy.json`, writes material source pages under `wiki/sources/slack/`, and only promotes durable decisions, actions, projects, people, or strongly unresolved open threads into the curated wiki folders.
 - `strata wiki archive-generated-slack-threads` archives legacy generated Slack thread pages from `wiki/threads` into `.strata/archive/` and rewrites wiki links to the immutable raw Slack source.
 - `strata wiki search-index refresh --source slack` refreshes the local SQLite FTS retrieval index so chat/CLI/TUI search can find Slack evidence without enumerating every Slack thread in `wiki/index.md`.
 

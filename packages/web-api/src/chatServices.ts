@@ -3,6 +3,7 @@ import {
   defaultModel,
   getAnthropicCredentials,
   getChatGptCredentials,
+  getModelApiKey,
   inferDefaultProvider,
   listModels,
   parseModelProvider,
@@ -34,8 +35,8 @@ import type {
   ChatSkillsListInput,
 } from "./trpc.js";
 
-const CHAT_SESSION_KINDS = new Set(["chat", "query"]);
-const MAX_SESSION_SCAN = 200;
+const CHAT_SESSION_KIND_LIST = ["chat", "query"] as const;
+const CHAT_SESSION_KINDS = new Set<string>(CHAT_SESSION_KIND_LIST);
 
 export type SessionStoreGetter = () => Promise<SessionStore>;
 
@@ -46,14 +47,22 @@ export async function chatModelStatus(options: WebApiOptions): Promise<ChatModel
     parseModelProvider(env.STRATA_PROVIDER) ??
     (await inferDefaultProvider({ repoRoot: root, env }));
   const model = defaultModel(provider, { env });
-  const credentials = await getChatGptCredentials(root);
-  const anthropicCredentials = await getAnthropicCredentials(root);
+  const [credentials, anthropicCredentials, openaiKey, anthropicKey] = await Promise.all([
+    getChatGptCredentials(root),
+    getAnthropicCredentials(root),
+    getModelApiKey("openai", root),
+    getModelApiKey("anthropic", root),
+  ]);
   const status: ChatModelStatus = {
     provider,
     model,
     codexLoggedIn: credentials !== undefined,
-    apiKeyConfigured: env.STRATA_API_KEY !== undefined || env.OPENAI_API_KEY !== undefined,
+    apiKeyConfigured:
+      openaiKey !== undefined ||
+      env.STRATA_API_KEY !== undefined ||
+      env.OPENAI_API_KEY !== undefined,
     anthropicLoggedIn: anthropicCredentials !== undefined,
+    anthropicApiKeyConfigured: anthropicKey !== undefined,
   };
   if (credentials?.expiresAt !== undefined) {
     status.codexExpiresAt = credentials.expiresAt;
@@ -136,11 +145,7 @@ export async function listChatSessions(
 ): Promise<{ sessions: ChatSessionSummary[] }> {
   const store = await getSessionStore();
   return {
-    sessions: store
-      .listSessions(sessionScanLimit(input.limit))
-      .filter((session) => isChatSessionKind(session.kind))
-      .slice(0, input.limit)
-      .map(sessionToChatSummary),
+    sessions: store.listSessions(input.limit, CHAT_SESSION_KIND_LIST).map(sessionToChatSummary),
   };
 }
 
@@ -202,15 +207,9 @@ export async function searchChatSessions(
   const store = await getSessionStore();
   return {
     sessions: store
-      .searchSessions(input.query, sessionScanLimit(input.limit))
-      .filter((session) => isChatSessionKind(session.kind))
-      .slice(0, input.limit)
+      .searchSessions(input.query, input.limit, CHAT_SESSION_KIND_LIST)
       .map(sessionToChatSummary),
   };
-}
-
-function sessionScanLimit(limit: number): number {
-  return Math.max(limit, Math.min(MAX_SESSION_SCAN, limit * 4));
 }
 
 function skillToChatEntry(skill: SkillMetadata): ChatSkillEntry {

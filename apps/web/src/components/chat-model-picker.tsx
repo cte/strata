@@ -1,5 +1,6 @@
-import { Check, ChevronDown, LoaderCircle } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle, Plug } from "lucide-react";
 import type * as React from "react";
+import { useState } from "react";
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -13,6 +14,7 @@ import {
   ModelSelectorShortcut,
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
+import { ModelAuthDialog } from "@/components/model-auth-dialog";
 import { Button } from "@/components/ui/button";
 import {
   CHAT_REASONING_EFFORTS,
@@ -51,63 +53,81 @@ export function ChatModelPicker({
   disabled = false,
 }: ChatModelPickerProps): React.ReactElement {
   const currentEffort = choice?.reasoningEffort ?? "off";
+  const [authOpen, setAuthOpen] = useState(false);
+  const openProviderAuth = () => {
+    onOpenChange(false);
+    setAuthOpen(true);
+  };
   return (
-    <ModelSelector open={open} onOpenChange={onOpenChange}>
-      <ModelSelectorTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={disabled}
-          aria-label="Choose model"
-          title="Choose model"
-          className="h-7 max-w-full justify-start gap-1.5 px-2 font-mono text-[11.5px] text-[var(--fg-dim)] [&>svg]:!size-[13px]"
-        >
-          <span className="truncate">
-            {choice === null ? "model" : `${providerShortLabel(choice.provider)}:${choice.model}`}
-          </span>
-          {choice === null || currentEffort === "off" ? null : (
-            <span className="shrink-0 text-[var(--fg-mute)]">
-              /{REASONING_LABELS[currentEffort]}
+    <>
+      <ModelSelector open={open} onOpenChange={onOpenChange}>
+        <ModelSelectorTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={disabled}
+            aria-label="Choose model"
+            title="Choose model"
+            className="h-7 max-w-full justify-start gap-1.5 px-2 font-mono text-[11.5px] text-[var(--fg-dim)] [&>svg]:!size-[13px]"
+          >
+            <span className="truncate">
+              {choice === null ? "model" : `${providerShortLabel(choice.provider)}:${choice.model}`}
             </span>
-          )}
-          <ChevronDown
-            size={13}
-            strokeWidth={1.75}
-            className={cn("shrink-0 transition-transform", open && "rotate-180")}
-          />
-        </Button>
-      </ModelSelectorTrigger>
-      <ModelSelectorContent
-        title="Choose model"
-        className="w-[min(680px,calc(100vw-2rem))] overflow-hidden rounded-lg border border-[var(--hairline-strong)] bg-[var(--surface)] text-[var(--fg)] shadow-2xl shadow-black/45"
-      >
-        <ModelSelectorInput placeholder="Search models..." />
-        <ModelSelectorList className="max-h-[min(420px,60dvh)]">
-          <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
-          {providerStates.map((state) => (
-            <ProviderModelGroup
-              key={state.provider}
-              state={state}
-              choice={choice}
-              onSelect={(model) => {
-                onSelect({
-                  provider: state.provider,
-                  model,
-                  reasoningEffort: currentEffort,
-                });
-                onOpenChange(false);
-              }}
+            {choice === null || currentEffort === "off" ? null : (
+              <span className="shrink-0 text-[var(--fg-mute)]">
+                /{REASONING_LABELS[currentEffort]}
+              </span>
+            )}
+            <ChevronDown
+              size={13}
+              strokeWidth={1.75}
+              className={cn("shrink-0 transition-transform", open && "rotate-180")}
             />
-          ))}
-        </ModelSelectorList>
-        <ModelSelectorSeparator />
-        <ReasoningEffortSelector
-          currentEffort={currentEffort}
-          onReasoningEffortChange={onReasoningEffortChange}
-        />
-      </ModelSelectorContent>
-    </ModelSelector>
+          </Button>
+        </ModelSelectorTrigger>
+        <ModelSelectorContent
+          title="Choose model"
+          className="w-[min(680px,calc(100vw-2rem))] overflow-hidden rounded-lg border border-[var(--hairline-strong)] bg-[var(--surface)] text-[var(--fg)] shadow-2xl shadow-black/45"
+        >
+          <ModelSelectorInput placeholder="Search models..." />
+          <ModelSelectorList className="max-h-[min(420px,60dvh)]">
+            <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+            {providerStates.map((state) => (
+              <ProviderModelGroup
+                key={state.provider}
+                state={state}
+                choice={choice}
+                onManageProviders={openProviderAuth}
+                onSelect={(model) => {
+                  onSelect({
+                    provider: state.provider,
+                    model,
+                    reasoningEffort: currentEffort,
+                  });
+                  onOpenChange(false);
+                }}
+              />
+            ))}
+          </ModelSelectorList>
+          <ModelSelectorSeparator />
+          <ReasoningEffortSelector
+            currentEffort={currentEffort}
+            onReasoningEffortChange={onReasoningEffortChange}
+          />
+          <ModelSelectorSeparator />
+          <button
+            type="button"
+            onClick={openProviderAuth}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11.5px] text-[var(--fg-dim)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--fg)]"
+          >
+            <Plug size={13} strokeWidth={1.75} className="shrink-0" />
+            Manage providers…
+          </button>
+        </ModelSelectorContent>
+      </ModelSelector>
+      <ModelAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
+    </>
   );
 }
 
@@ -115,11 +135,16 @@ function ProviderModelGroup({
   state,
   choice,
   onSelect,
+  onManageProviders,
 }: {
   state: ChatProviderModelState;
   choice: ChatModelChoice | null;
   onSelect(model: string): void;
+  onManageProviders(): void;
 }): React.ReactElement {
+  // openai-compatible auth is an env API key, not OAuth — no connect action.
+  const canConnect = !state.available && state.provider !== "openai-compatible";
+  const statusText = state.error ?? state.message;
   return (
     <ModelSelectorGroup
       heading={
@@ -128,14 +153,28 @@ function ProviderModelGroup({
           {state.loading ? (
             <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin" />
           ) : null}
-          <span
-            className={cn(
-              "ml-auto min-w-0 truncate text-[10.5px] normal-case tracking-normal",
-              state.available ? "text-[var(--fg-mute)]" : "text-[var(--warn)]",
-            )}
-          >
-            {state.error ?? state.message}
-          </span>
+          {canConnect ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onManageProviders();
+              }}
+              className="ml-auto min-w-0 truncate text-[10.5px] normal-case tracking-normal text-[var(--warn)] underline-offset-2 hover:underline"
+            >
+              Connect →
+            </button>
+          ) : (
+            <span
+              className={cn(
+                "ml-auto min-w-0 truncate text-[10.5px] normal-case tracking-normal",
+                state.available ? "text-[var(--fg-mute)]" : "text-[var(--warn)]",
+              )}
+            >
+              {statusText}
+            </span>
+          )}
         </span>
       }
     >

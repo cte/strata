@@ -39,6 +39,19 @@
         "NODE_ENV": "development",
         "SLACK_SOCKET_DEBUG": "1"
       }
+    },
+    {
+      "name": "strata-jobs-worker",
+      "script": "bun",
+      "args": "run strata jobs worker",
+      "interpreter": "none",
+      "cwd": ".",
+      "autorestart": true,
+      "watch": false,
+      "restart_delay": 2000,
+      "env": {
+        "NODE_ENV": "development"
+      }
     }
   ]
 }

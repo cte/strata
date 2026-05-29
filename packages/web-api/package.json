@@ -17,6 +17,7 @@
     "@strata/core": "workspace:*",
     "@strata/ingest": "workspace:*",
     "@strata/integration-mcp": "workspace:*",
+    "@strata/jobs": "workspace:*",
     "@strata/tools": "workspace:*",
     "@hono/trpc-server": "^0.4.2",
 

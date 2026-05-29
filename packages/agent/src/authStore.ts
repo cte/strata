@@ -28,11 +28,28 @@ export interface AnthropicCredentials {
   updatedAt: string;
 }
 
+/** Stored provider API key — an alternative to OAuth. */
+export interface ApiKeyCredentials {
+  type: "api_key";
+  apiKey: string;
+  /** Optional custom base URL (OpenAI-compatible endpoints). */
+  baseUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** API-key auth targets. `openai` drives the OpenAI-compatible adapter. */
+export type ApiKeyTarget = "openai" | "anthropic";
+
 export interface AuthStoreData {
   version: 1;
   credentials: {
     [OPENAI_CODEX_PROVIDER_ID]?: ChatGptCredentials;
     [ANTHROPIC_CLAUDE_PROVIDER_ID]?: AnthropicCredentials;
+  };
+  apiKeys?: {
+    openai?: ApiKeyCredentials;
+    anthropic?: ApiKeyCredentials;
   };
 }
 
@@ -81,6 +98,48 @@ export async function setAnthropicCredentials(
 export async function clearAnthropicCredentials(repoRoot?: string): Promise<void> {
   const data = await loadAuthStore(repoRoot);
   delete data.credentials[ANTHROPIC_CLAUDE_PROVIDER_ID];
+  await saveAuthStore(data, repoRoot);
+}
+
+export async function getModelApiKey(
+  target: ApiKeyTarget,
+  repoRoot?: string,
+): Promise<ApiKeyCredentials | undefined> {
+  const data = await loadAuthStore(repoRoot);
+  return data.apiKeys?.[target];
+}
+
+export async function setModelApiKey(
+  target: ApiKeyTarget,
+  input: { apiKey: string; baseUrl?: string },
+  repoRoot?: string,
+): Promise<void> {
+  const apiKey = input.apiKey.trim();
+  if (apiKey === "") {
+    throw new Error("API key cannot be empty.");
+  }
+  const data = await loadAuthStore(repoRoot);
+  const existing = data.apiKeys?.[target];
+  const now = new Date().toISOString();
+  const baseUrl = input.baseUrl?.trim();
+  data.apiKeys = {
+    ...data.apiKeys,
+    [target]: {
+      type: "api_key",
+      apiKey,
+      ...(baseUrl ? { baseUrl } : {}),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    },
+  };
+  await saveAuthStore(data, repoRoot);
+}
+
+export async function clearModelApiKey(target: ApiKeyTarget, repoRoot?: string): Promise<void> {
+  const data = await loadAuthStore(repoRoot);
+  if (data.apiKeys !== undefined) {
+    delete data.apiKeys[target];
+  }
   await saveAuthStore(data, repoRoot);
 }
 

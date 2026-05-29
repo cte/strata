@@ -4,6 +4,12 @@ import {
   disconnectGranola,
   getGranolaStatus,
 } from "@strata/ingest/granola-connector";
+import {
+  addWikiActionForWeb,
+  listWikiActionsForWeb,
+  updateWikiActionForWeb,
+} from "./actionServices.js";
+import { getIngestActivityForWeb, listIngestActivityForWeb } from "./activityServices.js";
 import { SessionChangeFeed } from "./changeFeed.js";
 import { createChatService } from "./chat.js";
 import {
@@ -20,10 +26,40 @@ import {
 } from "./chatServices.js";
 import {
   connectorSummaries,
+  deleteConnectorConfigProfileForWeb,
+  listConnectorConfigProfilesForWeb,
+  runConnectorSession,
   runNotionSession,
+  saveConnectorConfigProfileForWeb,
+  setDefaultConnectorConfigProfileForWeb,
   startNotionMcp,
   validateNotion,
 } from "./connectorServices.js";
+import {
+  acceptDailyTodoCandidateForWeb,
+  listDailyTodoCandidatesForWeb,
+  listDailyTodoExtractionRunsForWeb,
+  rejectDailyTodoCandidateForWeb,
+} from "./extractionServices.js";
+import {
+  addIngestTaxonomyProjectAliasForWeb,
+  addIngestTaxonomySelfNameForWeb,
+  addIngestTaxonomySlackPatternForWeb,
+  applyIngestTaxonomyProposalForWeb,
+  getIngestTaxonomyForWeb,
+} from "./ingestTaxonomyServices.js";
+import {
+  applyConnectorSchedulePreset,
+  connectorScheduleStatus,
+  createSchedule,
+  deleteSchedule,
+  listJobs,
+  listSchedules,
+  runConnectorScheduleNow,
+  runScheduleNowFromWeb,
+  setConnectorScheduleEnabled,
+  updateSchedule,
+} from "./jobServices.js";
 import {
   deleteMcpSettings,
   getMcpSettingsStatus,
@@ -31,13 +67,22 @@ import {
   updateMcpSettings,
 } from "./mcpSettings.js";
 import {
+  clearModelApiKey,
   completeModelAuth,
   disconnectModelAuth,
   getModelAuthStatus,
+  setModelApiKey,
   startModelAuth,
 } from "./modelAuth.js";
 
 import { disconnectNotionMcp, getNotionMcpStatus, listNotionMcpTools } from "./notionMcp.js";
+import {
+  applyProposalFromWeb,
+  deferProposalFromWeb,
+  getProposalForWeb,
+  listProposalsForWeb,
+  rejectProposalFromWeb,
+} from "./proposalServices.js";
 import { repoRoot, type WebApiOptions } from "./runtime.js";
 
 import type {
@@ -96,6 +141,35 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     searchChatSessions: (input) => searchChatSessions(input, getSessionStore),
     getWikiTree: (input) => getWikiTree(input, options),
     getWikiPage: (input) => getWikiPage(input, options),
+    listWikiActions: (input) => listWikiActionsForWeb(input, options),
+    updateWikiAction: (input) => updateWikiActionForWeb(input, options),
+    addWikiAction: (input) => addWikiActionForWeb(input, options),
+    listDailyTodoExtractionRuns: (input) => listDailyTodoExtractionRunsForWeb(input, options),
+    listDailyTodoCandidates: (input) => listDailyTodoCandidatesForWeb(input, options),
+    acceptDailyTodoCandidate: (input) => acceptDailyTodoCandidateForWeb(input, options),
+    rejectDailyTodoCandidate: (input) => rejectDailyTodoCandidateForWeb(input, options),
+    listIngestActivity: (input) => listIngestActivityForWeb(input, options),
+    getIngestActivity: (input) => getIngestActivityForWeb(input, options),
+    getIngestTaxonomy: () => getIngestTaxonomyForWeb(options),
+    addIngestTaxonomyProjectAlias: (input) => addIngestTaxonomyProjectAliasForWeb(input, options),
+    addIngestTaxonomySelfName: (input) => addIngestTaxonomySelfNameForWeb(input, options),
+    addIngestTaxonomySlackPattern: (input) => addIngestTaxonomySlackPatternForWeb(input, options),
+    applyIngestTaxonomyProposal: (input) => applyIngestTaxonomyProposalForWeb(input, options),
+    listProposals: (input) => listProposalsForWeb(input, options),
+    getProposal: (input) => getProposalForWeb(input, options),
+    applyProposal: (input) => applyProposalFromWeb(input, options),
+    rejectProposal: (input) => rejectProposalFromWeb(input, options),
+    deferProposal: (input) => deferProposalFromWeb(input, options),
+    listJobs,
+    listSchedules: () => listSchedules(options),
+    createSchedule: (input) => createSchedule(input, options),
+    updateSchedule: (input) => updateSchedule(input, options),
+    deleteSchedule: (input) => deleteSchedule(input, options),
+    runScheduleNow: (input) => runScheduleNowFromWeb(input, options),
+    connectorScheduleStatus: (input) => connectorScheduleStatus(input, options),
+    applyConnectorSchedulePreset: (input) => applyConnectorSchedulePreset(input, options),
+    setConnectorScheduleEnabled: (input) => setConnectorScheduleEnabled(input, options),
+    runConnectorScheduleNow: (input) => runConnectorScheduleNow(input, options),
 
     modelAuthStatus: () => getModelAuthStatus(options),
     startModelAuth: (input) => startModelAuth(input, input.origin, options),
@@ -104,6 +178,8 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
       return getModelAuthStatus(options);
     },
     disconnectModelAuth: (input) => disconnectModelAuth(input.provider, options),
+    setModelApiKey: (input) => setModelApiKey(input, options),
+    clearModelApiKey: (input) => clearModelApiKey(input, options),
 
     mcpSettingsStatus: () => getMcpSettingsStatus(options),
     updateMcpSettings: (input) => updateMcpSettings(input, options),
@@ -111,6 +187,12 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     listMcpTools: (input) => listMcpTools(input, options),
 
     connectorSummaries: () => connectorSummaries(options),
+    runConnectorSession: (input) => runConnectorSession(input, options),
+    listConnectorConfigProfiles: (input) => listConnectorConfigProfilesForWeb(input, options),
+    saveConnectorConfigProfile: (input) => saveConnectorConfigProfileForWeb(input, options),
+    deleteConnectorConfigProfile: (input) => deleteConnectorConfigProfileForWeb(input, options),
+    setDefaultConnectorConfigProfile: (input) =>
+      setDefaultConnectorConfigProfileForWeb(input, options),
 
     validateNotion: (config) => validateNotion(config, options),
     runNotionSession: (operation, config) => runNotionSession(operation, config, options),
@@ -157,7 +239,12 @@ export {
 } from "./chatServices.js";
 export {
   connectorSummaries,
+  deleteConnectorConfigProfileForWeb,
+  listConnectorConfigProfilesForWeb,
+  runConnectorSession,
   runNotionSession,
+  saveConnectorConfigProfileForWeb,
+  setDefaultConnectorConfigProfileForWeb,
   startNotionMcp,
   validateNotion,
 } from "./connectorServices.js";

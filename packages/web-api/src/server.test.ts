@@ -10,7 +10,16 @@ import {
   type AgentRunResult,
   type ModelAdapter,
 } from "@strata/agent";
+import { writeLearningProposal } from "@strata/core/proposal-store";
 import { SessionStore } from "@strata/core/session-store";
+import {
+  DAILY_TODO_EXTRACTION,
+  type DailyTodoExtractionResult,
+  extractionCandidateStorageIdForResult,
+  extractionRunIdForSession,
+  persistDailyTodoExtractionResult,
+  type TodoCandidateResult,
+} from "@strata/ingest/extraction";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createWebApiHandler } from "./server.js";
 import type { AppRouter } from "./trpc.js";
@@ -55,6 +64,501 @@ describe("web api", () => {
     }
   });
 
+  test("runs a connector workflow with optional wiki indexing through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: { NOTION_TOKEN: "secret" },
+        fetchImpl: fakeNotionFetch(),
+        now: new Date("2026-05-05T10:00:00.000Z"),
+      });
+      const { client, close } = createTestClient(handler);
+
+      try {
+        const result = await client.connectors.run.mutate({
+          connector: "notion",
+          operation: "pull",
+          config: { pageId: "page_123" },
+          index: true,
+          refreshSearchIndex: true,
+        });
+        expect(result.connector).toBe("notion");
+        expect(result.connectorResult.rawPath).toBe("wiki/raw/notion/2026-05-04-strategy-doc.md");
+        expect(result.metrics).toMatchObject({
+          itemCount: 1,
+          writtenCount: 1,
+          indexedCount: 1,
+        });
+        expect(result.rawToWiki?.indexed[0]?.primaryPath).toBe("wiki/projects/strategy-doc.md");
+        expect(result.searchIndex?.indexed).toBeGreaterThan(0);
+        await access(path.join(repoRoot, "wiki/projects/strategy-doc.md"));
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("manages non-secret connector config profiles through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: {},
+        now: new Date("2026-05-27T10:00:00.000Z"),
+      });
+      const { client, close } = createTestClient(handler);
+
+      try {
+        const saved = await client.connectors.config.save.mutate({
+          connector: "slack",
+          id: "team-sync",
+          label: "Team sync",
+          config: {
+            channels: "engineering,product",
+            includePrivateChannels: true,
+            maxThreads: 100,
+            mode: "sync",
+          },
+          makeDefault: true,
+        });
+        expect(saved.defaultProfile).toMatchObject({
+          id: "team-sync",
+          isDefault: true,
+          config: {
+            channels: "engineering,product",
+            includePrivateChannels: true,
+            maxThreads: 100,
+            mode: "sync",
+          },
+        });
+        expect(JSON.stringify(saved)).not.toContain("secret");
+
+        await expect(
+          client.connectors.config.save.mutate({
+            connector: "slack",
+            config: {
+              userToken: "xoxp-secret_should_not_store",
+            },
+          }),
+        ).rejects.toThrow("userToken");
+
+        const deleted = await client.connectors.config.delete.mutate({
+          connector: "slack",
+          id: "team-sync",
+        });
+        expect(deleted.profiles).toEqual([]);
+        expect(deleted.defaultProfile).toBeNull();
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("lists normalized ingest activity through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const store = await SessionStore.open(repoRoot);
+      let sessionId = "";
+      try {
+        const session = await store.createSession({
+          kind: "ingest",
+          title: "Index 1 slack raw file",
+        });
+        sessionId = session.id;
+        await store.appendEvent(session.id, "raw_to_wiki.index.started", {
+          rawPaths: ["wiki/raw/slack/2026-05-27-thread.md"],
+          dryRun: false,
+          source: "slack",
+        });
+        await store.appendEvent(session.id, "raw_to_wiki.index.item", {
+          source: "slack",
+          rawPath: "wiki/raw/slack/2026-05-27-thread.md",
+          primaryKind: "source",
+          primaryPath: "wiki/sources/slack/c123/2026-05-27-thread.md",
+          title: "Thread",
+          date: "2026-05-27",
+          peoplePaths: [],
+          projectPaths: ["wiki/projects/support.md"],
+          decisionPaths: [],
+          threadPaths: [],
+          actionCount: 0,
+          writtenPaths: ["wiki/sources/slack/c123/2026-05-27-thread.md"],
+          dryRun: false,
+        });
+        await store.appendEvent(session.id, "raw_to_wiki.index.completed", {
+          scanned: 1,
+          indexedCount: 1,
+          skipped: [],
+          dryRun: false,
+          source: "slack",
+        });
+        await store.endSession(session.id, "completed");
+      } finally {
+        store.close();
+      }
+
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        const list = await client.activity.list.query({ limit: 5, source: "slack" });
+        expect(list.runs[0]).toMatchObject({
+          sessionId,
+          source: "slack",
+          operation: "raw.index",
+          counts: { rawIndexed: 1 },
+        });
+
+        const detail = await client.activity.get.query({ sessionId, itemLimit: 5 });
+        expect(detail?.items[0]).toMatchObject({
+          status: "indexed",
+          primaryPath: "wiki/sources/slack/c123/2026-05-27-thread.md",
+        });
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("lists and updates wiki actions through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      await mkdir(path.join(repoRoot, "wiki/actions"), { recursive: true });
+      await writeFile(
+        path.join(repoRoot, "wiki/actions/mine.md"),
+        [
+          "---",
+          "type: actions",
+          "owner: me",
+          "last_updated: 2026-05-08",
+          "---",
+          "",
+          "# What I Owe Others",
+          "",
+          "- [ ] Follow up on the launch plan (source: [[meetings/launch|Launch]])",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        const list = await client.wiki.actions.list.query({ owner: "mine", status: "open" });
+        expect(list.actions).toHaveLength(1);
+        expect(list.actions[0]?.title).toBe("Follow up on the launch plan");
+
+        const id = list.actions[0]?.id;
+        if (id === undefined) {
+          throw new Error("Expected action id.");
+        }
+        const updated = await client.wiki.actions.update.mutate({
+          id,
+          completed: true,
+          context: "Handled in the web action manager.",
+        });
+        expect(updated.action.completed).toBe(true);
+        expect(updated.action.context).toBe("Handled in the web action manager.");
+
+        const added = await client.wiki.actions.add.mutate({
+          owner: "theirs",
+          title: "Review the action manager",
+        });
+        expect(added.action.path).toBe("wiki/actions/theirs.md");
+
+        const mine = await readFile(path.join(repoRoot, "wiki/actions/mine.md"), "utf8");
+        expect(mine).toContain("- [x] Follow up on the launch plan");
+        expect(mine).toContain("strata:action-context");
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("reviews daily TODO extraction candidates through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const candidateIds = await writeDailyTodoReviewFixture(repoRoot);
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: {},
+        now: new Date("2026-05-29T10:00:00.000Z"),
+      });
+      const { client, close } = createTestClient(handler);
+      try {
+        const runs = await client.extraction.dailyTodos.runs.list.query({
+          day: "2026-05-29",
+        });
+        expect(runs.runs[0]).toMatchObject({
+          name: DAILY_TODO_EXTRACTION.name,
+          day: "2026-05-29",
+          candidateCount: 2,
+        });
+
+        const pending = await client.extraction.dailyTodos.candidates.list.query({
+          day: "2026-05-29",
+          publication: "pending",
+          status: "all",
+        });
+        expect(pending.candidates.map((candidate) => candidate.id)).toEqual(candidateIds);
+        expect(pending.candidates[0]).toMatchObject({
+          sourceLabel: "Launch thread",
+          owner: "unknown",
+        });
+
+        const accepted = await client.extraction.dailyTodos.candidates.accept.mutate({
+          id: candidateIds[0] ?? "",
+          owner: "mine",
+          actionText: "Send launch notes.",
+          context: "Accepted from extraction review.",
+        });
+        expect(accepted.publication).toMatchObject({
+          status: "published",
+        });
+        expect(accepted.publication?.publishedTarget).toContain("wiki/actions/mine.md:");
+        expect(accepted.candidate).toMatchObject({
+          status: "confirmed",
+        });
+        expect(accepted.candidate.publishedTarget).toContain("wiki/actions/mine.md:");
+
+        const rejected = await client.extraction.dailyTodos.candidates.reject.mutate({
+          id: candidateIds[1] ?? "",
+          reason: "Already handled.",
+        });
+        expect(rejected.candidate).toMatchObject({
+          status: "rejected",
+          owner: "unknown",
+        });
+
+        const remaining = await client.extraction.dailyTodos.candidates.list.query({
+          day: "2026-05-29",
+          publication: "pending",
+          status: "all",
+        });
+        expect(remaining.candidates).toEqual([]);
+
+        const actions = await client.wiki.actions.list.query({ owner: "mine", status: "open" });
+        expect(actions.actions[0]).toMatchObject({
+          title: "Send launch notes.",
+          source: {
+            target: "raw/slack/2026-05-29-launch",
+            label: "Launch thread",
+          },
+          context: "Accepted from extraction review.",
+        });
+
+        const mine = await readFile(path.join(repoRoot, "wiki/actions/mine.md"), "utf8");
+        expect(mine).toContain('"extractionCandidateId"');
+        expect(mine).toContain('"reviewed":true');
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("reviews and applies proposals through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const proposal = await writeLearningProposal(repoRoot, {
+        kind: "wiki",
+        sessionId: "sess_web",
+        title: "Create web proposal page",
+        reason: "Exercise web proposal review.",
+        evidence: ["wiki/raw/granola/2026-05-27-web-proposal.md"],
+        proposedChange: [
+          "Proposed meeting page: `wiki/meetings/2026-05-27-web-proposal.md`",
+          "",
+          "```markdown",
+          "---",
+          "type: meeting",
+          "date: 2026-05-27",
+          "title: Web Proposal",
+          "---",
+          "",
+          "# Web Proposal",
+          "",
+          "## Summary",
+          "",
+          "- Test web proposal apply.",
+          "```",
+        ].join("\n"),
+        risk: "low",
+      });
+      const manual = await writeLearningProposal(repoRoot, {
+        kind: "skill",
+        sessionId: "sess_web",
+        title: "Review manually",
+        reason: "Needs human judgment.",
+        evidence: ["trace sess_web"],
+        proposedChange: "Manual review required.",
+        risk: "medium",
+      });
+      await mkdir(path.join(repoRoot, "wiki/projects"), { recursive: true });
+      await writeFile(
+        path.join(repoRoot, "wiki/projects/web-proposals.md"),
+        ["# Web Proposals", "", "## Status", "", "- Pending review.", ""].join("\n"),
+        "utf8",
+      );
+      const patch = await writeLearningProposal(repoRoot, {
+        kind: "wiki",
+        sessionId: "sess_web",
+        title: "Patch web proposal status",
+        reason: "Exercise web proposal patch apply.",
+        evidence: ["wiki/projects/web-proposals.md"],
+        proposedChange: [
+          "Patch wiki page: `wiki/projects/web-proposals.md`",
+          "",
+          "Expected old text:",
+          "",
+          "```markdown",
+          "- Pending review.",
+          "```",
+          "",
+          "Replacement text:",
+          "",
+          "```markdown",
+          "- Reviewed from the web API.",
+          "```",
+        ].join("\n"),
+        risk: "low",
+      });
+
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        const list = await client.proposals.list.query({ status: "pending", limit: 10 });
+        expect(list.proposals.map((item) => item.id)).toContain(proposal.id);
+
+        const detail = await client.proposals.get.query({ id: proposal.id });
+        expect(detail?.apply).toMatchObject({
+          supported: true,
+          targetPath: "wiki/meetings/2026-05-27-web-proposal.md",
+        });
+
+        const applied = await client.proposals.accept.mutate({ id: proposal.id });
+        expect(applied.proposal.status).toBe("applied");
+        expect(applied.writtenPaths).toEqual(["wiki/meetings/2026-05-27-web-proposal.md"]);
+        expect(
+          await readFile(path.join(repoRoot, "wiki/meetings/2026-05-27-web-proposal.md"), "utf8"),
+        ).toContain("# Web Proposal");
+
+        const patchDetail = await client.proposals.get.query({ id: patch.id });
+        expect(patchDetail?.apply).toMatchObject({
+          supported: true,
+          mode: "wiki.patchPage",
+          targetPath: "wiki/projects/web-proposals.md",
+        });
+
+        const patchApplied = await client.proposals.accept.mutate({ id: patch.id });
+        expect(patchApplied).toMatchObject({
+          mode: "wiki.patchPage",
+          writtenPaths: ["wiki/projects/web-proposals.md"],
+        });
+        expect(
+          await readFile(path.join(repoRoot, "wiki/projects/web-proposals.md"), "utf8"),
+        ).toContain("- Reviewed from the web API.");
+
+        const deferred = await client.proposals.defer.mutate({
+          id: manual.id,
+          reason: "wait for more evidence",
+        });
+        expect(deferred.proposal).toMatchObject({
+          id: manual.id,
+          status: "deferred",
+          statusReason: "wait for more evidence",
+        });
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("summarizes and controls connector schedules through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: {},
+        now: new Date("2026-05-27T10:00:00.000Z"),
+      });
+      const { client, close } = createTestClient(handler);
+      try {
+        const before = await client.connectors.schedules.status.query({ connector: "granola" });
+        expect(before.schedule).toBeNull();
+        expect(before.defaultProfile).toBeNull();
+        expect(before.presets.map((preset) => preset.id)).toContain("granola-near-real-time");
+
+        await client.connectors.config.save.mutate({
+          connector: "granola",
+          id: "default",
+          label: "Granola schedule defaults",
+          config: {
+            pageSize: "20",
+            maxPages: "4",
+          },
+          makeDefault: true,
+        });
+
+        const withDefault = await client.connectors.schedules.status.query({
+          connector: "granola",
+        });
+        expect(withDefault.defaultProfile).toMatchObject({
+          id: "default",
+          label: "Granola schedule defaults",
+        });
+        expect(withDefault.presets[0]?.usesDefaultProfile).toBe(true);
+
+        const created = await client.connectors.schedules.applyPreset.mutate({
+          connector: "granola",
+          presetId: "granola-near-real-time",
+        });
+        expect(created.schedule).toMatchObject({
+          name: "Granola near-real-time sync",
+          jobName: "connector.pull",
+          enabled: true,
+          trigger: { type: "interval", seconds: 120 },
+          input: {
+            connector: "granola",
+            configProfileId: "default",
+            index: true,
+            refreshSearchIndex: true,
+          },
+        });
+        expect(created.scheduleProfile).toMatchObject({
+          id: "default",
+          label: "Granola schedule defaults",
+        });
+        expect(created.scheduleProfileMissing).toBeNull();
+
+        const disabled = await client.connectors.schedules.setEnabled.mutate({
+          connector: "granola",
+          enabled: false,
+        });
+        expect(disabled.schedule?.enabled).toBe(false);
+
+        const listed = await client.schedules.list.query();
+        expect(listed.schedules).toHaveLength(1);
+        expect(listed.schedules[0]?.input.connector).toBe("granola");
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("reports browser-safe chat model status", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     try {
@@ -75,6 +579,7 @@ describe("web api", () => {
           codexLoggedIn: false,
           anthropicLoggedIn: false,
           apiKeyConfigured: true,
+          anthropicApiKeyConfigured: false,
         });
 
         expect(JSON.stringify(status)).not.toContain("secret_should_not_render");
@@ -844,6 +1349,117 @@ function fakeNotionFetch(): typeof fetch {
     },
     { preconnect: fetch.preconnect },
   ) satisfies typeof fetch;
+}
+
+async function writeDailyTodoReviewFixture(repoRoot: string): Promise<string[]> {
+  const store = await SessionStore.open(repoRoot);
+  try {
+    const session = await store.createSession({
+      kind: "ingest",
+      title: "Dry-run daily.todo extraction for 2026-05-29",
+    });
+    const results: TodoCandidateResult[] = [
+      todoCandidateResult({
+        evidenceSpanId: "span_review_1",
+        candidateHash: "candidate_hash_review_1",
+        candidateText: "Can you send launch notes?",
+        status: "needs_review",
+        classification: "needs_review",
+        confidence: 0.62,
+        owner: "unknown",
+        actionText: "Can you send launch notes?",
+        rationale: "Direct ask needs owner review.",
+        lineStart: 12,
+      }),
+      todoCandidateResult({
+        evidenceSpanId: "span_review_2",
+        candidateHash: "candidate_hash_review_2",
+        candidateText: "Ada will update the billing copy.",
+        status: "confirmed",
+        classification: "action",
+        confidence: 0.91,
+        owner: "theirs",
+        actionText: "Ada will update the billing copy.",
+        rationale: "Explicit assigned commitment.",
+        lineStart: 18,
+      }),
+    ];
+    const result: DailyTodoExtractionResult = {
+      sessionId: session.id,
+      extractionRunId: extractionRunIdForSession(session.id),
+      dryRun: true,
+      extractionName: "daily.todo",
+      extractorVersion: DAILY_TODO_EXTRACTION.extractorVersion,
+      verifierVersion: "fake.todo-verifier-v1",
+      day: "2026-05-29",
+      sourcesScanned: 1,
+      spanCount: 2,
+      candidateCount: results.length,
+      rejectedCount: 0,
+      countsBySource: {
+        slack: { documents: 1, spans: 2, candidates: 2, rejected: 0 },
+        granola: { documents: 0, spans: 0, candidates: 0, rejected: 0 },
+        notion: { documents: 0, spans: 0, candidates: 0, rejected: 0 },
+        wiki: { documents: 0, spans: 0, candidates: 0, rejected: 0 },
+      },
+      results,
+      candidates: results,
+      rejected: [],
+    };
+    persistDailyTodoExtractionResult(store, result);
+    await store.endSession(session.id, "completed");
+    return results.map((item) => extractionCandidateStorageIdForResult(result, item));
+  } finally {
+    store.close();
+  }
+}
+
+function todoCandidateResult(options: {
+  evidenceSpanId: string;
+  candidateHash: string;
+  candidateText: string;
+  status: TodoCandidateResult["status"];
+  classification: "action" | "not_action" | "needs_review";
+  confidence: number;
+  owner: "mine" | "theirs" | "unknown";
+  actionText: string;
+  rationale: string;
+  lineStart: number;
+}): TodoCandidateResult {
+  return {
+    status: options.status,
+    candidate: {
+      id: options.evidenceSpanId.replace("span", "candidate"),
+      extractionName: DAILY_TODO_EXTRACTION.name,
+      candidateKind: "direct_request",
+      evidenceSpanId: options.evidenceSpanId,
+      candidateText: options.candidateText,
+      candidateHash: options.candidateHash,
+      deterministicReasons: ["direct_request"],
+      metadata: {},
+    },
+    evidence: {
+      id: options.evidenceSpanId,
+      sourcePath: path.join("wiki", "raw", "slack", "2026-05-29-launch.md"),
+      sourceKind: "raw",
+      sourceType: "slack",
+      date: "2026-05-29",
+      lineStart: options.lineStart,
+      lineEnd: options.lineStart,
+      text: options.candidateText,
+      metadata: {
+        title: "Launch thread",
+      },
+    },
+    verification: {
+      classification: options.classification,
+      confidence: options.confidence,
+      owner: options.owner,
+      actionText: options.actionText,
+      rationale: options.rationale,
+    },
+    reasons: ["direct_request"],
+  };
 }
 
 const fakeModel: ModelAdapter = {

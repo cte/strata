@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { refreshWikiSearchIndex } from "@strata/core";
 import { createDefaultToolRegistry } from "./index.js";
 import type { ToolFileChange } from "./types.js";
 
@@ -125,6 +126,114 @@ describe("wiki tools", () => {
       ).resolves.toMatchObject({
         count: 1,
         matches: [{ path: "threads/self-serve-pricing.md" }],
+      });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("search returns consolidated curated context before source and raw evidence", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      const wikiRoot = path.join(repoRoot, "wiki");
+      await mkdir(path.join(wikiRoot, "projects"), { recursive: true });
+      await mkdir(path.join(wikiRoot, "sources", "slack"), { recursive: true });
+      await mkdir(path.join(wikiRoot, "raw", "slack"), { recursive: true });
+      await writeFile(
+        path.join(wikiRoot, "projects", "roo-code.md"),
+        [
+          "---",
+          "type: project",
+          "title: Roo Code",
+          "---",
+          "",
+          "# Roo Code",
+          "",
+          "## Consolidated Sources",
+          "",
+          "### RooCodeInc Sync",
+          "",
+          "- Status:",
+          "  - Slack sync said deploy markers should stay visible in release summaries.",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(wikiRoot, "projects", "roocodeinc-sync.md"),
+        [
+          "---",
+          "type: project",
+          "title: RooCodeInc Sync",
+          "status: superseded",
+          "superseded_by: wiki/projects/roo-code.md",
+          "---",
+          "",
+          "# RooCodeInc Sync",
+          "",
+          "deploy markers visible superseded redirect.",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(wikiRoot, "sources", "slack", "roo-code-sync.md"),
+        [
+          "---",
+          "type: source",
+          "source: raw/slack/roo-code-sync.md",
+          "---",
+          "",
+          "# Roo Code Sync Source",
+          "",
+          "deploy markers visible source evidence.",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(wikiRoot, "raw", "slack", "roo-code-sync.md"),
+        "# Raw Slack\n\ndeploy markers visible raw transcript evidence.\n",
+        "utf8",
+      );
+      await refreshWikiSearchIndex({ repoRoot });
+
+      const registry = createDefaultToolRegistry();
+      const context = { repoRoot };
+
+      await expect(
+        registry.execute(
+          "wiki.search",
+          { query: "deploy markers visible", includeRaw: true, limit: 5 },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        indexed: true,
+        count: 3,
+        matches: [
+          {
+            path: "projects/roo-code.md",
+            kind: "curated",
+            preview: expect.stringContaining("deploy markers should stay visible"),
+          },
+          { path: "sources/slack/roo-code-sync.md", kind: "source" },
+          { path: "raw/slack/roo-code-sync.md", kind: "raw" },
+        ],
+      });
+
+      await expect(
+        registry.execute(
+          "wiki.search",
+          { query: "deploy markers visible", includeRaw: false, limit: 5 },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        indexed: true,
+        count: 2,
+        matches: [
+          { path: "projects/roo-code.md", kind: "curated" },
+          { path: "sources/slack/roo-code-sync.md", kind: "source" },
+        ],
       });
     } finally {
       await rm(repoRoot, { force: true, recursive: true });

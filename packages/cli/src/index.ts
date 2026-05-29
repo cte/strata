@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import path from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import {
@@ -19,20 +20,60 @@ import {
 } from "@strata/agent";
 
 import {
+  applyLearningProposal,
   ensureRuntimeDirs,
   getStrataPaths,
+  type JsonObject,
+  type LearningProposalRecord,
+  type LearningProposalStatusFilter,
+  listLearningProposals,
+  type RefreshWikiSearchIndexResult,
+  readLearningProposal,
   refreshWikiSearchIndex,
   type SessionRecord,
   SessionStore,
   searchWikiSearchIndex,
+  updateLearningProposalStatus,
   type WikiSearchIndexSource,
 } from "@strata/core";
 import { loadDotenv } from "@strata/ingest/common";
 import {
   type ConnectorConfig,
+  type ConnectorConfigProfileRecord,
+  type ConnectorName,
   type ConnectorSessionResult,
-  runConnectorOperation,
+  type ConnectorWorkflowResult,
+  deleteConnectorConfigProfile,
+  listConnectorConfigProfiles,
+  runConnectorWorkflow,
+  setDefaultConnectorConfigProfile,
+  writeConnectorConfigProfile,
 } from "@strata/ingest/connectors";
+import {
+  createModelDailyTodoVerifier,
+  type DailyTodoApplyResult,
+  type DailyTodoBackfillResult,
+  type DailyTodoExtractionResult,
+  runDailyTodoExtractionBackfillApply,
+  runDailyTodoExtractionApply,
+  runDailyTodoExtractionBackfillDryRun,
+  runDailyTodoExtractionDryRun,
+  type TodoVerifier,
+} from "@strata/ingest/extraction";
+import {
+  addIngestTaxonomyProjectAlias,
+  addIngestTaxonomySelfName,
+  addIngestTaxonomySlackPattern,
+  applyIngestTaxonomyProposal,
+  type IngestPatternMatch,
+  type IngestPatternRule,
+  type IngestSlackPatternField,
+  type IngestTaxonomy,
+  type IngestTaxonomyOperation,
+  parseIngestTaxonomyOperationFromProposal,
+  readIngestTaxonomy,
+  stageIngestTaxonomyProposal,
+} from "@strata/ingest/ingest-taxonomy";
 import {
   type GranolaRawToWikiIndexResult,
   type GranolaRawToWikiResult,
@@ -45,6 +86,14 @@ import {
 import { runSlackSocketModeListener } from "@strata/ingest/slack-socket-mode";
 import { archiveGeneratedSlackThreads, compactWikiIndex } from "@strata/ingest/wiki-index";
 import { createConfiguredMcpToolPack } from "@strata/integration-mcp/exa";
+import {
+  createDefaultJobRegistry,
+  type JobScheduleTrigger,
+  runJob,
+  runScheduleNow,
+  runSchedulerLoop,
+  ScheduleStore,
+} from "@strata/jobs";
 
 import {
   createDefaultToolRegistry,
@@ -74,11 +123,29 @@ commands:
   ingest granola index          index raw Granola snapshots into wiki pages
   ingest granola propose        stage wiki proposals from raw Granola snapshots
   ingest slack [options]        snapshot an explicit Slack thread into wiki/raw/slack
+  ingest taxonomy show          show local raw-to-wiki classification taxonomy
+  ingest taxonomy add-*         update or propose reviewed taxonomy entries
+  extract daily-todos           dry-run daily TODO extraction from wiki evidence
+  connectors config list <connector> [--json]
+  connectors config save <connector> <id> --config JSON [--label TEXT] [--default] [--json]
+  connectors config delete <connector> <id>
+  connectors config default <connector> <id>
   wiki compact-index            rebuild the human wiki index without raw-source fanout
   wiki search-index refresh     refresh the local wiki/raw retrieval index
   wiki search <query>           search the local retrieval index with curated-first ranking
   query [options] <question>   run an agent query using the default dangerous tool profile
   learn reflect [options] <id>  reflect on a completed session trace
+  proposals list [options]      list staged learning/wiki proposals
+  proposals show <id>           print a proposal by id, path, or unique prefix
+  proposals apply <id>          apply a supported proposal and mark it applied
+  proposals reject <id>         mark a proposal rejected
+  proposals defer <id>          mark a proposal deferred
+  jobs list                    list registered jobs
+  jobs run <job> [json]        run one registered job and persist a trace
+  jobs worker                  run due schedules until stopped
+  schedules list               list configured recurring schedules
+  schedules create [options]   create a recurring schedule
+  schedules run-now <id>       run a schedule immediately
   maintain list                list maintenance jobs
   maintain run <job>           run one maintenance job and persist a trace
   tui [options]                launch the interactive Strata TUI
@@ -115,12 +182,14 @@ interface NotionIngestOptions {
   pageId: string;
   dryRun: boolean;
   index: boolean;
+  refreshSearchIndex: boolean;
 }
 
 interface GranolaIngestOptions {
   dryRun: boolean;
   fixture?: string;
   index: boolean;
+  refreshSearchIndex: boolean;
   maxPages?: string;
   meetingsUrl?: string;
   pageSize?: string;
@@ -141,9 +210,33 @@ interface RawIndexOptions extends GranolaIndexOptions {
   source: RawToWikiSourceFilter;
 }
 
+interface IngestTaxonomyShowOptions {
+  json: boolean;
+}
+
+interface IngestTaxonomyMutationOptions {
+  propose: boolean;
+  reason?: string;
+}
+
+interface IngestTaxonomyProjectAliasOptions extends IngestTaxonomyMutationOptions {
+  label: string;
+  aliases: string[];
+}
+
+interface IngestTaxonomySelfNameOptions extends IngestTaxonomyMutationOptions {
+  name: string;
+}
+
+interface IngestTaxonomySlackPatternOptions extends IngestTaxonomyMutationOptions {
+  field: IngestSlackPatternField;
+  rule: IngestPatternRule;
+}
+
 interface SlackIngestOptions {
   dryRun: boolean;
   index: boolean;
+  refreshSearchIndex: boolean;
   allHistory?: boolean;
   appToken?: string;
   botToken?: string;
@@ -177,6 +270,14 @@ interface WikiSearchIndexRefreshOptions {
   includeRaw: boolean;
 }
 
+interface ScheduleCreateOptions {
+  name: string;
+  jobName: string;
+  trigger: JobScheduleTrigger;
+  input?: JsonObject;
+  enabled: boolean;
+}
+
 interface WikiCompactIndexOptions {
   dryRun: boolean;
 }
@@ -186,25 +287,70 @@ interface WikiArchiveGeneratedSlackThreadsOptions {
   rewriteLinks: boolean;
 }
 
+interface ExtractDailyTodosOptions {
+  date: string;
+  dryRun: boolean;
+  apply: boolean;
+  json: boolean;
+  verify: boolean;
+  provider?: ProviderName;
+  model?: string;
+}
+
+interface ExtractDailyTodosBackfillOptions {
+  from: string;
+  to: string;
+  dryRun: boolean;
+  apply: boolean;
+  force: boolean;
+  json: boolean;
+  verify: boolean;
+  provider?: ProviderName;
+  model?: string;
+}
+
 const INGEST_USAGE = `usage:
   strata ingest raw index [--source all|granola|notion|slack] [--raw-path FILE] [--limit N] [--dry-run]
-  strata ingest notion --page-id PAGE_ID_OR_URL [--index] [--dry-run]
-  strata ingest granola [--since ISO] [--fixture FILE] [--meetings-url URL] [--page-size N] [--max-pages N] [--transcript-url-template URL] [--index] [--dry-run]
+  strata ingest notion --page-id PAGE_ID_OR_URL [--index] [--refresh-search-index] [--dry-run]
+  strata ingest granola [--since ISO] [--fixture FILE] [--meetings-url URL] [--page-size N] [--max-pages N] [--transcript-url-template URL] [--index] [--refresh-search-index] [--dry-run]
   strata ingest granola index [--raw-path FILE] [--limit N] [--dry-run]
   strata ingest granola propose [--raw-path FILE] [--limit N]
-  strata ingest slack thread [--channel CHANNEL --thread-ts TS | --from-json FILE] [--title TITLE] [--index] [--dry-run]
+  strata ingest slack thread [--channel CHANNEL --thread-ts TS | --from-json FILE] [--title TITLE] [--index] [--refresh-search-index] [--dry-run]
   strata ingest slack sync [--since ISO | --all-history] [--channels LIST | --channel-regex REGEX]
                            [--include-private | --no-private] [--include-dms]
                            [--include-bot-messages] [--lookback-minutes N]
                            [--max-channels N] [--max-messages-per-channel N] [--max-threads N]
-                           [--index] [--dry-run]
-  strata ingest slack listen [--include-bot-messages]`;
+                           [--index] [--refresh-search-index] [--dry-run]
+  strata ingest slack listen [--include-bot-messages]
+  strata ingest taxonomy show [--json]
+  strata ingest taxonomy add-project-alias --label LABEL --alias ALIAS [--alias ALIAS] [--propose] [--reason TEXT]
+  strata ingest taxonomy add-self-name --name NAME [--propose] [--reason TEXT]
+  strata ingest taxonomy add-slack-pattern --field material|ignored-log|transient-check|routine-coordination|status-only --value TEXT [--match literal|regex] [--flags FLAGS] [--reason TEXT] [--propose]
+  strata ingest taxonomy apply-proposal <id|path|prefix> [--json]`;
+
+const EXTRACT_USAGE = `usage:
+  strata extract daily-todos --date YYYY-MM-DD --dry-run [--verify] [--provider P] [--model M] [--json]
+  strata extract daily-todos --date YYYY-MM-DD --apply [--verify] [--provider P] [--model M] [--json]
+  strata extract daily-todos backfill --from YYYY-MM-DD --to YYYY-MM-DD (--dry-run | --apply) [--force] [--verify] [--provider P] [--model M] [--json]`;
 
 const WIKI_USAGE = `usage:
   strata wiki compact-index [--dry-run]
   strata wiki archive-generated-slack-threads [--dry-run] [--no-rewrite-links]
   strata wiki search-index refresh [--source all|granola|notion|slack] [--no-raw]
   strata wiki search [--include-raw] [--limit N] <query>`;
+
+const PROPOSALS_USAGE = `usage:
+  strata proposals list [--status all|pending|deferred|applied|rejected|superseded] [--limit N] [--json]
+  strata proposals show <id|path|prefix> [--json]
+  strata proposals apply <id|path|prefix> [--reason TEXT] [--json]
+  strata proposals reject <id|path|prefix> [--reason TEXT] [--json]
+  strata proposals defer <id|path|prefix> [--reason TEXT] [--json]`;
+
+const CONNECTORS_USAGE = `usage:
+  strata connectors config list <granola|notion|slack> [--json]
+  strata connectors config save <granola|notion|slack> <id> --config JSON [--label TEXT] [--default] [--json]
+  strata connectors config delete <granola|notion|slack> <id>
+  strata connectors config default <granola|notion|slack> <id>`;
 
 function parseLimit(args: string[], fallback = 20): number {
   const index = args.indexOf("--limit");
@@ -243,6 +389,78 @@ function printSessions(sessions: SessionRecord[]): void {
       `${session.startedAt}  ${session.status.padEnd(11)}  ${session.kind.padEnd(7)}  ${session.id}  ${session.title}  (${ended})`,
     );
   }
+}
+
+function printProposals(proposals: LearningProposalRecord[]): void {
+  if (proposals.length === 0) {
+    console.log("No proposals found.");
+    return;
+  }
+  for (const proposal of proposals) {
+    console.log(
+      `${proposal.created}  ${proposal.status.padEnd(10)}  ${proposal.kind.padEnd(6)}  ${proposal.id}  ${proposal.title}`,
+    );
+    if (proposal.dedupeKey !== undefined) {
+      console.log(`  dedupe: ${proposal.dedupeKey}`);
+    }
+  }
+}
+
+function isIngestTaxonomyProposalContent(content: string): boolean {
+  try {
+    parseIngestTaxonomyOperationFromProposal(content);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function printConnectorConfigProfiles(
+  connector: ConnectorName,
+  profiles: ConnectorConfigProfileRecord[],
+  json: boolean,
+): void {
+  const defaultProfile = profiles.find((profile) => profile.isDefault) ?? null;
+  if (json) {
+    console.log(JSON.stringify({ connector, profiles, defaultProfile }, null, 2));
+    return;
+  }
+  if (profiles.length === 0) {
+    console.log(`No ${connector} connector config profiles found.`);
+    return;
+  }
+  for (const profile of profiles) {
+    console.log(
+      `${profile.id.padEnd(18)} ${profile.isDefault ? "default" : "       "} ${profile.updatedAt} ${profile.label}`,
+    );
+  }
+}
+
+function printIngestTaxonomy(
+  taxonomy: IngestTaxonomy,
+  metadata: { path: string; found: boolean; source: string },
+): void {
+  console.log(`${metadata.found ? "taxonomy" : "empty taxonomy"}: ${metadata.path}`);
+  if (metadata.source !== "taxonomy") {
+    console.log(`source: ${metadata.source}`);
+  }
+  const selfNames = taxonomy.selfNames ?? [];
+  const projects = taxonomy.projects ?? [];
+  const slack = taxonomy.slack ?? {};
+  console.log(`self names: ${selfNames.length}`);
+  for (const name of selfNames) {
+    console.log(`  - ${name}`);
+  }
+  console.log(`projects: ${projects.length}`);
+  for (const project of projects) {
+    console.log(`  - ${project.label}`);
+    for (const alias of project.aliases ?? []) {
+      console.log(`      alias: ${alias}`);
+    }
+  }
+  console.log(
+    `slack patterns: material=${slack.materialPatterns?.length ?? 0} ignored-log=${slack.ignoredLogPatterns?.length ?? 0} transient-check=${slack.transientCheckPatterns?.length ?? 0} routine-coordination=${slack.routineCoordinationPatterns?.length ?? 0} status-only=${slack.statusOnlyPatterns?.length ?? 0}`,
+  );
 }
 
 function resolveSessionSelector(store: SessionStore, selector: string): SessionRecord {
@@ -340,6 +558,86 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
   return result.status === "failed" ? 1 : 0;
 }
 
+async function cmdExtract(args: string[]): Promise<CommandResult> {
+  const extraction = args.shift();
+  if (!extraction || extraction === "--help" || extraction === "-h") {
+    console.log(EXTRACT_USAGE);
+    return 0;
+  }
+  if (extraction !== "daily-todos") {
+    throw new Error(`Unknown extraction: ${extraction}`);
+  }
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(EXTRACT_USAGE);
+    return 0;
+  }
+  const repoRoot = getStrataPaths().repoRoot;
+  if (args[0] === "backfill") {
+    args.shift();
+    const options = parseExtractDailyTodosBackfillOptions(args);
+    const verifier = await createDailyTodoVerifierFromCliOptions(options, repoRoot);
+    const runOptions: Parameters<typeof runDailyTodoExtractionBackfillDryRun>[0] = {
+      repoRoot,
+      from: options.from,
+      to: options.to,
+      force: options.force,
+    };
+    if (verifier !== undefined) {
+      runOptions.verifier = verifier;
+    }
+    const result = options.apply
+      ? await runDailyTodoExtractionBackfillApply(runOptions)
+      : await runDailyTodoExtractionBackfillDryRun(runOptions);
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      printDailyTodoBackfillResult(result);
+    }
+    return 0;
+  }
+
+  const options = parseExtractDailyTodosOptions(args);
+  const verifier = await createDailyTodoVerifierFromCliOptions(options, repoRoot);
+  const runOptions: Parameters<typeof runDailyTodoExtractionDryRun>[0] = {
+    repoRoot,
+    day: options.date,
+  };
+  if (verifier !== undefined) {
+    runOptions.verifier = verifier;
+  }
+  const result = options.apply
+    ? await runDailyTodoExtractionApply(runOptions)
+    : await runDailyTodoExtractionDryRun(runOptions);
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else if (options.apply) {
+    printDailyTodoApplyResult(result as DailyTodoApplyResult);
+  } else {
+    printDailyTodoExtractionResult(result as DailyTodoExtractionResult);
+  }
+  return 0;
+}
+
+async function createDailyTodoVerifierFromCliOptions(
+  options: Pick<ModelOptions, "provider" | "model"> & { verify: boolean },
+  repoRoot: string,
+): Promise<TodoVerifier | undefined> {
+  if (!options.verify) {
+    return undefined;
+  }
+  await loadDotenv();
+  const modelOptions: Parameters<typeof createModelAdapter>[0] = { repoRoot };
+  if (options.provider !== undefined) {
+    modelOptions.provider = options.provider;
+  }
+  if (options.model !== undefined) {
+    modelOptions.model = options.model;
+  }
+  return createModelDailyTodoVerifier({
+    model: await createModelAdapter(modelOptions),
+  });
+}
+
 async function createAgentToolRegistry(options: {
   repoRoot: string;
   env: Record<string, string | undefined>;
@@ -395,23 +693,17 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
       throw new Error("Set NOTION_TOKEN in .env or the environment.");
     }
     const repoRoot = getStrataPaths().repoRoot;
-    const result = await runConnectorOperation({
-      name: "notion",
+    const result = await runConnectorWorkflow({
+      connector: "notion",
       operation: options.dryRun ? "dry_run" : "pull",
       config: { pageId: options.pageId },
       repoRoot,
       env: Bun.env,
+      index: options.index,
+      refreshSearchIndex: options.refreshSearchIndex,
       title: `Ingest Notion page ${options.pageId}`,
     });
-    printConnectorResult(result);
-    if (options.index && !options.dryRun) {
-      const indexed = await runRawToWikiIndex({
-        repoRoot,
-        source: "notion",
-        rawPaths: [result.rawPath],
-      });
-      printRawIndexResult(indexed);
-    }
+    printConnectorWorkflowResult(result);
     return 0;
   }
 
@@ -446,8 +738,8 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
     const options = parseGranolaIngestOptions(args);
     await loadDotenv();
     const repoRoot = getStrataPaths().repoRoot;
-    const result = await runConnectorOperation({
-      name: "granola",
+    const result = await runConnectorWorkflow({
+      connector: "granola",
       operation: options.dryRun ? "dry_run" : "pull",
       config: compactConfig({
         fixture: options.fixture,
@@ -459,17 +751,11 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
       }),
       repoRoot,
       env: Bun.env,
+      index: options.index,
+      refreshSearchIndex: options.refreshSearchIndex,
       title: "Ingest Granola meetings",
     });
-    printConnectorResult(result);
-    if (options.index && !options.dryRun) {
-      const rawPaths = (result.items ?? [result]).map((item) => item.rawPath);
-      const indexed = await runGranolaRawToWikiIndex({
-        repoRoot,
-        rawPaths,
-      });
-      printGranolaIndexResult(indexed);
-    }
+    printConnectorWorkflowResult(result);
     return 0;
   }
 
@@ -517,28 +803,212 @@ async function cmdIngest(args: string[]): Promise<CommandResult> {
       });
       return 0;
     }
-    const result = await runConnectorOperation({
-      name: "slack",
+    const result = await runConnectorWorkflow({
+      connector: "slack",
       operation: options.dryRun ? "dry_run" : "pull",
       config,
       repoRoot: getStrataPaths().repoRoot,
       env: Bun.env,
+      index: options.index,
+      refreshSearchIndex: options.refreshSearchIndex,
       title: options.mode === "sync" ? "Sync Slack conversations" : "Ingest Slack thread",
     });
-    printConnectorResult(result);
-    if (options.index && !options.dryRun) {
-      const rawPaths = (result.items ?? [result]).map((item) => item.rawPath);
-      const indexed = await runRawToWikiIndex({
-        repoRoot: getStrataPaths().repoRoot,
-        source: "slack",
-        rawPaths,
+    printConnectorWorkflowResult(result);
+    return 0;
+  }
+
+  if (source === "taxonomy") {
+    return cmdIngestTaxonomy(args);
+  }
+
+  throw new Error(`Unknown ingest source: ${source}`);
+}
+
+async function cmdIngestTaxonomy(args: string[]): Promise<CommandResult> {
+  const action = args.shift();
+  if (!action || action === "--help" || action === "-h") {
+    console.log(INGEST_USAGE);
+    return 0;
+  }
+  const repoRoot = getStrataPaths().repoRoot;
+
+  if (action === "show") {
+    const options = parseIngestTaxonomyShowOptions(args);
+    const result = await readIngestTaxonomy(repoRoot);
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      printIngestTaxonomy(result.taxonomy, {
+        path: path.relative(repoRoot, result.path),
+        found: result.found,
+        source: result.source,
       });
-      printRawIndexResult(indexed);
     }
     return 0;
   }
 
-  throw new Error(`Unknown ingest source: ${source}`);
+  if (action === "add-project-alias") {
+    const options = parseIngestTaxonomyProjectAliasOptions(args);
+    const operation: IngestTaxonomyOperation = {
+      kind: "ingest.taxonomy.addProjectAlias",
+      label: options.label,
+      aliases: options.aliases,
+    };
+    if (options.propose) {
+      const proposal = await stageIngestTaxonomyProposal(repoRoot, {
+        operation,
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+      });
+      console.log(`proposal: ${proposal.path}`);
+      return 0;
+    }
+    const result = await addIngestTaxonomyProjectAlias(repoRoot, {
+      label: options.label,
+      aliases: options.aliases,
+    });
+    console.log(
+      `${result.changed ? "updated" : "unchanged"} ${path.relative(repoRoot, result.path)}`,
+    );
+    return 0;
+  }
+
+  if (action === "add-self-name") {
+    const options = parseIngestTaxonomySelfNameOptions(args);
+    const operation: IngestTaxonomyOperation = {
+      kind: "ingest.taxonomy.addSelfName",
+      name: options.name,
+    };
+    if (options.propose) {
+      const proposal = await stageIngestTaxonomyProposal(repoRoot, {
+        operation,
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+      });
+      console.log(`proposal: ${proposal.path}`);
+      return 0;
+    }
+    const result = await addIngestTaxonomySelfName(repoRoot, { name: options.name });
+    console.log(
+      `${result.changed ? "updated" : "unchanged"} ${path.relative(repoRoot, result.path)}`,
+    );
+    return 0;
+  }
+
+  if (action === "add-slack-pattern") {
+    const options = parseIngestTaxonomySlackPatternOptions(args);
+    const operation: IngestTaxonomyOperation = {
+      kind: "ingest.taxonomy.addSlackPattern",
+      field: options.field,
+      rule: options.rule,
+    };
+    if (options.propose) {
+      const proposal = await stageIngestTaxonomyProposal(repoRoot, {
+        operation,
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+      });
+      console.log(`proposal: ${proposal.path}`);
+      return 0;
+    }
+    const result = await addIngestTaxonomySlackPattern(repoRoot, {
+      field: options.field,
+      rule: options.rule,
+    });
+    console.log(
+      `${result.changed ? "updated" : "unchanged"} ${path.relative(repoRoot, result.path)}`,
+    );
+    return 0;
+  }
+
+  if (action === "apply-proposal") {
+    const json = consumeBooleanFlag(args, "--json");
+    const selector = requireArgValue(args.shift(), "ingest taxonomy apply-proposal requires an id");
+    ensureNoExtraArgs(args, "ingest taxonomy apply-proposal");
+    const result = await applyIngestTaxonomyProposal(repoRoot, { selector, actor: "cli" });
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`${result.changed ? "applied" : "already present"} ${result.proposal.path}`);
+      console.log(`taxonomy: ${path.relative(repoRoot, result.path)}`);
+    }
+    return 0;
+  }
+
+  throw new Error(`Unknown ingest taxonomy action: ${action}`);
+}
+
+async function cmdConnectors(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(CONNECTORS_USAGE);
+    return 0;
+  }
+  if (subcommand !== "config") {
+    throw new Error(`Unknown connectors subcommand: ${subcommand}`);
+  }
+  const action = args.shift();
+  if (!action || action === "--help" || action === "-h") {
+    console.log(CONNECTORS_USAGE);
+    return 0;
+  }
+  const connector = parseConnectorName(args.shift());
+  if (action === "list") {
+    const json = consumeBooleanFlag(args, "--json");
+    ensureNoExtraArgs(args, "connectors config list");
+    const profiles = await listConnectorConfigProfiles(connector, getStrataPaths().repoRoot);
+    printConnectorConfigProfiles(connector, profiles, json);
+    return 0;
+  }
+  if (action === "save") {
+    const id = requireArgValue(args.shift(), "connectors config save requires a profile id");
+    const json = consumeBooleanFlag(args, "--json");
+    const makeDefault = consumeBooleanFlag(args, "--default", "--make-default");
+    const label = parseOptionalTextFlag(args, "--label");
+    const rawConfig = parseOptionalTextFlag(args, "--config");
+    if (rawConfig === undefined) {
+      throw new Error("connectors config save requires --config JSON");
+    }
+    ensureNoExtraArgs(args, "connectors config save");
+    const profile = await writeConnectorConfigProfile({
+      connector,
+      id,
+      config: parseJsonObjectArg(rawConfig, "--config"),
+      repoRoot: getStrataPaths().repoRoot,
+      makeDefault,
+      ...(label === undefined ? {} : { label }),
+    });
+    if (json) {
+      console.log(JSON.stringify({ profile }, null, 2));
+    } else {
+      console.log(
+        `saved ${connector} config ${profile.id}${profile.isDefault ? " (default)" : ""}`,
+      );
+    }
+    return 0;
+  }
+  if (action === "delete") {
+    const id = requireArgValue(args.shift(), "connectors config delete requires a profile id");
+    ensureNoExtraArgs(args, "connectors config delete");
+    const result = await deleteConnectorConfigProfile({
+      connector,
+      id,
+      repoRoot: getStrataPaths().repoRoot,
+    });
+    console.log(
+      result.deleted ? `deleted ${connector} config ${id}` : `no ${connector} config ${id}`,
+    );
+    return 0;
+  }
+  if (action === "default") {
+    const id = requireArgValue(args.shift(), "connectors config default requires a profile id");
+    ensureNoExtraArgs(args, "connectors config default");
+    const profile = await setDefaultConnectorConfigProfile({
+      connector,
+      id,
+      repoRoot: getStrataPaths().repoRoot,
+    });
+    console.log(`default ${connector} config ${profile.id}`);
+    return 0;
+  }
+  throw new Error(`Unknown connectors config action: ${action}`);
 }
 
 async function cmdWiki(args: string[]): Promise<CommandResult> {
@@ -805,6 +1275,111 @@ async function cmdLearn(args: string[]): Promise<CommandResult> {
   throw new Error(`Unknown learn subcommand: ${subcommand}`);
 }
 
+async function cmdProposals(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(PROPOSALS_USAGE);
+    return 0;
+  }
+
+  const repoRoot = getStrataPaths().repoRoot;
+  if (subcommand === "list") {
+    const json = consumeBooleanFlag(args, "--json");
+    const status = parseProposalStatusFilter(args);
+    const limit = parseLimit(args, 50);
+    if (args.length !== 0) {
+      throw new Error(`Unknown proposals list argument: ${args.join(" ")}`);
+    }
+    const proposals = await listLearningProposals(repoRoot, { status, limit });
+    if (json) {
+      console.log(JSON.stringify({ proposals }, null, 2));
+    } else {
+      printProposals(proposals);
+    }
+    return 0;
+  }
+
+  if (subcommand === "show") {
+    const json = consumeBooleanFlag(args, "--json");
+    const selector = requireArgValue(args.shift(), "proposals show requires a proposal id");
+    if (args.length !== 0) {
+      throw new Error(`Unknown proposals show argument: ${args.join(" ")}`);
+    }
+    const proposal = await readLearningProposal(repoRoot, selector);
+    if (proposal === undefined) {
+      throw new Error(`Proposal not found: ${selector}`);
+    }
+    console.log(json ? JSON.stringify(proposal, null, 2) : proposal.content.trimEnd());
+    return 0;
+  }
+
+  if (subcommand === "apply") {
+    const json = consumeBooleanFlag(args, "--json");
+    const reason = parseOptionalTextFlag(args, "--reason");
+    const selector = requireArgValue(args.shift(), "proposals apply requires a proposal id");
+    if (args.length !== 0) {
+      throw new Error(`Unknown proposals apply argument: ${args.join(" ")}`);
+    }
+    const detail = await readLearningProposal(repoRoot, selector);
+    if (detail?.proposal.kind === "schema" && isIngestTaxonomyProposalContent(detail.content)) {
+      const result = await applyIngestTaxonomyProposal(repoRoot, {
+        selector,
+        actor: "cli",
+        ...(reason === undefined ? {} : { reason }),
+      });
+      if (json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(`${result.changed ? "Applied" : "No-op"} ingest taxonomy proposal.`);
+        console.log(`proposal: ${result.proposal.path}`);
+        console.log(`taxonomy: ${path.relative(repoRoot, result.path)}`);
+      }
+      return 0;
+    }
+    const result = await applyLearningProposal(repoRoot, {
+      selector,
+      actor: "cli",
+      ...(reason === undefined ? {} : { reason }),
+    });
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(result.message);
+      for (const writtenPath of result.writtenPaths) {
+        console.log(`wrote ${writtenPath}`);
+      }
+      console.log(`proposal: ${result.proposal.path}`);
+    }
+    return 0;
+  }
+
+  if (subcommand === "reject" || subcommand === "defer") {
+    const json = consumeBooleanFlag(args, "--json");
+    const reason = parseOptionalTextFlag(args, "--reason");
+    const selector = requireArgValue(
+      args.shift(),
+      `proposals ${subcommand} requires a proposal id`,
+    );
+    if (args.length !== 0) {
+      throw new Error(`Unknown proposals ${subcommand} argument: ${args.join(" ")}`);
+    }
+    const proposal = await updateLearningProposalStatus(repoRoot, {
+      selector,
+      status: subcommand === "reject" ? "rejected" : "deferred",
+      actor: "cli",
+      ...(reason === undefined ? {} : { reason }),
+    });
+    if (json) {
+      console.log(JSON.stringify({ proposal }, null, 2));
+    } else {
+      console.log(`${proposal.status} ${proposal.path}`);
+    }
+    return 0;
+  }
+
+  throw new Error(`Unknown proposals subcommand: ${subcommand}`);
+}
+
 async function cmdMaintain(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
@@ -847,6 +1422,149 @@ async function cmdMaintain(args: string[]): Promise<CommandResult> {
   }
 
   throw new Error(`Unknown maintain subcommand: ${subcommand}`);
+}
+
+async function cmdJobs(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(`usage: strata jobs <list|run|worker>`);
+    return 0;
+  }
+
+  const registry = createDefaultJobRegistry();
+
+  if (subcommand === "list") {
+    if (args.length !== 0) {
+      throw new Error(`Unknown jobs list argument: ${args.join(" ")}`);
+    }
+    for (const job of registry.list()) {
+      console.log(`${job.name.padEnd(28)} ${job.mode.padEnd(9)} ${job.description}`);
+    }
+    return 0;
+  }
+
+  if (subcommand === "run") {
+    const jobName = args.shift();
+    if (!jobName) {
+      throw new Error("jobs run requires a job name");
+    }
+    if (args.length > 1) {
+      throw new Error("jobs run accepts at most one JSON input object");
+    }
+    await loadDotenv();
+    const input = args[0] === undefined ? {} : parseJsonObjectArg(args[0], "jobs run input");
+    const result = await runJob({
+      jobName,
+      input,
+      repoRoot: getStrataPaths().repoRoot,
+      env: Bun.env,
+      registry,
+    });
+    console.log(`${result.jobName}: ${result.status}`);
+    console.log(result.summary);
+    console.log(`session: ${result.sessionId}`);
+    if (result.errorMessage) {
+      console.log(`error: ${result.errorMessage}`);
+    }
+    return result.status === "completed" ? 0 : 1;
+  }
+
+  if (subcommand === "worker") {
+    const pollSeconds = parseWorkerPollSeconds(args);
+    await loadDotenv();
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    await runSchedulerLoop({
+      repoRoot: getStrataPaths().repoRoot,
+      env: Bun.env,
+      registry,
+      pollMs: pollSeconds * 1000,
+      signal: controller.signal,
+      onStatus: (message) => console.log(message),
+    });
+    return 0;
+  }
+
+  throw new Error(`Unknown jobs subcommand: ${subcommand}`);
+}
+
+async function cmdSchedules(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(`usage: strata schedules <list|create|enable|disable|delete|run-now>`);
+    return 0;
+  }
+
+  const store = await ScheduleStore.open({ repoRoot: getStrataPaths().repoRoot });
+  try {
+    if (subcommand === "list") {
+      if (args.length !== 0) {
+        throw new Error(`Unknown schedules list argument: ${args.join(" ")}`);
+      }
+      printSchedules(store.list());
+      return 0;
+    }
+
+    if (subcommand === "create") {
+      const registry = createDefaultJobRegistry();
+      const options = parseScheduleCreateOptions(args);
+      if (registry.get(options.jobName) === undefined) {
+        throw new Error(`Unknown job: ${options.jobName}`);
+      }
+      const schedule = store.create({
+        name: options.name,
+        jobName: options.jobName,
+        trigger: options.trigger,
+        enabled: options.enabled,
+        ...(options.input === undefined ? {} : { input: options.input }),
+      });
+      printSchedule(schedule);
+      return 0;
+    }
+
+    if (subcommand === "enable" || subcommand === "disable") {
+      const id = requireArgValue(args.shift(), `schedules ${subcommand} requires a schedule id`);
+      if (args.length !== 0) {
+        throw new Error(`Unknown schedules ${subcommand} argument: ${args.join(" ")}`);
+      }
+      printSchedule(store.setEnabled(id, subcommand === "enable"));
+      return 0;
+    }
+
+    if (subcommand === "delete") {
+      const id = requireArgValue(args.shift(), "schedules delete requires a schedule id");
+      if (args.length !== 0) {
+        throw new Error(`Unknown schedules delete argument: ${args.join(" ")}`);
+      }
+      const deleted = store.delete(id);
+      console.log(deleted ? `deleted ${id}` : `missing ${id}`);
+      return deleted ? 0 : 1;
+    }
+  } finally {
+    store.close();
+  }
+
+  if (subcommand === "run-now") {
+    const id = requireArgValue(args.shift(), "schedules run-now requires a schedule id");
+    if (args.length !== 0) {
+      throw new Error(`Unknown schedules run-now argument: ${args.join(" ")}`);
+    }
+    await loadDotenv();
+    const result = await runScheduleNow({
+      scheduleId: id,
+      repoRoot: getStrataPaths().repoRoot,
+      env: Bun.env,
+      registry: createDefaultJobRegistry(),
+    });
+    console.log(`${result.scheduleName}: ${result.status}`);
+    console.log(result.summary);
+    console.log(`session: ${result.sessionId}`);
+    return result.status === "completed" ? 0 : 1;
+  }
+
+  throw new Error(`Unknown schedules subcommand: ${subcommand}`);
 }
 
 function tuiUsage(): string {
@@ -965,6 +1683,12 @@ async function main(argv: string[]): Promise<CommandResult> {
   if (command === "ingest") {
     return cmdIngest(argv);
   }
+  if (command === "extract") {
+    return cmdExtract(argv);
+  }
+  if (command === "connectors") {
+    return cmdConnectors(argv);
+  }
   if (command === "wiki") {
     return cmdWiki(argv);
   }
@@ -974,8 +1698,17 @@ async function main(argv: string[]): Promise<CommandResult> {
   if (command === "learn") {
     return cmdLearn(argv);
   }
+  if (command === "proposals") {
+    return cmdProposals(argv);
+  }
   if (command === "maintain") {
     return cmdMaintain(argv);
+  }
+  if (command === "jobs") {
+    return cmdJobs(argv);
+  }
+  if (command === "schedules") {
+    return cmdSchedules(argv);
   }
   if (command === "tui") {
     const options = parseTuiOptions(argv);
@@ -1031,6 +1764,36 @@ function parseToolProfile(args: string[]): ToolProfile {
   return value;
 }
 
+function parseProposalStatusFilter(args: string[]): LearningProposalStatusFilter {
+  const index = args.indexOf("--status");
+  if (index === -1) {
+    return "pending";
+  }
+  const value = args[index + 1];
+  if (
+    value !== "all" &&
+    value !== "pending" &&
+    value !== "deferred" &&
+    value !== "applied" &&
+    value !== "rejected" &&
+    value !== "superseded"
+  ) {
+    throw new Error("--status must be all, pending, deferred, applied, rejected, or superseded");
+  }
+  args.splice(index, 2);
+  return value;
+}
+
+function parseOptionalTextFlag(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  if (index === -1) {
+    return undefined;
+  }
+  const value = requireArgValue(args[index + 1], `${name} requires a value`);
+  args.splice(index, 2);
+  return value;
+}
+
 function parseQueryOptions(args: string[]): QueryOptions {
   const { provider, model, rest } = parseModelOptions(args);
   const parsed: QueryOptions = {
@@ -1066,8 +1829,74 @@ function parseReflectOptions(args: string[]): ReflectOptions {
   return parsed;
 }
 
+function parseExtractDailyTodosOptions(args: string[]): ExtractDailyTodosOptions {
+  const { provider, model, rest } = parseModelOptions(args);
+  const json = consumeBooleanFlag(rest, "--json");
+  const dryRun = consumeBooleanFlag(rest, "--dry-run");
+  const apply = consumeBooleanFlag(rest, "--apply");
+  const verify = consumeBooleanFlag(rest, "--verify");
+  const date = parseOptionalTextFlag(rest, "--date");
+  ensureNoExtraArgs(rest, "extract daily-todos");
+  if (dryRun === apply) {
+    throw new Error("extract daily-todos requires exactly one of --dry-run or --apply");
+  }
+  if (!verify && (provider !== undefined || model !== undefined)) {
+    throw new Error("--provider and --model require --verify for extract daily-todos");
+  }
+  if (date === undefined) {
+    throw new Error("extract daily-todos requires --date YYYY-MM-DD");
+  }
+  assertIsoDate(date, "--date");
+  const parsed: ExtractDailyTodosOptions = { date, dryRun, apply, json, verify };
+  if (provider !== undefined) {
+    parsed.provider = provider;
+  }
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  return parsed;
+}
+
+function parseExtractDailyTodosBackfillOptions(args: string[]): ExtractDailyTodosBackfillOptions {
+  const { provider, model, rest } = parseModelOptions(args);
+  const json = consumeBooleanFlag(rest, "--json");
+  const dryRun = consumeBooleanFlag(rest, "--dry-run");
+  const apply = consumeBooleanFlag(rest, "--apply");
+  const force = consumeBooleanFlag(rest, "--force");
+  const verify = consumeBooleanFlag(rest, "--verify");
+  const from = parseOptionalTextFlag(rest, "--from");
+  const to = parseOptionalTextFlag(rest, "--to");
+  ensureNoExtraArgs(rest, "extract daily-todos backfill");
+  if (dryRun === apply) {
+    throw new Error("extract daily-todos backfill requires exactly one of --dry-run or --apply");
+  }
+  if (!verify && (provider !== undefined || model !== undefined)) {
+    throw new Error("--provider and --model require --verify for extract daily-todos backfill");
+  }
+  if (from === undefined) {
+    throw new Error("extract daily-todos backfill requires --from YYYY-MM-DD");
+  }
+  if (to === undefined) {
+    throw new Error("extract daily-todos backfill requires --to YYYY-MM-DD");
+  }
+  assertIsoDate(from, "--from");
+  assertIsoDate(to, "--to");
+  const parsed: ExtractDailyTodosBackfillOptions = { from, to, dryRun, apply, force, json, verify };
+  if (provider !== undefined) {
+    parsed.provider = provider;
+  }
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  return parsed;
+}
+
 function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
-  const parsed: Partial<NotionIngestOptions> = { dryRun: false, index: false };
+  const parsed: Partial<NotionIngestOptions> = {
+    dryRun: false,
+    index: false,
+    refreshSearchIndex: false,
+  };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--page-id") {
@@ -1081,6 +1910,8 @@ function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
       parsed.dryRun = true;
     } else if (arg === "--index") {
       parsed.index = true;
+    } else if (arg === "--refresh-search-index") {
+      parsed.refreshSearchIndex = true;
     } else {
       throw new Error(`Unknown ingest notion argument: ${arg}`);
     }
@@ -1092,11 +1923,16 @@ function parseNotionIngestOptions(args: string[]): NotionIngestOptions {
     pageId: parsed.pageId,
     dryRun: parsed.dryRun ?? false,
     index: parsed.index ?? false,
+    refreshSearchIndex: parsed.refreshSearchIndex ?? false,
   };
 }
 
 function parseGranolaIngestOptions(args: string[]): GranolaIngestOptions {
-  const parsed: GranolaIngestOptions = { dryRun: false, index: false };
+  const parsed: GranolaIngestOptions = {
+    dryRun: false,
+    index: false,
+    refreshSearchIndex: false,
+  };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--since") {
@@ -1116,6 +1952,8 @@ function parseGranolaIngestOptions(args: string[]): GranolaIngestOptions {
       );
     } else if (arg === "--index") {
       parsed.index = true;
+    } else if (arg === "--refresh-search-index") {
+      parsed.refreshSearchIndex = true;
     } else if (arg === "--dry-run") {
       parsed.dryRun = true;
     } else {
@@ -1178,11 +2016,154 @@ function parseRawIndexOptions(args: string[]): RawIndexOptions {
   return parsed;
 }
 
+function parseIngestTaxonomyShowOptions(args: string[]): IngestTaxonomyShowOptions {
+  const json = consumeBooleanFlag(args, "--json");
+  ensureNoExtraArgs(args, "ingest taxonomy show");
+  return { json };
+}
+
+function parseIngestTaxonomyProjectAliasOptions(args: string[]): IngestTaxonomyProjectAliasOptions {
+  const parsed: Partial<IngestTaxonomyProjectAliasOptions> = { aliases: [], propose: false };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--label") {
+      parsed.label = requireArgValue(args[++index], "--label requires a value");
+    } else if (arg === "--alias") {
+      parsed.aliases?.push(requireArgValue(args[++index], "--alias requires a value"));
+    } else if (arg === "--propose") {
+      parsed.propose = true;
+    } else if (arg === "--reason") {
+      parsed.reason = requireArgValue(args[++index], "--reason requires a value");
+    } else {
+      throw new Error(`Unknown ingest taxonomy add-project-alias argument: ${arg}`);
+    }
+  }
+  if (!parsed.label) {
+    throw new Error("ingest taxonomy add-project-alias requires --label");
+  }
+  if ((parsed.aliases ?? []).length === 0) {
+    throw new Error("ingest taxonomy add-project-alias requires at least one --alias");
+  }
+  return {
+    label: parsed.label,
+    aliases: parsed.aliases ?? [],
+    propose: parsed.propose ?? false,
+    ...(parsed.reason === undefined ? {} : { reason: parsed.reason }),
+  };
+}
+
+function parseIngestTaxonomySelfNameOptions(args: string[]): IngestTaxonomySelfNameOptions {
+  const parsed: Partial<IngestTaxonomySelfNameOptions> = { propose: false };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--name") {
+      parsed.name = requireArgValue(args[++index], "--name requires a value");
+    } else if (arg === "--propose") {
+      parsed.propose = true;
+    } else if (arg === "--reason") {
+      parsed.reason = requireArgValue(args[++index], "--reason requires a value");
+    } else {
+      throw new Error(`Unknown ingest taxonomy add-self-name argument: ${arg}`);
+    }
+  }
+  if (!parsed.name) {
+    throw new Error("ingest taxonomy add-self-name requires --name");
+  }
+  return {
+    name: parsed.name,
+    propose: parsed.propose ?? false,
+    ...(parsed.reason === undefined ? {} : { reason: parsed.reason }),
+  };
+}
+
+function parseIngestTaxonomySlackPatternOptions(args: string[]): IngestTaxonomySlackPatternOptions {
+  const parsed: Partial<IngestTaxonomySlackPatternOptions> = { propose: false };
+  const rule: Partial<IngestPatternRule> = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--field") {
+      parsed.field = parseIngestSlackPatternField(
+        requireArgValue(args[++index], "--field requires a value"),
+      );
+    } else if (arg === "--value") {
+      rule.value = requireArgValue(args[++index], "--value requires a value");
+    } else if (arg === "--match") {
+      rule.match = parseIngestPatternMatch(
+        requireArgValue(args[++index], "--match requires a value"),
+      );
+    } else if (arg === "--flags") {
+      rule.flags = requireArgValue(args[++index], "--flags requires a value");
+    } else if (arg === "--reason") {
+      const reason = requireArgValue(args[++index], "--reason requires a value");
+      parsed.reason = reason;
+      rule.reason = reason;
+    } else if (arg === "--propose") {
+      parsed.propose = true;
+    } else {
+      throw new Error(`Unknown ingest taxonomy add-slack-pattern argument: ${arg}`);
+    }
+  }
+  if (parsed.field === undefined) {
+    throw new Error("ingest taxonomy add-slack-pattern requires --field");
+  }
+  if (rule.value === undefined) {
+    throw new Error("ingest taxonomy add-slack-pattern requires --value");
+  }
+  return {
+    field: parsed.field,
+    rule: {
+      value: rule.value,
+      ...(rule.match === undefined ? {} : { match: rule.match }),
+      ...(rule.flags === undefined ? {} : { flags: rule.flags }),
+      ...(rule.reason === undefined ? {} : { reason: rule.reason }),
+    },
+    propose: parsed.propose ?? false,
+    ...(parsed.reason === undefined ? {} : { reason: parsed.reason }),
+  };
+}
+
+function parseIngestPatternMatch(value: string): IngestPatternMatch {
+  if (value === "literal" || value === "regex") {
+    return value;
+  }
+  throw new Error("--match must be literal or regex");
+}
+
+function parseIngestSlackPatternField(value: string): IngestSlackPatternField {
+  const aliases: Record<string, IngestSlackPatternField> = {
+    material: "materialPatterns",
+    "ignored-log": "ignoredLogPatterns",
+    "transient-check": "transientCheckPatterns",
+    "routine-coordination": "routineCoordinationPatterns",
+    "status-only": "statusOnlyPatterns",
+  };
+  const field = aliases[value] ?? value;
+  if (
+    field === "materialPatterns" ||
+    field === "ignoredLogPatterns" ||
+    field === "transientCheckPatterns" ||
+    field === "routineCoordinationPatterns" ||
+    field === "statusOnlyPatterns"
+  ) {
+    return field;
+  }
+  throw new Error(
+    "--field must be one of: material, ignored-log, transient-check, routine-coordination, status-only",
+  );
+}
+
 function parseRawToWikiSource(value: string): RawToWikiSourceFilter {
   if (value === "all" || value === "granola" || value === "notion" || value === "slack") {
     return value;
   }
   throw new Error("--source must be one of: all, granola, notion, slack");
+}
+
+function parseConnectorName(value: string | undefined): ConnectorName {
+  if (value === "granola" || value === "notion" || value === "slack") {
+    return value;
+  }
+  throw new Error("connector must be one of: granola, notion, slack");
 }
 
 function parseWikiSearchIndexSource(value: string): WikiSearchIndexSource {
@@ -1207,6 +2188,74 @@ function parseWikiSearchIndexRefreshOptions(args: string[]): WikiSearchIndexRefr
     }
   }
   return parsed;
+}
+
+function parseWorkerPollSeconds(args: string[]): number {
+  let pollSeconds = 15;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--poll-seconds") {
+      pollSeconds = parsePositiveIntegerArg(
+        args[++index],
+        "--poll-seconds requires a positive integer",
+      );
+    } else {
+      throw new Error(`Unknown jobs worker argument: ${arg}`);
+    }
+  }
+  return pollSeconds;
+}
+
+function parseScheduleCreateOptions(args: string[]): ScheduleCreateOptions {
+  const parsed: Partial<ScheduleCreateOptions> = { enabled: true };
+  let intervalSeconds: number | undefined;
+  let cronExpression: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--name") {
+      parsed.name = requireArgValue(args[++index], "--name requires a value");
+    } else if (arg === "--job") {
+      parsed.jobName = requireArgValue(args[++index], "--job requires a value");
+    } else if (arg === "--input") {
+      parsed.input = parseJsonObjectArg(
+        requireArgValue(args[++index], "--input requires JSON"),
+        "--input",
+      );
+    } else if (arg === "--interval-seconds") {
+      intervalSeconds = parsePositiveIntegerArg(
+        args[++index],
+        "--interval-seconds requires a positive integer",
+      );
+    } else if (arg === "--cron") {
+      cronExpression = requireArgValue(args[++index], "--cron requires an expression");
+    } else if (arg === "--disabled") {
+      parsed.enabled = false;
+    } else {
+      throw new Error(`Unknown schedules create argument: ${arg}`);
+    }
+  }
+  if (!parsed.name) {
+    throw new Error("schedules create requires --name");
+  }
+  if (!parsed.jobName) {
+    throw new Error("schedules create requires --job");
+  }
+  if (intervalSeconds !== undefined && cronExpression !== undefined) {
+    throw new Error("Use either --interval-seconds or --cron, not both.");
+  }
+  if (intervalSeconds === undefined && cronExpression === undefined) {
+    throw new Error("schedules create requires --interval-seconds or --cron");
+  }
+  return {
+    name: parsed.name,
+    jobName: parsed.jobName,
+    enabled: parsed.enabled ?? true,
+    trigger:
+      intervalSeconds !== undefined
+        ? { type: "interval", seconds: intervalSeconds }
+        : { type: "cron", expression: cronExpression ?? "" },
+    ...(parsed.input === undefined ? {} : { input: parsed.input }),
+  };
 }
 
 function parseWikiCompactIndexOptions(args: string[]): WikiCompactIndexOptions {
@@ -1269,7 +2318,12 @@ function parseSlackIngestOptions(args: string[]): SlackIngestOptions {
     args.shift();
     mode = first;
   }
-  const parsed: SlackIngestOptions = { dryRun: false, index: false, mode };
+  const parsed: SlackIngestOptions = {
+    dryRun: false,
+    index: false,
+    mode,
+    refreshSearchIndex: false,
+  };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--channel") {
@@ -1328,6 +2382,8 @@ function parseSlackIngestOptions(args: string[]): SlackIngestOptions {
       parsed.dryRun = true;
     } else if (arg === "--index") {
       parsed.index = true;
+    } else if (arg === "--refresh-search-index") {
+      parsed.refreshSearchIndex = true;
     } else {
       throw new Error(`Unknown ingest slack argument: ${arg}`);
     }
@@ -1360,6 +2416,18 @@ function requireArgValue(value: string | undefined, message: string): string {
   return value;
 }
 
+function ensureNoExtraArgs(args: string[], command: string): void {
+  if (args.length !== 0) {
+    throw new Error(`Unknown ${command} argument: ${args.join(" ")}`);
+  }
+}
+
+function assertIsoDate(value: string, flag: string): void {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`${flag} must be YYYY-MM-DD`);
+  }
+}
+
 function parsePositiveIntegerArg(value: string | undefined, message: string): number {
   const raw = requireArgValue(value, message);
   const parsed = Number.parseInt(raw, 10);
@@ -1367,6 +2435,14 @@ function parsePositiveIntegerArg(value: string | undefined, message: string): nu
     throw new Error(message);
   }
   return parsed;
+}
+
+function parseJsonObjectArg(value: string, label: string): JsonObject {
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed as JsonObject;
 }
 
 function compactConfig(input: Record<string, ConnectorConfig[string]>): ConnectorConfig {
@@ -1379,6 +2455,66 @@ function compactConfig(input: Record<string, ConnectorConfig[string]>): Connecto
     }
   }
   return config;
+}
+
+function printDailyTodoExtractionResult(result: DailyTodoExtractionResult): void {
+  console.log(`extraction run: ${result.extractionRunId}`);
+  console.log(`session: ${result.sessionId}`);
+  console.log(`day: ${result.day}`);
+  console.log(`verifier: ${result.verifierVersion}`);
+  if (result.modelName !== undefined) {
+    console.log(`model: ${result.modelName}`);
+  }
+  console.log(`scanned: ${result.sourcesScanned} sources, ${result.spanCount} evidence spans`);
+  console.log(`candidates: ${result.candidateCount}`);
+  console.log(`rejected: ${result.rejectedCount}`);
+  for (const item of result.candidates) {
+    console.log(
+      `- ${item.candidate.candidateText} (${item.evidence.sourcePath}:${item.evidence.lineStart})`,
+    );
+  }
+}
+
+function printDailyTodoApplyResult(result: DailyTodoApplyResult): void {
+  console.log(`extraction run: ${result.extractionRunId}`);
+  console.log(`session: ${result.sessionId}`);
+  console.log(`day: ${result.day}`);
+  console.log(`verifier: ${result.verifierVersion}`);
+  if (result.modelName !== undefined) {
+    console.log(`model: ${result.modelName}`);
+  }
+  console.log(`candidates: ${result.candidateCount}`);
+  console.log(`published: ${result.publishedCount}`);
+  console.log(`skipped: ${result.skippedCount}`);
+  for (const item of result.published) {
+    console.log(`- ${item.owner}: ${item.title} (${item.publishedTarget})`);
+  }
+}
+
+function printDailyTodoBackfillResult(result: DailyTodoBackfillResult): void {
+  console.log(`daily.todo backfill ${result.from}..${result.to} (${result.dryRun ? "dry-run" : "apply"})`);
+  console.log(`processed: ${result.processed}`);
+  console.log(`skipped: ${result.skipped}`);
+  console.log(`candidates: ${result.candidateCount}`);
+  console.log(`rejected: ${result.rejectedCount}`);
+  if (!result.dryRun) {
+    console.log(`published: ${result.publishedCount}`);
+    console.log(`publication skipped: ${result.publicationSkippedCount}`);
+    console.log(`pending review: ${result.pendingReviewCount}`);
+  }
+  for (const item of result.items) {
+    if (item.status === "processed") {
+      const publication =
+        "publishedCount" in item.result
+          ? `, ${item.result.publishedCount} published, ${item.result.skippedCount} skipped`
+          : "";
+      console.log(
+        `${item.day} processed ${item.result.candidateCount} candidates${publication} (${item.result.extractionRunId})`,
+      );
+    } else {
+      console.log(`${item.day} skipped existing ${item.existingRunId}`);
+    }
+  }
 }
 
 function printConnectorResult(result: ConnectorSessionResult): void {
@@ -1404,6 +2540,44 @@ function printConnectorResult(result: ConnectorSessionResult): void {
     console.log(`skipped existing ${result.rawPath}`);
   }
   console.log(`session: ${result.sessionId}`);
+}
+
+function printConnectorWorkflowResult(result: ConnectorWorkflowResult): void {
+  printConnectorResult(result.connectorResult);
+  if (result.rawToWiki !== null) {
+    printRawIndexResult(result.rawToWiki);
+  }
+  if (result.searchIndex !== null) {
+    printSearchIndexRefreshResult(result.searchIndex);
+  }
+}
+
+function printSearchIndexRefreshResult(result: RefreshWikiSearchIndexResult): void {
+  console.log(
+    `search index: ${result.indexed} docs (curated=${result.curated}, sources=${result.sources}, raw=${result.raw})`,
+  );
+}
+
+function printSchedules(schedules: ReturnType<ScheduleStore["list"]>): void {
+  if (schedules.length === 0) {
+    console.log("No schedules configured.");
+    return;
+  }
+  for (const schedule of schedules) {
+    printSchedule(schedule);
+  }
+}
+
+function printSchedule(schedule: ReturnType<ScheduleStore["list"]>[number]): void {
+  const trigger =
+    schedule.trigger.type === "interval"
+      ? `every ${schedule.trigger.seconds}s`
+      : `cron ${schedule.trigger.expression}`;
+  console.log(`${schedule.id} ${schedule.enabled ? "enabled" : "disabled"} ${schedule.name}`);
+  console.log(`  job: ${schedule.jobName}`);
+  console.log(`  trigger: ${trigger}`);
+  console.log(`  next: ${schedule.nextRunAt ?? "none"}`);
+  console.log(`  last: ${schedule.lastStatus ?? "never"} ${schedule.lastRunAt ?? ""}`.trimEnd());
 }
 
 function printRawToWikiResult(result: GranolaRawToWikiResult): void {

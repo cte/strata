@@ -15,11 +15,47 @@ import type {
 } from "./types.js";
 
 export interface AnthropicModelOptions {
-  credentials: AnthropicCredentials;
+  /** OAuth (Claude Code) credentials. Provide this or `apiKey`. */
+  credentials?: AnthropicCredentials;
+  /** Anthropic API key (`x-api-key`). Provide this or `credentials`. */
+  apiKey?: string;
   model: string;
   baseUrl?: string;
   name?: string;
   fetchImpl?: typeof fetch;
+}
+
+/**
+ * How the adapter authenticates. OAuth mimics Claude Code (oauth beta headers +
+ * Claude Code system identity); a plain API key is a standard Anthropic API
+ * caller and must NOT impersonate Claude Code.
+ */
+type AnthropicAuth = { kind: "oauth"; accessToken: string } | { kind: "apiKey"; apiKey: string };
+
+function resolveAnthropicAuth(options: AnthropicModelOptions): AnthropicAuth {
+  if (options.credentials !== undefined) {
+    return { kind: "oauth", accessToken: options.credentials.accessToken };
+  }
+  if (options.apiKey !== undefined && options.apiKey.trim() !== "") {
+    return { kind: "apiKey", apiKey: options.apiKey };
+  }
+  throw new ModelAdapterError(
+    "anthropic_auth_missing",
+    "Anthropic adapter requires OAuth credentials or an API key.",
+  );
+}
+
+function anthropicAuthHeaders(auth: AnthropicAuth): Record<string, string> {
+  if (auth.kind === "oauth") {
+    return {
+      authorization: `Bearer ${auth.accessToken}`,
+      "anthropic-beta": ANTHROPIC_OAUTH_BETA,
+      "anthropic-dangerous-direct-browser-access": "true",
+      "user-agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
+      "x-app": "cli",
+    };
+  }
+  return { "x-api-key": auth.apiKey };
 }
 
 interface AnthropicStreamEvent {
@@ -35,13 +71,13 @@ const ANTHROPIC_OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20";
 
 export class AnthropicModelAdapter implements ModelAdapter {
   readonly name: string;
-  private readonly credentials: AnthropicCredentials;
+  private readonly auth: AnthropicAuth;
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: AnthropicModelOptions) {
-    this.credentials = options.credentials;
+    this.auth = resolveAnthropicAuth(options);
     this.model = options.model;
     this.name = options.name ?? `anthropic-claude:${options.model}`;
     this.baseUrl = (options.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, "");
@@ -50,16 +86,17 @@ export class AnthropicModelAdapter implements ModelAdapter {
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const toolNameMap = createProviderToolNameMap(request.tools);
-    const body = buildAnthropicRequestBody(this.model, request, toolNameMap.canonicalToProvider);
+    const body = buildAnthropicRequestBody(
+      this.model,
+      request,
+      toolNameMap.canonicalToProvider,
+      this.auth.kind === "oauth",
+    );
     const init: RequestInit = {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.credentials.accessToken}`,
+        ...anthropicAuthHeaders(this.auth),
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": ANTHROPIC_OAUTH_BETA,
-        "anthropic-dangerous-direct-browser-access": "true",
-        "user-agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
-        "x-app": "cli",
         accept: "text/event-stream",
         "content-type": "application/json",
       },
@@ -95,9 +132,10 @@ function buildAnthropicRequestBody(
   model: string,
   request: ModelRequest,
   canonicalToProvider: Map<string, string>,
+  injectClaudeCodeIdentity: boolean,
 ): JsonObject {
   const system = [
-    CLAUDE_CODE_SYSTEM_IDENTITY,
+    ...(injectClaudeCodeIdentity ? [CLAUDE_CODE_SYSTEM_IDENTITY] : []),
     request.messages
       .filter((message) => message.role === "system")
       .map((message) => message.content)
@@ -136,7 +174,7 @@ function toAnthropicMessage(message: AgentMessage, toolNameMap: Map<string, stri
       content: [
         {
           type: "tool_result",
-          tool_use_id: message.toolCallId ?? "",
+          tool_use_id: normalizeAnthropicToolCallId(message.toolCallId ?? ""),
           content: message.content,
         },
       ],
@@ -151,7 +189,7 @@ function toAnthropicMessage(message: AgentMessage, toolNameMap: Map<string, stri
     for (const toolCall of message.toolCalls ?? []) {
       content.push({
         type: "tool_use",
-        id: toolCall.id,
+        id: normalizeAnthropicToolCallId(toolCall.id),
         name: toolNameMap.get(toolCall.name) ?? toolCall.name,
         input: parseToolInput(toolCall.argumentsText),
       });
@@ -197,6 +235,10 @@ function toAnthropicTool(tool: ToolMetadata, toolNameMap: Map<string, string>): 
     description: tool.description,
     input_schema: tool.inputSchema,
   };
+}
+
+function normalizeAnthropicToolCallId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
 function parseToolInput(argumentsText: string): JsonValue {

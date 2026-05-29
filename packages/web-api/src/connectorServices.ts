@@ -1,16 +1,30 @@
 import {
   type ConnectorCapability,
+  type ConnectorConfig,
+  type ConnectorConfigProfileRecord,
   type ConnectorName,
   type ConnectorStatus,
   connectorErrorStatus,
   getConnectorDefinition,
+  listConnectorConfigProfiles,
+  readDefaultConnectorConfigProfile,
+  deleteConnectorConfigProfile as removeConnectorConfigProfile,
   runConnectorOperation,
+  runConnectorWorkflow,
+  setDefaultConnectorConfigProfile as setDefaultConnectorProfile,
+  writeConnectorConfigProfile,
 } from "@strata/ingest/connectors";
 import { hasGranolaCredentialsSync } from "@strata/ingest/granola-connector";
 import { type NotionConnectorConfig, notionConnector } from "@strata/ingest/notion-connector";
 import { hasNotionMcpAuthSync, startNotionMcpAuth } from "./notionMcp.js";
 import { repoRoot, runtime, runtimeEnv, type WebApiOptions } from "./runtime.js";
 import type {
+  ConnectorConfigProfileIdRpcInput,
+  ConnectorConfigProfileSaveRpcInput,
+  ConnectorConfigProfilesResult,
+  ConnectorConfigProfilesRpcInput,
+  ConnectorRunResult,
+  ConnectorRunRpcInput,
   ConnectorSessionResult,
   ConnectorSummary,
   NotionConnectorInput,
@@ -77,6 +91,73 @@ export async function runNotionSession(
   });
 }
 
+export async function runConnectorSession(
+  input: ConnectorRunRpcInput,
+  options: WebApiOptions,
+): Promise<ConnectorRunResult> {
+  return runConnectorWorkflow({
+    connector: input.connector,
+    operation: input.operation,
+    config: connectorConfig(input.config),
+    repoRoot: repoRoot(options),
+    env: runtimeEnv(options),
+    ...(input.configProfileId === undefined ? {} : { configProfileId: input.configProfileId }),
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(input.lookbackMinutes === undefined ? {} : { lookbackMinutes: input.lookbackMinutes }),
+    index: input.index,
+    refreshSearchIndex: input.refreshSearchIndex,
+    title: input.title ?? defaultConnectorRunTitle(input),
+  });
+}
+
+export async function listConnectorConfigProfilesForWeb(
+  input: ConnectorConfigProfilesRpcInput,
+  options: WebApiOptions,
+): Promise<ConnectorConfigProfilesResult> {
+  return connectorConfigProfilesResult(input.connector, options);
+}
+
+export async function saveConnectorConfigProfileForWeb(
+  input: ConnectorConfigProfileSaveRpcInput,
+  options: WebApiOptions,
+): Promise<ConnectorConfigProfilesResult> {
+  await writeConnectorConfigProfile({
+    connector: input.connector,
+    config: connectorConfig(input.config),
+    repoRoot: repoRoot(options),
+    ...(input.id === undefined ? {} : { id: input.id }),
+    ...(input.label === undefined ? {} : { label: input.label }),
+    makeDefault: input.makeDefault,
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
+  return connectorConfigProfilesResult(input.connector, options);
+}
+
+export async function deleteConnectorConfigProfileForWeb(
+  input: ConnectorConfigProfileIdRpcInput,
+  options: WebApiOptions,
+): Promise<ConnectorConfigProfilesResult> {
+  await removeConnectorConfigProfile({
+    connector: input.connector,
+    id: input.id,
+    repoRoot: repoRoot(options),
+  });
+  return connectorConfigProfilesResult(input.connector, options);
+}
+
+export async function setDefaultConnectorConfigProfileForWeb(
+  input: ConnectorConfigProfileIdRpcInput,
+  options: WebApiOptions,
+): Promise<ConnectorConfigProfilesResult> {
+  await setDefaultConnectorProfile({
+    connector: input.connector,
+    id: input.id,
+    repoRoot: repoRoot(options),
+  });
+  return connectorConfigProfilesResult(input.connector, options);
+}
+
 function slackSummary(
   definition: ReturnType<typeof requiredConnectorDefinition>,
   env: Record<string, string | undefined>,
@@ -127,6 +208,34 @@ function notionConfig(input: NotionConnectorInput): NotionConnectorConfig {
     ...(input.token === undefined ? {} : { token: input.token }),
     ...(input.version === undefined ? {} : { version: input.version }),
   };
+}
+
+function connectorConfig(input: ConnectorConfig): ConnectorConfig {
+  return { ...input };
+}
+
+async function connectorConfigProfilesResult(
+  connector: ConnectorName,
+  options: WebApiOptions,
+): Promise<ConnectorConfigProfilesResult> {
+  const [profiles, defaultProfile] = await Promise.all([
+    listConnectorConfigProfiles(connector, repoRoot(options)),
+    readDefaultConnectorConfigProfile(connector, repoRoot(options)),
+  ]);
+  return {
+    connector,
+    profiles: profiles.map(profileForBrowser),
+    defaultProfile: defaultProfile === null ? null : profileForBrowser(defaultProfile),
+  };
+}
+
+function profileForBrowser(profile: ConnectorConfigProfileRecord): ConnectorConfigProfileRecord {
+  return { ...profile, config: connectorConfig(profile.config) };
+}
+
+function defaultConnectorRunTitle(input: ConnectorRunRpcInput): string {
+  const operation = input.operation === "dry_run" ? "Dry-run" : "Pull";
+  return `${operation} ${input.connector}`;
 }
 
 function requiredConnectorDefinition(name: ConnectorName) {

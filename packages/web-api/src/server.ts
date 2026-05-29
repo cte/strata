@@ -13,7 +13,7 @@ import {
   type StartChatRunInput,
   type StartedChatRun,
 } from "./chat.js";
-import { finishModelAuth } from "./modelAuth.js";
+import { finishModelAuth, modelAuthCompleteHtml } from "./modelAuth.js";
 import { finishNotionMcpAuth } from "./notionMcp.js";
 
 import {
@@ -71,12 +71,10 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
   app.get("/api/auth/models/:provider/callback", async (c) => {
     try {
       const result = await finishModelAuth(c.req.url, c.req.param("provider"), options);
-      return c.html(
-        callbackRedirectHtml("/settings/models", { status: "ok", message: result.message }),
-      );
+      return c.html(modelAuthCompleteHtml("ok", result.message));
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      return c.html(callbackRedirectHtml("/settings/models", { status: "error", message }), 400);
+      return c.html(modelAuthCompleteHtml("error", message), 400);
     }
   });
 
