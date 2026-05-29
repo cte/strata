@@ -12,4 +12,5 @@ export * from "./todoStore.js";
 export * from "./tokenUsage.js";
 export * from "./traceStore.js";
 export * from "./types.js";
+export * from "./wikiActions.js";
 export * from "./wikiSearchIndex.js";

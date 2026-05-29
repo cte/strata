@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import type * as React from "react";
 import { useEffect, useState } from "react";
+import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { type ConnectorSummary, getConnectors } from "@/lib/api";
 
@@ -40,10 +41,8 @@ export function ConnectorsPage(): React.ReactElement {
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <header>
-        <h1 className="text-[15px] font-medium tracking-tight text-[var(--fg)]">Connectors</h1>
-      </header>
+    <PageContainer width="narrow">
+      <PageHeader title="Connectors" description="Connect sources Strata ingests into the wiki." />
 
       {error ? (
         <div className="rounded-md border border-[var(--bad)]/40 bg-[var(--bad)]/[0.06] p-3 text-[13px]">
@@ -57,7 +56,7 @@ export function ConnectorsPage(): React.ReactElement {
           ? Array.from({ length: 3 }).map((_, i) => <SkeletonRow key={i} />)
           : connectors.map((c) => <ConnectorRow key={c.name} connector={c} />)}
       </ul>
-    </div>
+    </PageContainer>
   );
 }
 

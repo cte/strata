@@ -12,11 +12,17 @@
 import { createHash } from "node:crypto";
 import migration0000 from "../drizzle/0000_cooing_mole_man.sql" with { type: "text" };
 import migration0001 from "../drizzle/0001_cute_earthquake.sql" with { type: "text" };
+import migration0002 from "../drizzle/0002_many_jobs.sql" with { type: "text" };
+import migration0003 from "../drizzle/0003_ingest_activity_projection.sql" with { type: "text" };
+import migration0004 from "../drizzle/0004_extraction_runs.sql" with { type: "text" };
 import journal from "../drizzle/meta/_journal.json" with { type: "json" };
 
 const SOURCES: Record<string, string> = {
   "0000_cooing_mole_man": migration0000,
   "0001_cute_earthquake": migration0001,
+  "0002_many_jobs": migration0002,
+  "0003_ingest_activity_projection": migration0003,
+  "0004_extraction_runs": migration0004,
 };
 
 export interface EmbeddedMigration {

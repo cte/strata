@@ -5,9 +5,12 @@ import path from "node:path";
 import {
   type ChatGptCredentials,
   clearChatGptCredentials,
+  clearModelApiKey,
   getAuthStorePath,
   getChatGptCredentials,
+  getModelApiKey,
   setChatGptCredentials,
+  setModelApiKey,
 } from "./authStore.js";
 
 describe("auth store", () => {
@@ -33,6 +36,37 @@ describe("auth store", () => {
 
       await clearChatGptCredentials(repoRoot);
       await expect(getChatGptCredentials(repoRoot)).resolves.toBeUndefined();
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("stores provider API keys securely (0600) without disturbing OAuth", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-auth-"));
+    try {
+      await setModelApiKey(
+        "openai",
+        { apiKey: "sk-openai-123", baseUrl: "https://x/v1" },
+        repoRoot,
+      );
+      await setModelApiKey("anthropic", { apiKey: "sk-ant-456" }, repoRoot);
+
+      const openai = await getModelApiKey("openai", repoRoot);
+      expect(openai?.apiKey).toBe("sk-openai-123");
+      expect(openai?.baseUrl).toBe("https://x/v1");
+      const anthropic = await getModelApiKey("anthropic", repoRoot);
+      expect(anthropic?.apiKey).toBe("sk-ant-456");
+      expect(anthropic?.baseUrl).toBeUndefined();
+
+      const mode = (await stat(getAuthStorePath(repoRoot))).mode & 0o777;
+      expect(mode).toBe(0o600);
+
+      await clearModelApiKey("openai", repoRoot);
+      await expect(getModelApiKey("openai", repoRoot)).resolves.toBeUndefined();
+      // Clearing one target leaves the other intact.
+      await expect(getModelApiKey("anthropic", repoRoot).then((k) => k?.apiKey)).resolves.toBe(
+        "sk-ant-456",
+      );
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

@@ -1,9 +1,11 @@
-import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Cable, ListChecks, Unplug, X } from "lucide-react";
+import { Cable, ListChecks, Unplug, X } from "lucide-react";
 import type * as React from "react";
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
+import { ConnectorOperationPanel } from "@/components/connector-operation-panel";
+import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   disconnectNotionMcp,
   getNotionMcpStatus,
@@ -12,6 +14,10 @@ import {
   type NotionMcpToolsResult,
   startNotionMcpAuth,
 } from "@/lib/api";
+import {
+  type ConnectorConfigDraft,
+  useConnectorDefaultConfig,
+} from "@/lib/useConnectorDefaultConfig";
 
 export function ConnectorsNotionPage(): React.ReactElement {
   const [mcpStatus, setMcpStatus] = useState<NotionMcpStatus | null>(null);
@@ -19,8 +25,13 @@ export function ConnectorsNotionPage(): React.ReactElement {
   const [mcpNotice, setMcpNotice] = useState<{ tone: "ready" | "bad"; message: string } | null>(
     null,
   );
+  const [pageId, setPageId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const applyDefaultConfig = useCallback((config: ConnectorConfigDraft) => {
+    setPageId(configString(config.pageId));
+  }, []);
+  const defaults = useConnectorDefaultConfig("notion", applyDefaultConfig);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -77,17 +88,20 @@ export function ConnectorsNotionPage(): React.ReactElement {
     });
   }
 
-  return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <BackLink />
+  const pageConfig = pageId.trim() === "" ? {} : { pageId: pageId.trim() };
 
-      <header>
-        <h1 className="text-[15px] font-medium tracking-tight text-[var(--fg)]">Notion</h1>
-        <p className="mt-1 text-[13px] text-[var(--fg-dim)]">
-          OAuth path through Notion’s hosted MCP server. Strata stores refresh credentials locally
-          under <span className="font-mono text-[var(--fg)]">.strata/secrets/</span>.
-        </p>
-      </header>
+  return (
+    <PageContainer width="default">
+      <PageHeader
+        back={{ to: "/connectors", label: "Connectors" }}
+        title="Notion"
+        description={
+          <>
+            OAuth path through Notion’s hosted MCP server. Strata stores refresh credentials locally
+            under <span className="font-mono text-[var(--fg)]">.strata/secrets/</span>.
+          </>
+        }
+      />
 
       <div className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-4">
         <div className="flex items-start justify-between gap-3">
@@ -142,30 +156,70 @@ export function ConnectorsNotionPage(): React.ReactElement {
         {mcpTools ? <McpToolsBlock result={mcpTools} /> : null}
       </div>
 
+      <ConnectorOperationPanel
+        connector="notion"
+        title="Page snapshot"
+        description={
+          <>
+            Pull one Notion page into{" "}
+            <span className="font-mono text-[var(--fg)]">wiki/raw/notion/</span>, then optionally
+            create curated project/source pages and refresh retrieval.
+          </>
+        }
+        runTitle="Pull Notion page"
+        config={pageConfig}
+        canRun={pageId.trim() !== ""}
+        disabledReason={
+          pageId.trim() === ""
+            ? "Provide a Notion page ID or URL. Page snapshots use NOTION_TOKEN."
+            : "Page snapshots use NOTION_TOKEN; Notion MCP is available separately."
+        }
+        defaults={{
+          label: "Saved page defaults",
+          profileLabel: defaults.defaultProfile?.label ?? null,
+          updatedAt: defaults.defaultProfile?.updatedAt ?? null,
+          error: defaults.error,
+          isLoading: defaults.isPending,
+          canLoad: defaults.defaultProfile !== null,
+          canSave: pageId.trim() !== "",
+          onLoad: defaults.loadDefault,
+          onSave: () =>
+            defaults.saveDefault({
+              id: "default",
+              label: "Notion page snapshot defaults",
+              config: pageConfig,
+            }),
+        }}
+      >
+        <label className="block space-y-1.5">
+          <span className="text-[12px] text-[var(--fg-dim)]">Page ID or URL</span>
+          <Input
+            value={pageId}
+            onChange={(event) => setPageId(event.target.value)}
+            placeholder="https://www.notion.so/workspace/Page-..."
+            spellCheck={false}
+          />
+        </label>
+      </ConnectorOperationPanel>
+
       {error ? (
         <div className="rounded-md border border-[var(--bad)]/40 bg-[var(--bad)]/[0.06] p-3">
           <p className="font-mono text-[12px] text-[var(--bad)]">Operation failed</p>
           <p className="mt-1 text-[13px] text-[var(--fg-dim)]">{error}</p>
         </div>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }
 
-function BackLink(): React.ReactElement {
-  return (
-    <Link
-      to="/connectors"
-      className="group inline-flex items-center gap-1 text-[12px] text-[var(--fg-mute)] transition-colors duration-150 hover:text-[var(--fg-dim)]"
-    >
-      <ArrowLeft
-        size={12}
-        strokeWidth={1.75}
-        className="transition-transform duration-150 group-hover:-translate-x-0.5"
-      />
-      Connectors
-    </Link>
-  );
+function configString(value: unknown, fallback = ""): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return fallback;
 }
 
 function McpCallbackNotice({

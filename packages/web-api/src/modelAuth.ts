@@ -3,18 +3,22 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import {
   ANTHROPIC_CLAUDE_PROVIDER_ID,
   ANTHROPIC_OAUTH_MANUAL_REDIRECT_URI,
+  type ApiKeyTarget,
   clearAnthropicCredentials,
   clearChatGptCredentials,
+  clearModelApiKey as clearStoredModelApiKey,
   completeAnthropicAuthorizationCode,
   completeChatGptAuthorizationCode,
   createAnthropicAuthorizationRequest,
   createChatGptAuthorizationRequest,
   getAnthropicCredentials,
   getChatGptCredentials,
+  getModelApiKey,
   type ModelProviderName,
   OPENAI_CODEX_PROVIDER_ID,
   setAnthropicCredentials,
   setChatGptCredentials,
+  setModelApiKey as setStoredModelApiKey,
 } from "@strata/agent";
 
 export type ModelAuthProviderName = Extract<ModelProviderName, "openai-codex" | "anthropic-claude">;
@@ -28,8 +32,31 @@ export interface ModelAuthProviderStatus {
   expiresAt?: number;
 }
 
+/** Browser-safe status for a stored API key — never includes the key itself. */
+export interface ModelApiKeyStatus {
+  target: ApiKeyTarget;
+  displayName: string;
+  configured: boolean;
+  /** Masked last-4 hint (e.g. "…ab12"), present only when configured. */
+  hint?: string;
+  baseUrl?: string;
+  /** Whether this target accepts a custom base URL (OpenAI-compatible). */
+  supportsBaseUrl: boolean;
+}
+
 export interface ModelAuthStatus {
   providers: ModelAuthProviderStatus[];
+  apiKeys: ModelApiKeyStatus[];
+}
+
+export interface ModelApiKeySetInput {
+  target: ApiKeyTarget;
+  apiKey: string;
+  baseUrl?: string | undefined;
+}
+
+export interface ModelApiKeyClearInput {
+  target: ApiKeyTarget;
 }
 
 export interface ModelAuthStartInput {
@@ -66,7 +93,6 @@ interface ModelAuthFlow {
   state: string;
   verifier: string;
   callbackUrl: string;
-  returnUrl: string;
   createdAt: string;
   server?: Server;
 }
@@ -74,13 +100,64 @@ interface ModelAuthFlow {
 const FLOW_TTL_MS = 15 * 60 * 1000;
 const flows = new Map<string, ModelAuthFlow>();
 
+const API_KEY_DISPLAY: Record<ApiKeyTarget, string> = {
+  openai: "OpenAI API key",
+  anthropic: "Anthropic API key",
+};
+
+// OAuth and a stored API key for the same provider are mutually exclusive:
+// connecting one clears the other so the credential store never holds both.
+const TARGET_FOR_PROVIDER: Record<ModelAuthProviderName, ApiKeyTarget> = {
+  "openai-codex": "openai",
+  "anthropic-claude": "anthropic",
+};
+const PROVIDER_FOR_TARGET: Record<ApiKeyTarget, ModelAuthProviderName> = {
+  openai: "openai-codex",
+  anthropic: "anthropic-claude",
+};
+
+async function clearOAuthCredentials(
+  provider: ModelAuthProviderName,
+  options: ModelAuthOptions,
+): Promise<void> {
+  clearProviderFlows(provider);
+  if (provider === OPENAI_CODEX_PROVIDER_ID) {
+    await clearChatGptCredentials(options.repoRoot);
+  } else {
+    await clearAnthropicCredentials(options.repoRoot);
+  }
+}
+
+function maskApiKey(apiKey: string): string {
+  const tail = apiKey.slice(-4);
+  return `…${tail}`;
+}
+
+async function apiKeyStatus(
+  target: ApiKeyTarget,
+  options: ModelAuthOptions,
+): Promise<ModelApiKeyStatus> {
+  const stored = await getModelApiKey(target, options.repoRoot);
+  return {
+    target,
+    displayName: API_KEY_DISPLAY[target],
+    configured: stored !== undefined,
+    supportsBaseUrl: target === "openai",
+    ...(stored === undefined ? {} : { hint: maskApiKey(stored.apiKey) }),
+    ...(stored?.baseUrl === undefined ? {} : { baseUrl: stored.baseUrl }),
+  };
+}
+
 export async function getModelAuthStatus(options: ModelAuthOptions = {}): Promise<ModelAuthStatus> {
   pruneExpiredFlows(options);
-  const [codexCredentials, anthropicCredentials] = await Promise.all([
+  const [codexCredentials, anthropicCredentials, openaiKey, anthropicKey] = await Promise.all([
     getChatGptCredentials(options.repoRoot),
     getAnthropicCredentials(options.repoRoot),
+    apiKeyStatus("openai", options),
+    apiKeyStatus("anthropic", options),
   ]);
   return {
+    apiKeys: [openaiKey, anthropicKey],
     providers: [
       providerStatus({
         provider: OPENAI_CODEX_PROVIDER_ID,
@@ -106,13 +183,12 @@ export async function getModelAuthStatus(options: ModelAuthOptions = {}): Promis
 
 export async function startModelAuth(
   input: ModelAuthStartInput,
-  origin: string | undefined,
+  _origin: string | undefined,
   options: ModelAuthOptions = {},
 ): Promise<ModelAuthStartResult> {
   pruneExpiredFlows(options);
   const provider = assertModelAuthProvider(input.provider);
   clearProviderFlows(provider);
-  const returnUrl = modelAuthReturnUrl(origin);
   const request =
     provider === OPENAI_CODEX_PROVIDER_ID
       ? await createChatGptAuthorizationRequest()
@@ -124,7 +200,6 @@ export async function startModelAuth(
     state: request.state,
     verifier: request.verifier,
     callbackUrl: request.redirectUri,
-    returnUrl,
     createdAt: now(options).toISOString(),
   };
   const callbackServer = shouldStartProviderCallbackServer(flow.callbackUrl)
@@ -205,6 +280,8 @@ async function completeModelAuthCode(
       );
       await setAnthropicCredentials(credentials, options.repoRoot);
     }
+    // Mutual exclusivity: a fresh OAuth connection supersedes any stored key.
+    await clearStoredModelApiKey(TARGET_FOR_PROVIDER[provider], options.repoRoot);
   } finally {
     fetchRestore();
     closeFlow(key, flow);
@@ -222,13 +299,42 @@ export async function disconnectModelAuth(
   options: ModelAuthOptions = {},
 ): Promise<ModelAuthStatus> {
   const provider = assertModelAuthProvider(providerParam);
-  clearProviderFlows(provider);
-  if (provider === OPENAI_CODEX_PROVIDER_ID) {
-    await clearChatGptCredentials(options.repoRoot);
-  } else {
-    await clearAnthropicCredentials(options.repoRoot);
-  }
+  await clearOAuthCredentials(provider, options);
   return getModelAuthStatus(options);
+}
+
+export async function setModelApiKey(
+  input: ModelApiKeySetInput,
+  options: ModelAuthOptions = {},
+): Promise<ModelAuthStatus> {
+  const target = assertApiKeyTarget(input.target);
+  await setStoredModelApiKey(
+    target,
+    {
+      apiKey: input.apiKey,
+      ...(target === "openai" && input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    },
+    options.repoRoot,
+  );
+  // Mutual exclusivity: a stored key supersedes any OAuth connection.
+  await clearOAuthCredentials(PROVIDER_FOR_TARGET[target], options);
+  return getModelAuthStatus(options);
+}
+
+export async function clearModelApiKey(
+  input: ModelApiKeyClearInput,
+  options: ModelAuthOptions = {},
+): Promise<ModelAuthStatus> {
+  const target = assertApiKeyTarget(input.target);
+  await clearStoredModelApiKey(target, options.repoRoot);
+  return getModelAuthStatus(options);
+}
+
+function assertApiKeyTarget(value: string): ApiKeyTarget {
+  if (value === "openai" || value === "anthropic") {
+    return value;
+  }
+  throw new Error(`Unknown API key target: ${value}`);
 }
 
 export function modelAuthCallbackRoute(provider: ModelAuthProviderName): string {
@@ -267,19 +373,6 @@ function providerStatus(input: {
     state: "not_connected",
     message: `${input.displayName} is not connected.`,
   };
-}
-
-function modelAuthReturnUrl(origin: string | undefined): string {
-  return publicCallbackUrl(origin, "/settings/models");
-}
-
-function publicCallbackUrl(origin: string | undefined, path: string): string {
-  const base = origin?.trim() || "http://127.0.0.1:5173";
-  const url = new URL(base);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`Unsupported model auth callback protocol: ${url.protocol}`);
-  }
-  return new URL(path, url.origin).toString();
 }
 
 function shouldStartProviderCallbackServer(callbackUrl: string): boolean {
@@ -322,28 +415,54 @@ async function handleProviderCallback(
   }
   try {
     const result = await finishModelAuth(url.toString(), flow.provider, options);
-    response.writeHead(302, {
-      location: callbackRedirectLocation(flow.returnUrl, "ok", result.message),
-    });
-    response.end();
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(modelAuthCompleteHtml("ok", result.message));
   } catch (cause: unknown) {
     const message = cause instanceof Error ? cause.message : String(cause);
-    response.writeHead(302, {
-      location: callbackRedirectLocation(flow.returnUrl, "error", message),
-    });
-    response.end();
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(modelAuthCompleteHtml("error", message));
   }
 }
 
-function callbackRedirectLocation(
-  returnUrl: string,
-  status: "ok" | "error",
-  message: string,
-): string {
-  const url = new URL(returnUrl);
-  url.searchParams.set("status", status);
-  url.searchParams.set("message", message);
-  return url.toString();
+/**
+ * Self-closing landing page for an OAuth popup/tab. The chat model-auth dialog
+ * detects success by polling status, so the popup just needs to tell the user
+ * it's done and close itself — no redirect back into the app.
+ */
+export function modelAuthCompleteHtml(status: "ok" | "error", message: string): string {
+  const ok = status === "ok";
+  const heading = ok ? "Connected" : "Connection failed";
+  const safeMessage = escapeHtml(message);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Strata — ${heading}</title>
+    <style>
+      html,body{margin:0;height:100%;background:#09090b;color:#a1a1aa;}
+      body{font:13px/1.6 ui-sans-serif,system-ui,sans-serif;display:grid;place-items:center;text-align:center;padding:2rem;}
+      h1{font-size:15px;color:${ok ? "#5eead4" : "#f87171"};margin:0 0 .5rem;}
+      @media (prefers-color-scheme: light){html,body{background:#fafaf9;color:#52525b;}}
+    </style>
+  </head>
+  <body>
+    <div>
+      <h1>${heading}</h1>
+      <p>${safeMessage}</p>
+      <p>You can close this window and return to Strata.</p>
+    </div>
+    <script>setTimeout(function(){ window.close(); }, 400);</script>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function parseAuthorizationResponse(

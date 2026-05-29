@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -77,13 +78,11 @@ export function WikiPage(): React.ReactElement {
   }, []);
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-7rem)] max-w-7xl min-w-0 flex-col gap-4">
-      <header className="flex shrink-0 flex-col gap-1">
-        <h1 className="text-[15px] font-medium tracking-tight text-[var(--fg)]">Wiki</h1>
-        <p className="text-[12.5px] text-[var(--fg-dim)]">
-          Browse the local Markdown tree and preview pages without leaving the web app.
-        </p>
-      </header>
+    <PageContainer width="wide" fill>
+      <PageHeader
+        title="Wiki"
+        description="Browse the local Markdown tree and preview pages without leaving the web app."
+      />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-[var(--hairline)] bg-[var(--surface)] lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
         <aside className="min-h-0 border-b border-[var(--hairline)] bg-[var(--bg)] lg:border-r lg:border-b-0">
@@ -125,7 +124,7 @@ export function WikiPage(): React.ReactElement {
           </ScrollArea>
         </section>
       </div>
-    </div>
+    </PageContainer>
   );
 }
 

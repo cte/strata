@@ -14,6 +14,12 @@ type RouterOutput = inferRouterOutputs<AppRouter>;
 type RouterInput = inferRouterInputs<AppRouter>;
 
 export type ConnectorSummary = RouterOutput["connectors"]["list"]["connectors"][number];
+export type ConnectorRunInput = RouterInput["connectors"]["run"];
+export type ConnectorRunResult = RouterOutput["connectors"]["run"];
+export type ConnectorConfigName = RouterInput["connectors"]["config"]["list"]["connector"];
+export type ConnectorConfigProfilesResult = RouterOutput["connectors"]["config"]["list"];
+export type ConnectorConfigProfile = ConnectorConfigProfilesResult["profiles"][number];
+export type ConnectorConfigProfileSaveInput = RouterInput["connectors"]["config"]["save"];
 export type NotionMcpStatus = RouterOutput["connectors"]["notion"]["mcp"]["status"];
 export type NotionMcpStartResult = RouterOutput["connectors"]["notion"]["mcp"]["start"];
 export type NotionMcpToolsResult = RouterOutput["connectors"]["notion"]["mcp"]["listTools"];
@@ -23,6 +29,8 @@ export type ModelAuthStatus = RouterOutput["auth"]["models"]["status"];
 export type ModelAuthProviderStatus = ModelAuthStatus["providers"][number];
 export type ModelAuthProviderName = ModelAuthProviderStatus["provider"];
 export type ModelAuthStartResult = RouterOutput["auth"]["models"]["start"];
+export type ModelApiKeyStatus = ModelAuthStatus["apiKeys"][number];
+export type ModelApiKeyTarget = ModelApiKeyStatus["target"];
 export type McpSettingsStatus = RouterOutput["mcps"]["status"];
 export type McpServerStatus = McpSettingsStatus["servers"][number];
 export type McpSettingsUpdateInput = RouterInput["mcps"]["update"];
@@ -45,6 +53,48 @@ export type ChatSessionDeleteResult = RouterOutput["chat"]["sessions"]["delete"]
 export type ChatMessageSummary = ChatSessionDetail["messages"][number];
 export type WikiTreeEntry = RouterOutput["wiki"]["tree"]["tree"][number];
 export type WikiPageDetail = RouterOutput["wiki"]["page"];
+export type WikiActionItem = RouterOutput["wiki"]["actions"]["list"]["actions"][number];
+export type WikiActionOwnerFilter = NonNullable<RouterInput["wiki"]["actions"]["list"]["owner"]>;
+export type WikiActionStatusFilter = NonNullable<RouterInput["wiki"]["actions"]["list"]["status"]>;
+export type WikiActionAddInput = RouterInput["wiki"]["actions"]["add"];
+export type WikiActionUpdateInput = RouterInput["wiki"]["actions"]["update"];
+export type DailyTodoRunSummary =
+  RouterOutput["extraction"]["dailyTodos"]["runs"]["list"]["runs"][number];
+export type DailyTodoCandidate =
+  RouterOutput["extraction"]["dailyTodos"]["candidates"]["list"]["candidates"][number];
+export type DailyTodoCandidateListInput =
+  RouterInput["extraction"]["dailyTodos"]["candidates"]["list"];
+export type DailyTodoCandidateAcceptInput =
+  RouterInput["extraction"]["dailyTodos"]["candidates"]["accept"];
+export type DailyTodoCandidateResult =
+  RouterOutput["extraction"]["dailyTodos"]["candidates"]["accept"];
+export type IngestActivityRun = RouterOutput["activity"]["list"]["runs"][number];
+export type IngestActivityDetail = NonNullable<RouterOutput["activity"]["get"]>;
+export type IngestActivityItem = IngestActivityDetail["items"][number];
+export type IngestActivitySource = RouterInput["activity"]["list"]["source"];
+export type IngestActivityResultFilter = NonNullable<
+  RouterInput["activity"]["list"]["resultFilters"]
+>[number];
+export type IngestTaxonomyResult = RouterOutput["ingest"]["taxonomy"]["get"];
+export type IngestTaxonomy = IngestTaxonomyResult["taxonomy"];
+export type IngestTaxonomyProjectAliasInput = RouterInput["ingest"]["taxonomy"]["addProjectAlias"];
+export type IngestTaxonomySelfNameInput = RouterInput["ingest"]["taxonomy"]["addSelfName"];
+export type IngestTaxonomySlackPatternInput = RouterInput["ingest"]["taxonomy"]["addSlackPattern"];
+export type IngestTaxonomyMutationResult = RouterOutput["ingest"]["taxonomy"]["addProjectAlias"];
+export type ProposalSummary = RouterOutput["proposals"]["list"]["proposals"][number];
+export type ProposalDetail = NonNullable<RouterOutput["proposals"]["get"]>;
+export type ProposalStatusFilter = RouterInput["proposals"]["list"]["status"];
+export type ProposalKindFilter = RouterInput["proposals"]["list"]["kind"];
+export type ProposalActionResult = RouterOutput["proposals"]["accept"];
+export type ProposalStatusResult = RouterOutput["proposals"]["defer"];
+export type JobMetadata = RouterOutput["jobs"]["list"]["jobs"][number];
+export type JobSchedule = RouterOutput["schedules"]["list"]["schedules"][number];
+export type JobScheduleCreateInput = RouterInput["schedules"]["create"];
+export type JobScheduleUpdateInput = RouterInput["schedules"]["update"];
+export type JobScheduleRunResult = RouterOutput["schedules"]["runNow"];
+export type ScheduledConnectorName = RouterInput["connectors"]["schedules"]["status"]["connector"];
+export type ConnectorScheduleStatus = RouterOutput["connectors"]["schedules"]["status"];
+export type ConnectorSchedulePreset = ConnectorScheduleStatus["presets"][number];
 
 export interface ChatImageAttachment {
   kind: "image";
@@ -78,6 +128,36 @@ export async function getConnectors(): Promise<ConnectorSummary[]> {
   return body.connectors;
 }
 
+export async function runConnector(input: ConnectorRunInput): Promise<ConnectorRunResult> {
+  return trpc.connectors.run.mutate(input);
+}
+
+export async function getConnectorConfigProfiles(
+  connector: ConnectorConfigName,
+): Promise<ConnectorConfigProfilesResult> {
+  return trpc.connectors.config.list.query({ connector });
+}
+
+export async function saveConnectorConfigProfile(
+  input: ConnectorConfigProfileSaveInput,
+): Promise<ConnectorConfigProfilesResult> {
+  return trpc.connectors.config.save.mutate(input);
+}
+
+export async function deleteConnectorConfigProfile(
+  connector: ConnectorConfigName,
+  id: string,
+): Promise<ConnectorConfigProfilesResult> {
+  return trpc.connectors.config.delete.mutate({ connector, id });
+}
+
+export async function setDefaultConnectorConfigProfile(
+  connector: ConnectorConfigName,
+  id: string,
+): Promise<ConnectorConfigProfilesResult> {
+  return trpc.connectors.config.setDefault.mutate({ connector, id });
+}
+
 export async function getNotionMcpStatus(): Promise<NotionMcpStatus> {
   return trpc.connectors.notion.mcp.status.query();
 }
@@ -106,6 +186,33 @@ export async function disconnectGranola(): Promise<GranolaStatus> {
   return trpc.connectors.granola.disconnect.mutate();
 }
 
+export async function getConnectorScheduleStatus(
+  connector: ScheduledConnectorName,
+): Promise<ConnectorScheduleStatus> {
+  return trpc.connectors.schedules.status.query({ connector });
+}
+
+export async function applyConnectorSchedulePreset(input: {
+  connector: ScheduledConnectorName;
+  presetId: string;
+  enabled?: boolean;
+}): Promise<ConnectorScheduleStatus> {
+  return trpc.connectors.schedules.applyPreset.mutate(input);
+}
+
+export async function setConnectorScheduleEnabled(input: {
+  connector: ScheduledConnectorName;
+  enabled: boolean;
+}): Promise<ConnectorScheduleStatus> {
+  return trpc.connectors.schedules.setEnabled.mutate(input);
+}
+
+export async function runConnectorScheduleNow(
+  connector: ScheduledConnectorName,
+): Promise<ConnectorScheduleStatus> {
+  return trpc.connectors.schedules.runNow.mutate({ connector });
+}
+
 export async function getModelAuthStatus(): Promise<ModelAuthStatus> {
   return trpc.auth.models.status.query();
 }
@@ -128,6 +235,18 @@ export async function disconnectModelAuth(
   provider: ModelAuthProviderName,
 ): Promise<ModelAuthStatus> {
   return trpc.auth.models.disconnect.mutate({ provider });
+}
+
+export async function setModelApiKey(input: {
+  target: ModelApiKeyTarget;
+  apiKey: string;
+  baseUrl?: string;
+}): Promise<ModelAuthStatus> {
+  return trpc.auth.models.setApiKey.mutate(input);
+}
+
+export async function clearModelApiKey(target: ModelApiKeyTarget): Promise<ModelAuthStatus> {
+  return trpc.auth.models.clearApiKey.mutate({ target });
 }
 
 export async function getMcpSettingsStatus(): Promise<McpSettingsStatus> {
@@ -237,6 +356,162 @@ export async function getWikiTree(includeRaw = false): Promise<WikiTreeEntry[]> 
 
 export async function getWikiPage(path: string, includeRaw = false): Promise<WikiPageDetail> {
   return trpc.wiki.page.query({ path, includeRaw });
+}
+
+export async function listWikiActions(input: {
+  owner?: WikiActionOwnerFilter;
+  status?: WikiActionStatusFilter;
+  query?: string;
+}): Promise<WikiActionItem[]> {
+  const body = await trpc.wiki.actions.list.query(input);
+  return body.actions;
+}
+
+export async function updateWikiAction(input: WikiActionUpdateInput): Promise<WikiActionItem> {
+  const body = await trpc.wiki.actions.update.mutate(input);
+  return body.action;
+}
+
+export async function addWikiAction(input: WikiActionAddInput): Promise<WikiActionItem> {
+  const body = await trpc.wiki.actions.add.mutate(input);
+  return body.action;
+}
+
+export async function listDailyTodoRuns(input: {
+  day?: string;
+  limit?: number;
+}): Promise<DailyTodoRunSummary[]> {
+  const body = await trpc.extraction.dailyTodos.runs.list.query(input);
+  return body.runs;
+}
+
+export async function listDailyTodoCandidates(
+  input: DailyTodoCandidateListInput,
+): Promise<DailyTodoCandidate[]> {
+  const body = await trpc.extraction.dailyTodos.candidates.list.query(input);
+  return body.candidates;
+}
+
+export async function acceptDailyTodoCandidate(
+  input: DailyTodoCandidateAcceptInput,
+): Promise<DailyTodoCandidateResult> {
+  return trpc.extraction.dailyTodos.candidates.accept.mutate(input);
+}
+
+export async function rejectDailyTodoCandidate(
+  id: string,
+  reason?: string,
+): Promise<RouterOutput["extraction"]["dailyTodos"]["candidates"]["reject"]> {
+  return trpc.extraction.dailyTodos.candidates.reject.mutate({
+    id,
+    ...(reason === undefined || reason.trim().length === 0 ? {} : { reason: reason.trim() }),
+  });
+}
+
+export async function listIngestActivity(input: {
+  limit?: number;
+  source?: IngestActivitySource;
+  resultFilters?: IngestActivityResultFilter[];
+  writesOrIndexesOnly?: boolean;
+}): Promise<IngestActivityRun[]> {
+  const body = await trpc.activity.list.query(input);
+  return body.runs;
+}
+
+export async function getIngestActivity(
+  sessionId: string,
+  itemLimit = 200,
+  resultFilters?: IngestActivityResultFilter[],
+): Promise<IngestActivityDetail | null> {
+  return trpc.activity.get.query({ sessionId, itemLimit, resultFilters });
+}
+
+export async function getIngestTaxonomy(): Promise<IngestTaxonomyResult> {
+  return trpc.ingest.taxonomy.get.query();
+}
+
+export async function addIngestTaxonomyProjectAlias(
+  input: IngestTaxonomyProjectAliasInput,
+): Promise<IngestTaxonomyMutationResult> {
+  return trpc.ingest.taxonomy.addProjectAlias.mutate(input);
+}
+
+export async function addIngestTaxonomySelfName(
+  input: IngestTaxonomySelfNameInput,
+): Promise<RouterOutput["ingest"]["taxonomy"]["addSelfName"]> {
+  return trpc.ingest.taxonomy.addSelfName.mutate(input);
+}
+
+export async function addIngestTaxonomySlackPattern(
+  input: IngestTaxonomySlackPatternInput,
+): Promise<RouterOutput["ingest"]["taxonomy"]["addSlackPattern"]> {
+  return trpc.ingest.taxonomy.addSlackPattern.mutate(input);
+}
+
+export async function listProposals(input: {
+  status?: ProposalStatusFilter;
+  kind?: ProposalKindFilter;
+  limit?: number;
+}): Promise<ProposalSummary[]> {
+  const body = await trpc.proposals.list.query(input);
+  return body.proposals;
+}
+
+export async function getProposal(id: string): Promise<ProposalDetail | null> {
+  return trpc.proposals.get.query({ id });
+}
+
+export async function acceptProposal(
+  id: string,
+  reason?: string,
+  previewFingerprint?: string,
+): Promise<ProposalActionResult> {
+  return trpc.proposals.accept.mutate({
+    id,
+    ...(reason === undefined || reason.trim() === "" ? {} : { reason: reason.trim() }),
+    ...(previewFingerprint === undefined ? {} : { previewFingerprint }),
+  });
+}
+
+export async function rejectProposal(id: string, reason?: string): Promise<ProposalStatusResult> {
+  return trpc.proposals.reject.mutate({
+    id,
+    ...(reason === undefined || reason.trim() === "" ? {} : { reason: reason.trim() }),
+  });
+}
+
+export async function deferProposal(id: string, reason?: string): Promise<ProposalStatusResult> {
+  return trpc.proposals.defer.mutate({
+    id,
+    ...(reason === undefined || reason.trim() === "" ? {} : { reason: reason.trim() }),
+  });
+}
+
+export async function listJobs(): Promise<JobMetadata[]> {
+  const body = await trpc.jobs.list.query();
+  return body.jobs;
+}
+
+export async function listSchedules(): Promise<JobSchedule[]> {
+  const body = await trpc.schedules.list.query();
+  return body.schedules;
+}
+
+export async function createSchedule(input: JobScheduleCreateInput): Promise<JobSchedule> {
+  return trpc.schedules.create.mutate(input);
+}
+
+export async function updateSchedule(input: JobScheduleUpdateInput): Promise<JobSchedule> {
+  return trpc.schedules.update.mutate(input);
+}
+
+export async function deleteSchedule(id: string): Promise<boolean> {
+  const body = await trpc.schedules.delete.mutate({ id });
+  return body.deleted;
+}
+
+export async function runScheduleNow(id: string): Promise<JobScheduleRunResult> {
+  return trpc.schedules.runNow.mutate({ id });
 }
 
 export async function startChatRun(

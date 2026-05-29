@@ -18,7 +18,8 @@
     "./todo-store": "./src/todoStore.ts",
     "./token-usage": "./src/tokenUsage.ts",
     "./trace-store": "./src/traceStore.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./wiki-actions": "./src/wikiActions.ts"
   },
   "scripts": {
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",

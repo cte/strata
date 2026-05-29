@@ -1,6 +1,6 @@
 import { AnthropicModelAdapter } from "./anthropic.js";
 import { getValidAnthropicCredentials } from "./anthropicOAuth.js";
-import { getAnthropicCredentials, getChatGptCredentials } from "./authStore.js";
+import { getAnthropicCredentials, getChatGptCredentials, getModelApiKey } from "./authStore.js";
 import { getValidChatGptCredentials } from "./chatgptOAuth.js";
 import { OpenAICodexModelAdapter } from "./openaiCodex.js";
 import { OpenAICompatibleChatModelAdapter } from "./openaiCompatible.js";
@@ -49,8 +49,15 @@ export async function inferDefaultProvider(
   if ((await getAnthropicCredentials(options.repoRoot)) !== undefined) {
     return "anthropic-claude";
   }
-  if (env.STRATA_API_KEY !== undefined || env.OPENAI_API_KEY !== undefined) {
+  if (
+    env.STRATA_API_KEY !== undefined ||
+    env.OPENAI_API_KEY !== undefined ||
+    (await getModelApiKey("openai", options.repoRoot)) !== undefined
+  ) {
     return "openai-compatible";
+  }
+  if ((await getModelApiKey("anthropic", options.repoRoot)) !== undefined) {
+    return "anthropic-claude";
   }
   return "openai-codex";
 }
@@ -166,33 +173,41 @@ export async function createModelAdapter(
   }
 
   if (provider === "anthropic-claude") {
-    const credentials = await getValidAnthropicCredentials(options.repoRoot);
-    const anthropicOptions = {
-      credentials,
-      model: options.model ?? env.STRATA_MODEL ?? env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
-    };
-    if (env.STRATA_ANTHROPIC_BASE_URL !== undefined) {
-      return withContextWindow(
-        new AnthropicModelAdapter({
-          ...anthropicOptions,
-          baseUrl: env.STRATA_ANTHROPIC_BASE_URL,
-        }),
-        contextWindowForModel(provider, anthropicOptions.model, { env }),
-      );
+    const model = options.model ?? env.STRATA_MODEL ?? env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
+    // OAuth (Claude Code) takes precedence when connected; otherwise fall back
+    // to a stored Anthropic API key (x-api-key).
+    const oauth = await getAnthropicCredentials(options.repoRoot);
+    const storedKey =
+      oauth === undefined ? await getModelApiKey("anthropic", options.repoRoot) : undefined;
+    const auth =
+      oauth !== undefined
+        ? { credentials: await getValidAnthropicCredentials(options.repoRoot) }
+        : storedKey !== undefined
+          ? { apiKey: storedKey.apiKey }
+          : undefined;
+    if (auth === undefined) {
+      throw new Error("Anthropic is not connected. Add Claude OAuth or an Anthropic API key.");
     }
+    const baseUrl = env.STRATA_ANTHROPIC_BASE_URL ?? storedKey?.baseUrl;
     return withContextWindow(
-      new AnthropicModelAdapter(anthropicOptions),
-      contextWindowForModel(provider, anthropicOptions.model, { env }),
+      new AnthropicModelAdapter({
+        ...auth,
+        model,
+        ...(baseUrl !== undefined ? { baseUrl } : {}),
+      }),
+      contextWindowForModel(provider, model, { env }),
     );
   }
 
-  const apiKey = env.STRATA_API_KEY ?? env.OPENAI_API_KEY;
+  // A stored OpenAI API key takes precedence over env vars.
+  const storedOpenAi = await getModelApiKey("openai", options.repoRoot);
+  const apiKey = storedOpenAi?.apiKey ?? env.STRATA_API_KEY ?? env.OPENAI_API_KEY;
 
   const model = options.model ?? env.STRATA_MODEL ?? env.OPENAI_MODEL;
-  const baseUrl = env.STRATA_BASE_URL ?? env.OPENAI_BASE_URL;
+  const baseUrl = storedOpenAi?.baseUrl ?? env.STRATA_BASE_URL ?? env.OPENAI_BASE_URL;
 
   if (!apiKey) {
-    throw new Error("Missing model API key. Set STRATA_API_KEY or OPENAI_API_KEY.");
+    throw new Error("Missing model API key. Add an OpenAI API key or set STRATA_API_KEY.");
   }
   if (!model) {
     throw new Error("Missing model name. Set STRATA_MODEL or OPENAI_MODEL.");
@@ -288,19 +303,32 @@ async function listCodexModels(options: ListModelsOptions): Promise<ModelInfo[]>
 
 async function listAnthropicModels(options: ListModelsOptions): Promise<ModelInfo[]> {
   const env = options.env ?? Bun.env;
-  const credentials = await getValidAnthropicCredentials(options.repoRoot);
-  const baseUrl = (env.STRATA_ANTHROPIC_BASE_URL ?? "https://api.anthropic.com/v1").replace(
-    /\/+$/,
-    "",
-  );
+  // OAuth-first, else a stored Anthropic API key (x-api-key) — mirroring adapter auth.
+  const oauth = await getAnthropicCredentials(options.repoRoot);
+  const storedKey =
+    oauth === undefined ? await getModelApiKey("anthropic", options.repoRoot) : undefined;
+  if (oauth === undefined && storedKey === undefined) {
+    throw new Error("Anthropic is not connected. Add Claude OAuth or an Anthropic API key.");
+  }
+  const baseUrl = (
+    env.STRATA_ANTHROPIC_BASE_URL ??
+    storedKey?.baseUrl ??
+    "https://api.anthropic.com/v1"
+  ).replace(/\/+$/, "");
+  const authHeaders: Record<string, string> =
+    oauth !== undefined
+      ? {
+          Authorization: `Bearer ${(await getValidAnthropicCredentials(options.repoRoot)).accessToken}`,
+          "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+          "anthropic-dangerous-direct-browser-access": "true",
+          "user-agent": "claude-cli/2.1.85 (external, cli)",
+          "x-app": "cli",
+        }
+      : { "x-api-key": (storedKey as { apiKey: string }).apiKey };
   const init: RequestInit = {
     headers: {
-      Authorization: `Bearer ${credentials.accessToken}`,
+      ...authHeaders,
       "anthropic-version": "2023-06-01",
-      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "user-agent": "claude-cli/2.1.85 (external, cli)",
-      "x-app": "cli",
     },
   };
   if (options.signal !== undefined) {
@@ -332,11 +360,13 @@ async function listAnthropicModels(options: ListModelsOptions): Promise<ModelInf
 async function listCompatibleModels(options: ListModelsOptions): Promise<ModelInfo[]> {
   const env = options.env ?? Bun.env;
 
-  const apiKey = env.STRATA_API_KEY ?? env.OPENAI_API_KEY;
+  const storedOpenAi = await getModelApiKey("openai", options.repoRoot);
+  const apiKey = storedOpenAi?.apiKey ?? env.STRATA_API_KEY ?? env.OPENAI_API_KEY;
   if (apiKey === undefined) {
-    throw new Error("Set STRATA_API_KEY or OPENAI_API_KEY to list OpenAI models.");
+    throw new Error("Add an OpenAI API key or set STRATA_API_KEY to list OpenAI models.");
   }
   const baseUrl = (
+    storedOpenAi?.baseUrl ??
     env.STRATA_BASE_URL ??
     env.OPENAI_BASE_URL ??
     "https://api.openai.com/v1"

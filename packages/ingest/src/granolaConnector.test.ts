@@ -134,7 +134,59 @@ describe("granolaConnector", () => {
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
+
+  test("writes immutable revision snapshots when Granola note content changes", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-granola-revision-"));
+    try {
+      const fixture = path.join(repoRoot, "granola.json");
+      await writeFile(fixture, granolaFixture("Initial transcript."), "utf8");
+      const runtime = {
+        repoRoot,
+        env: {},
+        now: new Date("2026-05-05T10:00:00.000Z"),
+      };
+
+      const first = await granolaConnector.pull(
+        { fixture, since: "2026-05-01T00:00:00.000Z" },
+        runtime,
+      );
+      expect(first.rawPath).toBe("wiki/raw/granola/2026-05-04-roadmap-sync.md");
+      expect(first.items?.[0]?.metadata).toMatchObject({ revision: false });
+      const firstContent = await readFile(path.join(repoRoot, first.rawPath), "utf8");
+      expect(firstContent).toContain("content_hash:");
+      expect(firstContent).toContain("source_id: note_1");
+
+      await writeFile(fixture, granolaFixture("Updated transcript."), "utf8");
+      const second = await granolaConnector.pull(
+        { fixture, since: "2026-05-01T00:00:00.000Z" },
+        runtime,
+      );
+
+      expect(second.rawPath.startsWith("wiki/raw/granola/2026-05-04-roadmap-sync-")).toBe(true);
+      expect(second.rawPath.endsWith(".md")).toBe(true);
+      expect(second.items?.[0]?.metadata).toMatchObject({ revision: true });
+      const revisionContent = await readFile(path.join(repoRoot, second.rawPath), "utf8");
+      expect(revisionContent).toContain("Updated transcript.");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
 });
+
+function granolaFixture(transcript: string): string {
+  return JSON.stringify({
+    notes: [
+      {
+        id: "note_1",
+        title: "Roadmap Sync",
+        created_at: "2026-05-04T12:00:00.000Z",
+        attendees: [{ name: "Ada" }],
+        transcript,
+        url: "https://granola.ai/notes/note_1",
+      },
+    ],
+  });
+}
 
 function fakeGranolaFetch(): typeof fetch {
   return Object.assign(

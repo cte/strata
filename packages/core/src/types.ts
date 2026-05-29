@@ -2,7 +2,15 @@ export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
-export type SessionKind = "chat" | "query" | "ingest" | "lint" | "learn" | "maintain" | "trace";
+export type SessionKind =
+  | "chat"
+  | "query"
+  | "ingest"
+  | "lint"
+  | "learn"
+  | "maintain"
+  | "job"
+  | "trace";
 export type SessionStatus = "running" | "completed" | "failed" | "interrupted";
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 

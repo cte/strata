@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AnthropicCredentials, ChatGptCredentials } from "./authStore.js";
-import { setAnthropicCredentials, setChatGptCredentials } from "./authStore.js";
+import { setAnthropicCredentials, setChatGptCredentials, setModelApiKey } from "./authStore.js";
 
 import {
   createModelAdapter,
@@ -101,7 +101,7 @@ describe("model factory", () => {
     try {
       await expect(
         createModelAdapter({ provider: "anthropic-claude", repoRoot, env: {} }),
-      ).rejects.toThrow("Not logged in with Anthropic");
+      ).rejects.toThrow("Anthropic is not connected");
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
@@ -113,6 +113,41 @@ describe("model factory", () => {
       env: { STRATA_API_KEY: "sk-test", STRATA_MODEL: "gpt-compatible-test" },
     });
     expect(adapter.name).toBe("openai-compatible:gpt-compatible-test");
+  });
+
+  test("uses a stored Anthropic API key when no OAuth is present", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-model-factory-"));
+    try {
+      await setModelApiKey("anthropic", { apiKey: "sk-ant-stored" }, repoRoot);
+      const adapter = await createModelAdapter({
+        provider: "anthropic-claude",
+        repoRoot,
+        env: {},
+        model: "claude-sonnet-4-6",
+      });
+      expect(adapter.name).toBe("anthropic-claude:claude-sonnet-4-6");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("uses a stored OpenAI API key (and base URL) without env vars", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-model-factory-"));
+    try {
+      await setModelApiKey(
+        "openai",
+        { apiKey: "sk-stored", baseUrl: "https://example.test/v1" },
+        repoRoot,
+      );
+      const adapter = await createModelAdapter({
+        provider: "openai-compatible",
+        repoRoot,
+        env: { STRATA_MODEL: "gpt-stored-test" },
+      });
+      expect(adapter.name).toBe("openai-compatible:gpt-stored-test");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
   });
 
   test("reports missing OpenAI-compatible key and model", async () => {

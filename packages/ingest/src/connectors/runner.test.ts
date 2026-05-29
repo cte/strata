@@ -30,6 +30,7 @@ describe("connector runner", () => {
         "utf8",
       );
       expect(trace).toContain("connector.notion.dry_run.started");
+      expect(trace).toContain("connector.notion.dry_run.item");
       expect(trace).toContain("[redacted]");
       expect(trace).not.toContain("secret_should_not_render");
     } finally {

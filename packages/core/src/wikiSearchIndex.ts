@@ -151,16 +151,15 @@ export async function searchWikiSearchIndex(
     const includeRaw = options.includeRaw ?? false;
     const limit = Math.max(1, Math.min(options.limit ?? 50, 1000));
     const rows = searchRows(store, fts, includeRaw, Math.max(SEARCH_FETCH_LIMIT, limit * 20));
+    const terms = queryTerms(query);
     const filtered = rows
       .filter((row) => matchesRoot(row.path, root))
       .sort((left, right) => {
-        const rankDelta =
-          wikiSearchRank(left.path, left.kind) - wikiSearchRank(right.path, right.kind);
+        const rankDelta = wikiSearchRank(left, terms) - wikiSearchRank(right, terms);
         return rankDelta === 0 ? left.score - right.score : rankDelta;
       })
       .slice(0, limit);
 
-    const terms = queryTerms(query);
     const wikiRoot = path.join(repoRoot, WIKI_DIR);
     const matches: WikiSearchIndexMatch[] = [];
     for (const row of filtered) {
@@ -245,6 +244,9 @@ async function collectWikiSearchDocuments(options: {
     const file = await stat(absolutePath);
     const text = await readFile(absolutePath, "utf8");
     const metadata = parseSimpleFrontmatter(text);
+    if (isSupersededPage(metadata)) {
+      continue;
+    }
     docs.push({
       path: relativePath,
       title: metadata.title || firstHeading(text) || titleFromPath(relativePath),
@@ -334,6 +336,10 @@ function documentSource(relativePath: string, metadata: Record<string, string>):
   return metadata.source || null;
 }
 
+function isSupersededPage(metadata: Record<string, string>): boolean {
+  return metadata.status?.toLowerCase() === "superseded";
+}
+
 function isGeneratedSourceThread(text: string): boolean {
   return (
     text.includes("Automatically opened from source indexing.") ||
@@ -343,28 +349,47 @@ function isGeneratedSourceThread(text: string): boolean {
   );
 }
 
-function wikiSearchRank(relativePath: string, kind: string): number {
-  if (kind === "raw") {
+function wikiSearchRank(row: Pick<SearchRow, "kind" | "path" | "title">, terms: string[]): number {
+  if (row.kind === "raw") {
     return 90;
   }
-  if (kind === "source") {
+  if (row.kind === "source") {
     return 35;
   }
-  const topLevel = relativePath.split("/")[0] ?? "";
-  if (
-    ["projects", "decisions", "threads", "meetings", "people", "teams", "actions"].includes(
-      topLevel,
-    )
-  ) {
-    return 0;
+  const topLevel = row.path.split("/")[0] ?? "";
+  if (topLevel === "projects") {
+    return titleOrPathContainsAllTerms(row, terms) ? 0 : 2;
   }
-  if (["priorities.md", "me.md", "index.md"].includes(relativePath)) {
+  if (topLevel === "threads") {
+    return 8;
+  }
+  if (topLevel === "decisions") {
     return 10;
   }
-  if (relativePath === "log.md") {
+  if (topLevel === "meetings") {
+    return 12;
+  }
+  if (topLevel === "people" || topLevel === "teams" || topLevel === "actions") {
+    return 16;
+  }
+  if (["priorities.md", "me.md", "index.md"].includes(row.path)) {
+    return 10;
+  }
+  if (row.path === "log.md") {
     return 40;
   }
   return 20;
+}
+
+function titleOrPathContainsAllTerms(
+  row: Pick<SearchRow, "path" | "title">,
+  terms: string[],
+): boolean {
+  if (terms.length === 0) {
+    return false;
+  }
+  const haystack = `${row.title}\n${row.path}`.toLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 function normalizeSearchRoot(root: string): string {

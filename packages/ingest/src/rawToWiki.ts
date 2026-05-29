@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +10,46 @@ import {
   writeTextFile,
 } from "@strata/core";
 import { frontmatter, slugify, splitFrontmatter, utcNow } from "./common.js";
+import {
+  evaluateTodoCandidates,
+  fakeDailyTodoVerifier,
+  publishDailyTodoCandidateResultsInStore,
+} from "./extraction/dailyTodo.js";
+import type {
+  DailyTodoPublicationSkip,
+  DailyTodoPublishedAction,
+  EvidenceSpan,
+  ExtractionSourceType,
+  TodoCandidateResult,
+} from "./extraction/types.js";
+import {
+  type IngestTaxonomy,
+  loadIngestTaxonomy,
+  type ResolvedIngestTaxonomy,
+} from "./ingestTaxonomy.js";
+import {
+  actionOwner,
+  canonicalProjectLabelForText,
+  normalizeProjectLabels,
+  projectLabelsFromTaxonomyText,
+} from "./raw-to-wiki/entityResolution.js";
+import {
+  actionCandidateLines,
+  candidateLines,
+  cleanCandidateText,
+  decisionCandidateLines,
+  looksLikePersonName,
+  speakerCandidates,
+} from "./raw-to-wiki/extraction.js";
+import { slackMateriality, slackSummary } from "./raw-to-wiki/materiality.js";
+import {
+  slackActionCandidateLines,
+  slackMessageTexts,
+  slackParticipantsFromHeadings,
+} from "./raw-to-wiki/slack.js";
+import type { CandidateLine, ClassificationReason, RawFrontmatter } from "./raw-to-wiki/types.js";
+
+export type { CandidateLine, ClassificationReason } from "./raw-to-wiki/types.js";
 
 export interface GranolaRawToWikiOptions {
   repoRoot: string;
@@ -32,14 +73,10 @@ export interface GranolaRawMeetingProposal {
   proposalPath: string;
 }
 
-export interface CandidateLine {
-  line: number;
-  text: string;
-}
-
 export interface GranolaRawToWikiSkip {
   rawPath: string;
   reason: string;
+  classificationReasons?: ClassificationReason[];
 }
 
 export interface GranolaRawToWikiResult {
@@ -56,6 +93,8 @@ export interface GranolaRawToWikiIndexOptions {
   limit?: number;
   dryRun?: boolean;
   now?: Date;
+  taxonomy?: IngestTaxonomy;
+  profile?: IngestTaxonomy;
 }
 
 export interface GranolaWikiIndexItem {
@@ -68,7 +107,10 @@ export interface GranolaWikiIndexItem {
   decisionPaths: string[];
   threadPaths: string[];
   actionCount: number;
+  extractionRunIds: string[];
+  actionCandidateIds: string[];
   writtenPaths: string[];
+  classificationReasons: ClassificationReason[];
 }
 
 export interface GranolaRawToWikiIndexResult {
@@ -89,6 +131,8 @@ export interface RawToWikiIndexOptions {
   limit?: number;
   dryRun?: boolean;
   now?: Date;
+  taxonomy?: IngestTaxonomy;
+  profile?: IngestTaxonomy;
 }
 
 export interface RawToWikiIndexItem {
@@ -103,7 +147,10 @@ export interface RawToWikiIndexItem {
   decisionPaths: string[];
   threadPaths: string[];
   actionCount: number;
+  extractionRunIds: string[];
+  actionCandidateIds: string[];
   writtenPaths: string[];
+  classificationReasons: ClassificationReason[];
 }
 
 export interface RawToWikiIndexResult {
@@ -147,6 +194,28 @@ interface ActionCandidate {
   line?: number;
 }
 
+interface RawToWikiActionExtractionPlan {
+  extractionRunId: string;
+  sourceDocuments: { sourceType: ExtractionSourceType; path: string }[];
+  spans: EvidenceSpan[];
+  results: TodoCandidateResult[];
+  confirmedCount: number;
+}
+
+interface RawToWikiActionExtractionResult {
+  extractionRunIds: string[];
+  actionCandidateIds: string[];
+  confirmedCount: number;
+  published: DailyTodoPublishedAction[];
+  skipped: DailyTodoPublicationSkip[];
+  writtenPaths: string[];
+}
+
+interface RawToWikiPlanApplyResult {
+  writtenPaths: string[];
+  actionExtraction: RawToWikiActionExtractionResult;
+}
+
 interface SourceWikiDraft {
   source: Exclude<RawToWikiSource, "granola">;
   rawPath: string;
@@ -163,12 +232,14 @@ interface SourceWikiDraft {
   decisionCandidates: CandidateLine[];
   threadCandidates: CandidateLine[];
   metadata: RawFrontmatter;
+  classificationReasons: ClassificationReason[];
 }
 
 interface SkippedRawSourceDraft {
   skipped: true;
   rawPath: string;
   reason: string;
+  classificationReasons?: ClassificationReason[];
 }
 
 interface SourceClassified {
@@ -177,6 +248,7 @@ interface SourceClassified {
   decisions: EntityCandidate[];
   threads: EntityCandidate[];
   actions: ActionCandidate[];
+  classificationReasons: ClassificationReason[];
 }
 
 interface SourceWikiApplyPlan {
@@ -192,6 +264,7 @@ interface ClassifiedMeeting {
   decisions: EntityCandidate[];
   threads: EntityCandidate[];
   actions: ActionCandidate[];
+  classificationReasons: ClassificationReason[];
 }
 
 interface GranolaWikiApplyPlan {
@@ -201,53 +274,8 @@ interface GranolaWikiApplyPlan {
   writtenPaths: string[];
 }
 
-interface RawFrontmatter {
-  scalars: Record<string, string>;
-  arrays: Record<string, string[]>;
-}
-
-const ACTION_PATTERNS = [
-  /^\s*[-*]\s+\[[ x]\]\s+/i,
-  /\b(action item|todo|follow[- ]?up|next step|owner:|due:)\b/i,
-  /\b(I|we|they|[A-Z][a-z]+)\s+(will|should|need to|needs to|must)\b/,
-];
-
-const DECISION_PATTERNS = [
-  /\b(decision|decided|agreed|approved|greenlit|settled)\b/i,
-  /\b(we will|we're going to|going forward|the plan is)\b/i,
-];
-
-const SLACK_MATERIAL_PATTERNS = [
-  /\?/,
-  /\b(can you|could you|please|i'd like|i would like|i want|we need|need help|let's|lets)\b/i,
-  /\b(add|remove|update|migrate|fix|debug|investigate|look at|take a look|make)\b/i,
-  /\b(what happened|why|how do|should we|do we know|is it possible|question)\b/i,
-  /\b(decision|agreed|decided|approved|we will|going forward|the plan is)\b/i,
-  /\b(customer|support issue|linear issue|severity|root cause|incident|pricing|launch|onboarding|self serve)\b/i,
-  /\b(task|pull request|pr|feature flag|billing|trial|quota|token|cost|modal|vercel|sandbox|sentry|security|bug|error|slack app|deploy marker)\b/i,
-  /\$handle-[a-z-]+/i,
-];
-
-const SLACK_LOW_SIGNAL_PATTERNS = [
-  /^\[?roomote-(worker|dispatcher)\]?/i,
-  /^\[?roomote\]?\s+error\b/i,
-  /^roomote (worker|dispatcher|error)\b/i,
-  /\bcodex-acp:stderr\b/i,
-  /\btrpcclienterror\b/i,
-  /\bquota exceeded\b/i,
-  /^router-slack\b/i,
-  /^\*?(codepush|deploy(?:[- ][a-z0-9]+)*)\*?.*\bstarting\b/i,
-  /^\*?(codepush|deploy(?:[- ][a-z0-9]+)*)\*?.*\bsuccess\b/i,
-  /^release merged to\s+[`'"]?main[`'"]?\b/i,
-  /^published\b.+\bsuccessfully to npm\b/i,
-  /\b(detached worker run exited|error level error is not supported)\b/i,
-  /\b(status\.[a-z0-9.-]+|githubstatus\.com|vercel-status\.com)\b/i,
-  /(?:\bbell\b|:bell:)\s*[: -]?\s*(unsuccessful|new user|new waitlist|platform issue|prompt requests|alternative software|yesterday)/i,
-  /\bnew support ticket\b/i,
-  /\bhandshake-new-linkedin-connection-accepted-prospect\b/i,
-  /\broomote e2e (failed|passed)\b/i,
-  /\bweekly stats\b/i,
-];
+const RAW_TO_WIKI_TODO_EXTRACTOR_VERSION = "daily.todo.raw-to-wiki-v1";
+const RAW_TO_WIKI_TODO_VERIFIER_VERSION = "raw-to-wiki.todo-verifier-v1";
 
 export async function runGranolaRawToWikiProposals(
   options: GranolaRawToWikiOptions,
@@ -361,7 +389,10 @@ export async function runGranolaRawToWikiIndex(
       decisionPaths: item.decisionPaths,
       threadPaths: item.threadPaths,
       actionCount: item.actionCount,
+      extractionRunIds: item.extractionRunIds,
+      actionCandidateIds: item.actionCandidateIds,
       writtenPaths: item.writtenPaths,
+      classificationReasons: item.classificationReasons,
     })),
     skipped: result.skipped,
   };
@@ -375,6 +406,7 @@ export async function runRawToWikiIndex(
   const dryRun = options.dryRun ?? false;
   const now = options.now ?? utcNow();
   const sourceLabel = options.source ?? "all";
+  const taxonomy = await loadIngestTaxonomy(repoRoot, options.taxonomy ?? options.profile);
   const store = await SessionStore.open(repoRoot);
   const session = await store.createSession({
     kind: "ingest",
@@ -388,6 +420,9 @@ export async function runRawToWikiIndex(
       dryRun,
       limit: options.limit ?? null,
       source: sourceLabel,
+      taxonomyPath: taxonomy.path,
+      taxonomyFound: taxonomy.found,
+      taxonomySource: taxonomy.source,
     });
 
     const indexed: RawToWikiIndexItem[] = [];
@@ -397,39 +432,78 @@ export async function runRawToWikiIndex(
       const absoluteRawPath = path.resolve(repoRoot, rawPath);
       const relativeRawPath = path.relative(repoRoot, absoluteRawPath);
       const text = await readFile(absoluteRawPath, "utf8");
-      const draft = buildRawSourceDraft(repoRoot, relativeRawPath, text);
+      const draft = buildRawSourceDraft(repoRoot, relativeRawPath, text, taxonomy);
       if (draft === null) {
-        skipped.push({
+        const skippedItem = {
           rawPath: relativeRawPath,
           reason: "Raw file is not a supported Strata raw source snapshot.",
+        };
+        skipped.push(skippedItem);
+        await store.appendEvent(session.id, "raw_to_wiki.index.skipped", {
+          ...skippedItem,
+          dryRun,
+          source: sourceLabel,
         });
         continue;
       }
       if (isSkippedRawSourceDraft(draft)) {
-        skipped.push({
+        const skippedItem = {
           rawPath: draft.rawPath,
           reason: draft.reason,
+          ...(draft.classificationReasons === undefined
+            ? {}
+            : { classificationReasons: draft.classificationReasons }),
+        };
+        skipped.push(skippedItem);
+        await store.appendEvent(session.id, "raw_to_wiki.index.skipped", {
+          ...skippedItem,
+          dryRun,
+          source: sourceLabel,
         });
         continue;
       }
       if (await sourceDraftAlreadyIndexed(repoRoot, draft)) {
-        skipped.push({
+        const skippedItem = {
           rawPath: relativeRawPath,
           reason: `Source already indexed at ${primaryPathForDraft(draft)}.`,
+        };
+        skipped.push(skippedItem);
+        await store.appendEvent(session.id, "raw_to_wiki.index.skipped", {
+          ...skippedItem,
+          dryRun,
+          source: sourceLabel,
         });
         continue;
       }
 
-      const plan = buildSourceApplyPlan(repoRoot, draft, now);
-      const writtenPaths = dryRun ? plan.writtenPaths : await applySourceWikiPlan(repoRoot, plan);
-      const item = rawToWikiIndexItem(plan, writtenPaths);
+      const plan = buildSourceApplyPlan(repoRoot, draft, now, taxonomy);
+      const actionPlan = await buildRawToWikiActionExtractionPlan(plan, session.id);
+      const applyResult = dryRun
+        ? dryRunApplyResult(plan, actionPlan)
+        : await applySourceWikiPlan(repoRoot, plan, {
+            actionPlan,
+            now,
+            sessionId: session.id,
+            store,
+          });
+      const item = rawToWikiIndexItem(plan, applyResult.writtenPaths, applyResult.actionExtraction);
       indexed.push(item);
       await store.appendEvent(session.id, "raw_to_wiki.index.item", {
         source: item.source,
         rawPath: item.rawPath,
         primaryKind: item.primaryKind,
         primaryPath: item.primaryPath,
+        title: item.title,
+        date: item.date,
+        peoplePaths: item.peoplePaths,
+        projectPaths: item.projectPaths,
+        decisionPaths: item.decisionPaths,
+        threadPaths: item.threadPaths,
+        actionCount: item.actionCount,
+        extractionRunIds: item.extractionRunIds,
+        actionCandidateIds: item.actionCandidateIds,
         writtenPaths: item.writtenPaths,
+        classificationReasons: item.classificationReasons,
         dryRun,
       });
     }
@@ -447,7 +521,13 @@ export async function runRawToWikiIndex(
     await store.appendEvent(session.id, "raw_to_wiki.index.completed", {
       scanned: rawPaths.length,
       indexedCount: indexed.length,
-      skipped: skipped.map((item) => ({ rawPath: item.rawPath, reason: item.reason })),
+      skipped: skipped.map((item) => ({
+        rawPath: item.rawPath,
+        reason: item.reason,
+        ...(item.classificationReasons === undefined
+          ? {}
+          : { classificationReasons: item.classificationReasons }),
+      })),
       dryRun,
       source: sourceLabel,
     });
@@ -495,8 +575,8 @@ export function buildGranolaMeetingDraft(
     "meetings",
     `${date}-${slugify(title, "meeting")}.md`,
   );
-  const actionCandidates = candidateLines(body, ACTION_PATTERNS, 12);
-  const decisionCandidates = candidateLines(body, DECISION_PATTERNS, 12);
+  const actionCandidates = actionCandidateLines(body, 12);
+  const decisionCandidates = decisionCandidateLines(body, 12);
   const projectCandidates = projectCandidatesFrom(parsed);
   const peopleCandidates = uniqueStrings([...attendees, ...speakerCandidates(body)]).slice(0, 24);
 
@@ -528,8 +608,9 @@ function buildGranolaWikiApplyPlan(
   repoRoot: string,
   draft: RawMeetingDraft,
   now: Date,
+  taxonomy: ResolvedIngestTaxonomy,
 ): GranolaWikiApplyPlan {
-  const classified = classifyGranolaMeeting(draft);
+  const classified = classifyGranolaMeeting(draft, taxonomy);
   const meetingContent = formatMeetingPage(draft, classified, now);
   const writtenPaths = uniqueStrings([
     draft.proposedMeetingPath,
@@ -548,7 +629,13 @@ function buildGranolaWikiApplyPlan(
 async function applyGranolaWikiPlan(
   repoRoot: string,
   plan: GranolaWikiApplyPlan,
-): Promise<string[]> {
+  options: {
+    actionPlan: RawToWikiActionExtractionPlan;
+    now: Date;
+    sessionId: string;
+    store: SessionStore;
+  },
+): Promise<RawToWikiPlanApplyResult> {
   const written = new Set<string>();
   await writeWikiFile(repoRoot, plan.draft.proposedMeetingPath, plan.meetingContent);
   written.add(plan.draft.proposedMeetingPath);
@@ -573,21 +660,20 @@ async function applyGranolaWikiPlan(
       written.add(thread.path);
     }
   }
-  if (await appendActions(repoRoot, "mine", plan)) {
-    written.add("wiki/actions/mine.md");
-  }
-  if (await appendActions(repoRoot, "theirs", plan)) {
-    written.add("wiki/actions/theirs.md");
+  const actionExtraction = await publishRawToWikiActionExtraction(repoRoot, options);
+  for (const actionPath of actionExtraction.writtenPaths) {
+    written.add(actionPath);
   }
   if (await updateWikiIndex(repoRoot, plan)) {
     written.add("wiki/index.md");
   }
-  return [...written];
+  return { writtenPaths: [...written], actionExtraction };
 }
 
 function granolaWikiIndexItem(
   plan: GranolaWikiApplyPlan,
   writtenPaths: string[],
+  actionExtraction: RawToWikiActionExtractionResult,
 ): GranolaWikiIndexItem {
   return {
     rawPath: plan.draft.rawPath,
@@ -598,8 +684,11 @@ function granolaWikiIndexItem(
     projectPaths: plan.classified.projects.map((item) => item.path),
     decisionPaths: plan.classified.decisions.map((item) => item.path),
     threadPaths: plan.classified.threads.map((item) => item.path),
-    actionCount: plan.classified.actions.length,
+    actionCount: actionExtraction.confirmedCount,
+    extractionRunIds: actionExtraction.extractionRunIds,
+    actionCandidateIds: actionExtraction.actionCandidateIds,
     writtenPaths,
+    classificationReasons: plan.classified.classificationReasons,
   };
 }
 
@@ -607,6 +696,7 @@ function buildRawSourceDraft(
   repoRoot: string,
   rawPath: string,
   text: string,
+  taxonomy: ResolvedIngestTaxonomy,
 ): RawMeetingDraft | SourceWikiDraft | SkippedRawSourceDraft | null {
   const parsed = parseRawFrontmatter(text);
   const source = sourceFromRaw(rawPath, parsed);
@@ -614,10 +704,10 @@ function buildRawSourceDraft(
     return buildGranolaMeetingDraft(repoRoot, rawPath, text);
   }
   if (source === "notion") {
-    return buildNotionSourceDraft(rawPath, text, parsed);
+    return buildNotionSourceDraft(rawPath, text, parsed, taxonomy);
   }
   if (source === "slack") {
-    return buildSlackSourceDraft(rawPath, text, parsed);
+    return buildSlackSourceDraft(rawPath, text, parsed, taxonomy);
   }
   return null;
 }
@@ -650,6 +740,7 @@ function buildNotionSourceDraft(
   rawPath: string,
   text: string,
   parsed: RawFrontmatter,
+  taxonomy: ResolvedIngestTaxonomy,
 ): SourceWikiDraft | null {
   if (parsed.scalars.type !== "raw_notion_page" && parsed.scalars.source !== "notion") {
     return null;
@@ -662,12 +753,18 @@ function buildNotionSourceDraft(
     dateFromRawPath(rawPath) ??
     utcNow().toISOString().slice(0, 10);
   const summary = sourceSummary(body);
-  const primaryLabel = cleanProjectLabel(title);
-  const projectCandidates = uniqueStrings([
-    primaryLabel,
-    ...projectCandidatesFrom(parsed),
-    ...projectLabelsFromTitleAndBody(title, body),
-  ]).slice(0, 8);
+  const primaryTitleLabel = cleanProjectLabel(title);
+  const primaryLabel =
+    canonicalProjectLabelForText(primaryTitleLabel, taxonomy) ?? primaryTitleLabel;
+  const aliasMatches = projectLabelsFromTaxonomyText(`${title}\n${body}`, taxonomy);
+  const projectCandidates = normalizeProjectLabels(
+    uniqueStrings([
+      primaryLabel,
+      ...projectCandidatesFrom(parsed),
+      ...projectLabelsFromTitleAndBody(title, body, taxonomy),
+    ]),
+    taxonomy,
+  ).slice(0, 8);
   return {
     source: "notion",
     rawPath,
@@ -680,10 +777,11 @@ function buildNotionSourceDraft(
     primaryPath: path.join("wiki", "projects", `${slugify(primaryLabel, "notion-page")}.md`),
     peopleCandidates: peopleCandidatesForSource(body, parsed).slice(0, 16),
     projectCandidates,
-    actionCandidates: candidateLines(summary, ACTION_PATTERNS, 8),
-    decisionCandidates: candidateLines(summary, DECISION_PATTERNS, 8),
+    actionCandidates: actionCandidateLines(summary, 8),
+    decisionCandidates: decisionCandidateLines(summary, 8),
     threadCandidates: threadCandidatesForSource(summary, 8),
     metadata: parsed,
+    classificationReasons: aliasMatches.reasons,
   };
 }
 
@@ -691,6 +789,7 @@ function buildSlackSourceDraft(
   rawPath: string,
   text: string,
   parsed: RawFrontmatter,
+  taxonomy: ResolvedIngestTaxonomy,
 ): SourceWikiDraft | SkippedRawSourceDraft | null {
   if (parsed.scalars.type !== "raw_slack_thread" && parsed.scalars.source !== "slack") {
     return null;
@@ -699,19 +798,20 @@ function buildSlackSourceDraft(
   const body = stripLeadingTitle(split.body);
   const title = parsed.scalars.title || firstHeading(split.body) || "Slack thread";
   const messages = slackMessageTexts(body);
-  const materiality = slackMateriality({ body, messages, parsed, title });
+  const materiality = slackMateriality({ body, messages, parsed, title, taxonomy });
   if (!materiality.material) {
     return {
       skipped: true,
       rawPath,
       reason: materiality.reason,
+      classificationReasons: materiality.classificationReasons,
     };
   }
   const date =
     normalizeDate(parsed.scalars.date) ??
     dateFromRawPath(rawPath) ??
     utcNow().toISOString().slice(0, 10);
-  const summary = slackSummary(messages, title);
+  const summary = slackSummary(messages, title, taxonomy);
   const channel = parsed.scalars.channel || "slack";
   const threadTs = parsed.scalars.thread_ts || slugify(title, "thread");
   const primarySlug = `${date}-${slackTsSlug(threadTs)}-${slugify(title, "thread")}`;
@@ -725,12 +825,19 @@ function buildSlackSourceDraft(
     summary,
     primaryKind: "source",
     primaryPath: path.join("wiki", "sources", "slack", slugify(channel), `${primarySlug}.md`),
-    peopleCandidates: slackParticipantsFromHeadings(body).slice(0, 16),
-    projectCandidates: slackProjectLabelsFromTitleAndBody(title, body).slice(0, 8),
-    actionCandidates: candidateLines(summary, ACTION_PATTERNS, 8),
-    decisionCandidates: candidateLines(summary, DECISION_PATTERNS, 8),
+    peopleCandidates: slackParticipantsFromHeadings(body)
+      .filter((name) => !looksLikeMachineUser(name))
+      .filter(looksLikePersonName)
+      .slice(0, 16),
+    projectCandidates: slackProjectLabelsFromTitleAndBody(title, body, taxonomy).slice(0, 8),
+    actionCandidates: slackActionCandidateLines(body, 8),
+    decisionCandidates: decisionCandidateLines(summary, 8),
     threadCandidates: promotedSlackThreadCandidates(summary, 3),
     metadata: parsed,
+    classificationReasons: [
+      ...materiality.classificationReasons,
+      ...projectLabelsFromTaxonomyText(`${title}\n${body}`, taxonomy).reasons,
+    ],
   };
 }
 
@@ -755,11 +862,12 @@ function buildSourceApplyPlan(
   repoRoot: string,
   draft: RawMeetingDraft | SourceWikiDraft,
   now: Date,
+  taxonomy: ResolvedIngestTaxonomy,
 ): GranolaWikiApplyPlan | SourceWikiApplyPlan {
   if ("proposedMeetingPath" in draft) {
-    return buildGranolaWikiApplyPlan(repoRoot, draft, now);
+    return buildGranolaWikiApplyPlan(repoRoot, draft, now, taxonomy);
   }
-  const classified = classifySourceDraft(draft);
+  const classified = classifySourceDraft(draft, taxonomy);
   const primaryContent = formatSourcePrimaryPage(draft, classified, now);
   const writtenPaths = uniqueStrings([
     draft.primaryPath,
@@ -775,12 +883,212 @@ function buildSourceApplyPlan(
   return { draft, classified, primaryContent, writtenPaths };
 }
 
+async function buildRawToWikiActionExtractionPlan(
+  plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
+  sessionId: string,
+): Promise<RawToWikiActionExtractionPlan> {
+  const sourceType = sourceTypeForPlan(plan);
+  const sourcePath = plan.draft.rawPath;
+  const spans = plan.classified.actions.map((action, index) => {
+    const line = action.line ?? 1;
+    return {
+      id: `raw_to_wiki_todo_${hashText(
+        [sourcePath, line, index, action.owner, action.text].join(":"),
+      )}`,
+      sourcePath,
+      sourceKind: "raw" as const,
+      sourceType,
+      date: plan.draft.date,
+      lineStart: line,
+      lineEnd: line,
+      text: action.text,
+      metadata: {
+        title: plan.draft.title,
+        sourceTarget: primaryPathForPlan(plan),
+        sourceLabel: plan.draft.title,
+        rawPath: sourcePath,
+        rawToWikiSource: sourceType,
+        rawToWikiPrimaryKind: "meetingContent" in plan ? "meeting" : plan.draft.primaryKind,
+        rawToWikiPrimaryPath: primaryPathForPlan(plan),
+        rawToWikiOwner: action.owner,
+        rawToWikiActionText: action.text,
+      },
+    } satisfies EvidenceSpan;
+  });
+  const evaluated = await evaluateTodoCandidates(spans, fakeDailyTodoVerifier);
+  const results = evaluated.map(rawToWikiVerifiedTodoResult);
+  return {
+    extractionRunId: rawToWikiExtractionRunId(sessionId, sourcePath),
+    sourceDocuments: [{ sourceType, path: sourcePath }],
+    spans,
+    results,
+    confirmedCount: results.filter((result) => result.status === "confirmed").length,
+  };
+}
+
+function dryRunApplyResult(
+  plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
+  actionPlan: RawToWikiActionExtractionPlan,
+): RawToWikiPlanApplyResult {
+  const actionExtraction = dryRunActionExtraction(actionPlan);
+  return {
+    writtenPaths: predictedWrittenPaths(plan, actionPlan),
+    actionExtraction,
+  };
+}
+
+function dryRunActionExtraction(
+  actionPlan: RawToWikiActionExtractionPlan,
+): RawToWikiActionExtractionResult {
+  return {
+    extractionRunIds: [],
+    actionCandidateIds: [],
+    confirmedCount: actionPlan.confirmedCount,
+    published: [],
+    skipped: [],
+    writtenPaths: [],
+  };
+}
+
+function predictedWrittenPaths(
+  plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
+  actionPlan: RawToWikiActionExtractionPlan,
+): string[] {
+  const paths = new Set(
+    plan.writtenPaths.filter(
+      (candidate) => candidate !== "wiki/actions/mine.md" && candidate !== "wiki/actions/theirs.md",
+    ),
+  );
+  for (const result of actionPlan.results) {
+    if (result.status !== "confirmed") {
+      continue;
+    }
+    const owner = result.verification.owner;
+    if (owner === "mine") {
+      paths.add("wiki/actions/mine.md");
+    } else if (owner === "theirs") {
+      paths.add("wiki/actions/theirs.md");
+    }
+  }
+  return [...paths];
+}
+
+async function publishRawToWikiActionExtraction(
+  repoRoot: string,
+  options: {
+    actionPlan: RawToWikiActionExtractionPlan;
+    now: Date;
+    sessionId: string;
+    store: SessionStore;
+  },
+): Promise<RawToWikiActionExtractionResult> {
+  if (options.actionPlan.results.length === 0) {
+    return emptyActionExtraction();
+  }
+  const publication = await publishDailyTodoCandidateResultsInStore({
+    repoRoot,
+    store: options.store,
+    sessionId: options.sessionId,
+    extractionRunId: options.actionPlan.extractionRunId,
+    day: options.actionPlan.spans[0]?.date ?? options.now.toISOString().slice(0, 10),
+    sourceDocuments: options.actionPlan.sourceDocuments,
+    spans: options.actionPlan.spans,
+    results: options.actionPlan.results,
+    extractorVersion: RAW_TO_WIKI_TODO_EXTRACTOR_VERSION,
+    verifierVersion: RAW_TO_WIKI_TODO_VERIFIER_VERSION,
+    now: options.now,
+    traceSource: "raw_to_wiki",
+  });
+  return {
+    extractionRunIds: [publication.extraction.extractionRunId],
+    actionCandidateIds: publication.candidateIds,
+    confirmedCount: confirmedPublishedOrDuplicateCount(publication),
+    published: publication.published,
+    skipped: publication.skipped,
+    writtenPaths: uniqueStrings(publication.published.map((item) => item.actionPath)),
+  };
+}
+
+function emptyActionExtraction(): RawToWikiActionExtractionResult {
+  return {
+    extractionRunIds: [],
+    actionCandidateIds: [],
+    confirmedCount: 0,
+    published: [],
+    skipped: [],
+    writtenPaths: [],
+  };
+}
+
+function confirmedPublishedOrDuplicateCount(publication: {
+  published: DailyTodoPublishedAction[];
+  skipped: DailyTodoPublicationSkip[];
+}): number {
+  return (
+    publication.published.length +
+    publication.skipped.filter((item) => item.reason === "duplicate").length
+  );
+}
+
+function rawToWikiVerifiedTodoResult(result: TodoCandidateResult): TodoCandidateResult {
+  if (result.status === "rejected") {
+    return result;
+  }
+  const owner =
+    result.evidence.metadata.rawToWikiOwner === "mine" ||
+    result.evidence.metadata.rawToWikiOwner === "theirs"
+      ? result.evidence.metadata.rawToWikiOwner
+      : result.verification.owner;
+  const actionText =
+    typeof result.evidence.metadata.rawToWikiActionText === "string"
+      ? result.evidence.metadata.rawToWikiActionText.trim()
+      : result.verification.actionText;
+  return {
+    ...result,
+    status: "confirmed",
+    verification: {
+      ...result.verification,
+      classification: "action",
+      confidence: Math.max(result.verification.confidence, 0.9),
+      owner,
+      actionText: actionText === "" ? result.candidate.candidateText : actionText,
+      rationale:
+        result.verification.rationale.trim().length > 0
+          ? `${result.verification.rationale}; accepted by raw-to-wiki explicit action extraction.`
+          : "Accepted by raw-to-wiki explicit action extraction.",
+    },
+    reasons: uniqueStrings([...result.reasons, "raw_to_wiki_explicit_action"]),
+  };
+}
+
+function primaryPathForPlan(plan: GranolaWikiApplyPlan | SourceWikiApplyPlan): string {
+  return "meetingContent" in plan ? plan.draft.proposedMeetingPath : plan.draft.primaryPath;
+}
+
+function sourceTypeForPlan(plan: GranolaWikiApplyPlan | SourceWikiApplyPlan): ExtractionSourceType {
+  return "meetingContent" in plan ? "granola" : plan.draft.source;
+}
+
+function rawToWikiExtractionRunId(sessionId: string, sourcePath: string): string {
+  return `extract_${sessionId}_${hashText(sourcePath)}`;
+}
+
+function hashText(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
 async function applySourceWikiPlan(
   repoRoot: string,
   plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
-): Promise<string[]> {
+  options: {
+    actionPlan: RawToWikiActionExtractionPlan;
+    now: Date;
+    sessionId: string;
+    store: SessionStore;
+  },
+): Promise<RawToWikiPlanApplyResult> {
   if ("meetingContent" in plan) {
-    return applyGranolaWikiPlan(repoRoot, plan);
+    return applyGranolaWikiPlan(repoRoot, plan, options);
   }
   const written = new Set<string>();
   if (await upsertSourcePrimaryPage(repoRoot, plan)) {
@@ -806,24 +1114,23 @@ async function applySourceWikiPlan(
       written.add(thread.path);
     }
   }
-  if (await appendSourceActions(repoRoot, "mine", plan)) {
-    written.add("wiki/actions/mine.md");
-  }
-  if (await appendSourceActions(repoRoot, "theirs", plan)) {
-    written.add("wiki/actions/theirs.md");
+  const actionExtraction = await publishRawToWikiActionExtraction(repoRoot, options);
+  for (const actionPath of actionExtraction.writtenPaths) {
+    written.add(actionPath);
   }
   if (await updateSourceWikiIndex(repoRoot, plan)) {
     written.add("wiki/index.md");
   }
-  return [...written];
+  return { writtenPaths: [...written], actionExtraction };
 }
 
 function rawToWikiIndexItem(
   plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
   writtenPaths: string[],
+  actionExtraction: RawToWikiActionExtractionResult,
 ): RawToWikiIndexItem {
   if ("meetingContent" in plan) {
-    const item = granolaWikiIndexItem(plan, writtenPaths);
+    const item = granolaWikiIndexItem(plan, writtenPaths, actionExtraction);
     return {
       source: "granola",
       rawPath: item.rawPath,
@@ -836,7 +1143,10 @@ function rawToWikiIndexItem(
       decisionPaths: item.decisionPaths,
       threadPaths: item.threadPaths,
       actionCount: item.actionCount,
+      extractionRunIds: item.extractionRunIds,
+      actionCandidateIds: item.actionCandidateIds,
       writtenPaths,
+      classificationReasons: item.classificationReasons,
     };
   }
   return {
@@ -853,20 +1163,27 @@ function rawToWikiIndexItem(
       plan.draft.primaryKind === "thread" ? plan.draft.primaryPath : "",
       ...plan.classified.threads.map((item) => item.path),
     ]).filter((item) => item !== ""),
-    actionCount: plan.classified.actions.length,
+    actionCount: actionExtraction.confirmedCount,
+    extractionRunIds: actionExtraction.extractionRunIds,
+    actionCandidateIds: actionExtraction.actionCandidateIds,
     writtenPaths,
+    classificationReasons: plan.classified.classificationReasons,
   };
 }
 
-function classifyGranolaMeeting(draft: RawMeetingDraft): ClassifiedMeeting {
+function classifyGranolaMeeting(
+  draft: RawMeetingDraft,
+  taxonomy: ResolvedIngestTaxonomy,
+): ClassifiedMeeting {
   const summary = meetingSummary(draft);
-  const summaryActionCandidates = candidateLines(summary, ACTION_PATTERNS, 8);
-  const summaryDecisionCandidates = candidateLines(summary, DECISION_PATTERNS, 6);
+  const aliasMatches = projectLabelsFromTaxonomyText(`${draft.title}\n${draft.body}`, taxonomy);
+  const summaryActionCandidates = actionCandidateLines(summary, 8);
+  const summaryDecisionCandidates = decisionCandidateLines(summary, 6);
   const people = draft.peopleCandidates.map((name) => ({
     label: name,
     path: path.join("wiki", "people", `${slugify(name, "person")}.md`),
   }));
-  const projects = projectCandidatesForMeeting(draft).map((label) => ({
+  const projects = projectCandidatesForMeeting(draft, taxonomy).map((label) => ({
     label,
     path: path.join("wiki", "projects", `${slugify(label, "project")}.md`),
   }));
@@ -890,7 +1207,7 @@ function classifyGranolaMeeting(draft: RawMeetingDraft): ClassifiedMeeting {
   });
   const actions = summaryActionCandidates.map((candidate) => ({
     text: candidate.text,
-    owner: actionOwner(candidate.text),
+    owner: actionOwner(candidate.text, taxonomy),
     line: candidate.line,
   }));
   return {
@@ -899,10 +1216,14 @@ function classifyGranolaMeeting(draft: RawMeetingDraft): ClassifiedMeeting {
     decisions: dedupeByPath(decisions),
     threads: dedupeByPath(threads).slice(0, 6),
     actions,
+    classificationReasons: aliasMatches.reasons,
   };
 }
 
-function classifySourceDraft(draft: SourceWikiDraft): SourceClassified {
+function classifySourceDraft(
+  draft: SourceWikiDraft,
+  taxonomy: ResolvedIngestTaxonomy,
+): SourceClassified {
   const people = draft.peopleCandidates.map((name) => ({
     label: name,
     path: path.join("wiki", "people", `${slugify(name, "person")}.md`),
@@ -931,7 +1252,7 @@ function classifySourceDraft(draft: SourceWikiDraft): SourceClassified {
   });
   const actions = draft.actionCandidates.map((candidate) => ({
     text: candidate.text,
-    owner: actionOwner(candidate.text),
+    owner: actionOwner(candidate.text, taxonomy),
     line: candidate.line,
   }));
   return {
@@ -940,6 +1261,7 @@ function classifySourceDraft(draft: SourceWikiDraft): SourceClassified {
     decisions: dedupeByPath(decisions).slice(0, 6),
     threads: dedupeByPath(threads).slice(0, 6),
     actions,
+    classificationReasons: draft.classificationReasons,
   };
 }
 
@@ -1311,48 +1633,6 @@ async function upsertThreadPage(
   return true;
 }
 
-async function appendActions(
-  repoRoot: string,
-  owner: "mine" | "theirs",
-  plan: GranolaWikiApplyPlan,
-): Promise<boolean> {
-  const actions = plan.classified.actions.filter((action) => action.owner === owner);
-  if (actions.length === 0) {
-    return false;
-  }
-  const filePath = owner === "mine" ? "wiki/actions/mine.md" : "wiki/actions/theirs.md";
-  const existing = await readWikiFile(repoRoot, filePath);
-  const base =
-    existing ??
-    [
-      frontmatter({
-        type: "actions",
-        owner: owner === "mine" ? "me" : "others",
-        last_updated: plan.draft.date,
-      }).trimEnd(),
-      "",
-      owner === "mine" ? "# What I Owe Others" : "# What Others Owe Me",
-      "",
-    ].join("\n");
-  const withoutPlaceholder = base.replace(
-    /\n- \[ \] Add action items here as they are extracted from sources\.\n?/,
-    "\n",
-  );
-  const lines = actions.map((action) => {
-    return `- [ ] ${action.text} (source: ${wikiLink(plan.draft.proposedMeetingPath, plan.draft.title)})`;
-  });
-  const updated = updateFrontmatterScalar(
-    upsertSectionLines(withoutPlaceholder, null, lines),
-    "last_updated",
-    plan.draft.date,
-  );
-  if (updated === existing) {
-    return false;
-  }
-  await writeWikiFile(repoRoot, filePath, updated);
-  return true;
-}
-
 async function updateWikiIndex(repoRoot: string, plan: GranolaWikiApplyPlan): Promise<boolean> {
   const existing = await readWikiFile(repoRoot, "wiki/index.md");
   let next = existing ?? defaultIndexContent();
@@ -1623,48 +1903,6 @@ async function upsertSourceThreadPage(
   return true;
 }
 
-async function appendSourceActions(
-  repoRoot: string,
-  owner: "mine" | "theirs",
-  plan: SourceWikiApplyPlan,
-): Promise<boolean> {
-  const actions = plan.classified.actions.filter((action) => action.owner === owner);
-  if (actions.length === 0) {
-    return false;
-  }
-  const filePath = owner === "mine" ? "wiki/actions/mine.md" : "wiki/actions/theirs.md";
-  const existing = await readWikiFile(repoRoot, filePath);
-  const base =
-    existing ??
-    [
-      frontmatter({
-        type: "actions",
-        owner: owner === "mine" ? "me" : "others",
-        last_updated: plan.draft.date,
-      }).trimEnd(),
-      "",
-      owner === "mine" ? "# What I Owe Others" : "# What Others Owe Me",
-      "",
-    ].join("\n");
-  const withoutPlaceholder = base.replace(
-    /\n- \[ \] Add action items here as they are extracted from sources\.\n?/,
-    "\n",
-  );
-  const lines = actions.map((action) => {
-    return `- [ ] ${action.text} (source: ${wikiLink(plan.draft.primaryPath, plan.draft.title)})`;
-  });
-  const updated = updateFrontmatterScalar(
-    upsertSectionLines(withoutPlaceholder, null, lines),
-    "last_updated",
-    plan.draft.date,
-  );
-  if (updated === existing) {
-    return false;
-  }
-  await writeWikiFile(repoRoot, filePath, updated);
-  return true;
-}
-
 async function updateSourceWikiIndex(
   repoRoot: string,
   plan: SourceWikiApplyPlan,
@@ -1781,49 +2019,6 @@ function stripLeadingTitle(body: string): string {
     .trim();
 }
 
-function candidateLines(body: string, patterns: RegExp[], limit: number): CandidateLine[] {
-  const candidates: CandidateLine[] = [];
-  const seen = new Set<string>();
-  const lines = body.split(/\r?\n/);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = (lines[index] ?? "").trim();
-    if (line === "" || line.startsWith("#")) {
-      continue;
-    }
-    if (!patterns.some((pattern) => pattern.test(line))) {
-      continue;
-    }
-    const normalized = cleanCandidateText(line);
-    if (seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    candidates.push({ line: index + 1, text: normalized });
-    if (candidates.length >= limit) {
-      break;
-    }
-  }
-  return candidates;
-}
-
-function speakerCandidates(body: string): string[] {
-  return body.split(/\r?\n/).flatMap((line) => {
-    const match = /^([A-Z][A-Za-z .'-]{1,60}):\s+\S/.exec(line.trim());
-    const name = match?.[1]?.trim() ?? "";
-    return looksLikePersonName(name) ? [name] : [];
-  });
-}
-
-function looksLikePersonName(value: string): boolean {
-  if (value === "" || value.includes("@")) {
-    return false;
-  }
-  if (/^(speaker|microphone|summary|transcript|action|decision|next step)$/i.test(value)) {
-    return false;
-  }
-  return value.split(/\s+/).every((part) => /^[A-Z][A-Za-z.'-]*$/.test(part));
-}
-
 function projectCandidatesFrom(parsed: RawFrontmatter): string[] {
   const frontmatterProjects = [
     ...(parsed.arrays.projects ?? []),
@@ -1835,20 +2030,6 @@ function projectCandidatesFrom(parsed: RawFrontmatter): string[] {
     return uniqueStrings(explicit);
   }
   return [];
-}
-
-function stripSpeakerPrefix(line: string): string {
-  const match = /^([A-Z][A-Za-z .'-]{1,60}):\s+(.+)$/.exec(line);
-  return match && looksLikePersonName(match[1] ?? "") ? (match[2] ?? line) : line;
-}
-
-function cleanCandidateText(line: string): string {
-  return stripSpeakerPrefix(line)
-    .replace(/^\s*[-*]\s+/, "")
-    .replace(/^\s*\d+\.\s+/, "")
-    .replace(/^\[[ x]\]\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function uncertaintyFor(input: {
@@ -1981,7 +2162,10 @@ function uniqueStrings(items: string[]): string[] {
   return result;
 }
 
-function projectCandidatesForMeeting(draft: RawMeetingDraft): string[] {
+function projectCandidatesForMeeting(
+  draft: RawMeetingDraft,
+  taxonomy: ResolvedIngestTaxonomy,
+): string[] {
   const candidates = [...draft.projectCandidates];
   const titleProject = projectLabelFromTitle(draft.title);
   if (titleProject) {
@@ -1992,10 +2176,17 @@ function projectCandidatesForMeeting(draft: RawMeetingDraft): string[] {
       candidates.push(cleanProjectLabel(heading));
     }
   }
-  return uniqueStrings(candidates).slice(0, 8);
+  candidates.push(
+    ...projectLabelsFromTaxonomyText(`${draft.title}\n${draft.body}`, taxonomy).labels,
+  );
+  return normalizeProjectLabels(candidates, taxonomy).slice(0, 8);
 }
 
-function projectLabelsFromTitleAndBody(title: string, body: string): string[] {
+function projectLabelsFromTitleAndBody(
+  title: string,
+  body: string,
+  taxonomy: ResolvedIngestTaxonomy,
+): string[] {
   const candidates = [];
   const titleProject = projectLabelFromTitle(title);
   if (titleProject) {
@@ -2006,53 +2197,19 @@ function projectLabelsFromTitleAndBody(title: string, body: string): string[] {
       candidates.push(cleanProjectLabel(heading));
     }
   }
-  candidates.push(...canonicalProjectLabelsFromText(`${title}\n${body}`));
-  return uniqueStrings(candidates).slice(0, 8);
+  candidates.push(...projectLabelsFromTaxonomyText(`${title}\n${body}`, taxonomy).labels);
+  return normalizeProjectLabels(candidates, taxonomy).slice(0, 8);
 }
 
-function slackProjectLabelsFromTitleAndBody(title: string, body: string): string[] {
-  return canonicalProjectLabelsFromText(`${title}\n${body}`).slice(0, 8);
+function slackProjectLabelsFromTitleAndBody(
+  title: string,
+  body: string,
+  taxonomy: ResolvedIngestTaxonomy,
+): string[] {
+  return projectLabelsFromTaxonomyText(`${title}\n${body}`, taxonomy).labels.slice(0, 8);
 }
-
-function canonicalProjectLabelsFromText(text: string): string[] {
-  const candidates = [];
-  for (const rule of CANONICAL_PROJECT_PATTERNS) {
-    if (rule.patterns.some((pattern) => pattern.test(text))) {
-      candidates.push(rule.label);
-    }
-  }
-  return uniqueStrings(candidates);
-}
-
-const CANONICAL_PROJECT_PATTERNS: { label: string; patterns: RegExp[] }[] = [
-  { label: "Roo Code", patterns: [/\broo\s*code\b/i, /\broocodeinc\b/i] },
-  { label: "Roomote", patterns: [/\broomote\b/i, /\bnewmote\b/i] },
-  { label: "Slackiness", patterns: [/\bslackiness\b/i] },
-  { label: "Granola", patterns: [/\bgranola\b/i] },
-  { label: "Notion", patterns: [/\bnotion\b/i] },
-  { label: "Slack", patterns: [/\bslack\b/i] },
-  { label: "Codex", patterns: [/\bcodex\b/i] },
-  { label: "MCP", patterns: [/\bmcp\b/i] },
-  { label: "Self Serve", patterns: [/\bself[- ]?serve\b/i] },
-  { label: "Pricing", patterns: [/\bpricing\b/i] },
-  { label: "Sentry", patterns: [/\bsentry\b/i] },
-  { label: "Modal", patterns: [/\bmodal\b/i] },
-  { label: "Vercel", patterns: [/\bvercel\b/i] },
-  { label: "Sandbox", patterns: [/\bsandbox(?:es)?\b/i] },
-  { label: "Feature Flags", patterns: [/\bfeature flags?\b/i] },
-  { label: "Security", patterns: [/\bsecurity\b/i] },
-  { label: "Billing", patterns: [/\bbilling\b/i] },
-  { label: "Quota", patterns: [/\bquota\b/i] },
-  { label: "Tokens", patterns: [/\btokens?\b/i] },
-  { label: "E2E", patterns: [/\be2e\b/i] },
-  { label: "Onboarding", patterns: [/\bonboarding\b/i] },
-  { label: "Launch", patterns: [/\blaunch\b/i] },
-];
 
 function projectLabelFromTitle(title: string): string | null {
-  if (/roo\s*code/i.test(title)) {
-    return "Roo Code";
-  }
   const stripped = title
     .replace(/\b(daily sync|weekly team meeting|meeting prep|aim to end early)\b/gi, " ")
     .replace(/\s*\/\s*/g, " ")
@@ -2070,7 +2227,7 @@ function summaryHeadings(body: string): string[] {
 }
 
 function isProjectLikeHeading(value: string): boolean {
-  return /\b(product|project|launch|pricing|positioning|onboarding|outbound|content|integration|classifier|framework|architecture|strategy|sentry|slackiness|go-to-market|chores?|roocode|roo code)\b/i.test(
+  return /\b(project|initiative|workstream|program|roadmap|strategy|architecture|launch)\b/i.test(
     value,
   );
 }
@@ -2094,13 +2251,6 @@ function threadCandidatesForMeeting(_draft: RawMeetingDraft, summary: string): C
   return candidateLines(summary, patterns, 6);
 }
 
-function actionOwner(text: string): "mine" | "theirs" {
-  if (/\b(chris|i|i'll|i will)\b/i.test(text)) {
-    return "mine";
-  }
-  return "theirs";
-}
-
 function peopleCandidatesForSource(body: string, parsed: RawFrontmatter): string[] {
   const frontmatterPeople = [
     ...(parsed.arrays.attendees ?? []),
@@ -2114,152 +2264,6 @@ function peopleCandidatesForSource(body: string, parsed: RawFrontmatter): string
 
 function looksLikeMachineUser(value: string): boolean {
   return /^U[A-Z0-9]{6,}$/i.test(value) || /^B[A-Z0-9]{6,}$/i.test(value);
-}
-
-interface SlackMaterialityInput {
-  body: string;
-  messages: string[];
-  parsed: RawFrontmatter;
-  title: string;
-}
-
-type SlackMaterialityResult = { material: true } | { material: false; reason: string };
-
-function slackMateriality(input: SlackMaterialityInput): SlackMaterialityResult {
-  const meaningfulMessages = input.messages.filter(isMeaningfulSlackMessage);
-  if (meaningfulMessages.length === 0) {
-    return { material: false, reason: "Slack thread contains no message text." };
-  }
-
-  const combined = normalizeSlackText([input.title, ...meaningfulMessages.slice(0, 12)].join("\n"));
-  const signalCombined = slackSignalText(combined);
-  const nonLogCombined = slackSignalText(
-    meaningfulMessages
-      .filter((message) => !looksLikeSlackLogMessage(message))
-      .filter((message) => !isSlackStatusOnlyMessage(message))
-      .join("\n"),
-  );
-  const actionCandidates = candidateLines(signalCombined, ACTION_PATTERNS, 1);
-  const decisionCandidates = candidateLines(signalCombined, DECISION_PATTERNS, 1);
-  const hasMaterialSignal =
-    SLACK_MATERIAL_PATTERNS.some((pattern) => pattern.test(signalCombined)) ||
-    actionCandidates.length > 0 ||
-    decisionCandidates.length > 0;
-  const hasNonLogMaterialSignal =
-    nonLogCombined !== "" &&
-    SLACK_MATERIAL_PATTERNS.some((pattern) => pattern.test(nonLogCombined));
-  const lowSignalTitle = SLACK_LOW_SIGNAL_PATTERNS.some((pattern) => pattern.test(combined));
-  const statusOnly = meaningfulMessages.every(isSlackStatusOnlyMessage);
-  const linkOnly = isSlackLinkOnlyThread(input.title, meaningfulMessages);
-
-  if (lowSignalTitle && !hasNonLogMaterialSignal) {
-    return {
-      material: false,
-      reason: "Slack thread appears to be an automation/log notification.",
-    };
-  }
-  if (statusOnly && !hasMaterialSignal) {
-    return {
-      material: false,
-      reason: "Slack thread only contains routine status/progress updates.",
-    };
-  }
-  if (linkOnly) {
-    return {
-      material: false,
-      reason: "Slack thread only contains links and no material context.",
-    };
-  }
-  if (!hasMaterialSignal) {
-    return {
-      material: false,
-      reason: "Slack thread has no material ask, decision, action, incident, or project signal.",
-    };
-  }
-
-  return { material: true };
-}
-
-function normalizeSlackText(value: string): string {
-  return value
-    .replace(/<@U[A-Z0-9]+>/gi, " ")
-    .replace(/<!subteam\^[^>]+>/gi, " ")
-    .replace(/<([^|>]+)\|([^>]+)>/g, "$2 $1")
-    .replace(/<([^>]+)>/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function slackSignalText(value: string): string {
-  return normalizeSlackText(value)
-    .replace(/\bhttps?:\/\/\S+/gi, " ")
-    .replace(/\bwww\.\S+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isSlackLinkOnlyThread(title: string, messages: string[]): boolean {
-  if (messages.length > 2) {
-    return false;
-  }
-  const textWithoutLinks = slackSignalText([title, ...messages].join(" "))
-    .replace(/[:#|*_`~>\[\](){}.!?,;-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return textWithoutLinks.length < 24;
-}
-
-function isMeaningfulSlackMessage(message: string): boolean {
-  const normalized = normalizeSlackText(message);
-  if (normalized === "" || /^_?no text_?$/i.test(normalized)) {
-    return false;
-  }
-  return !/^reactions?:/i.test(normalized);
-}
-
-function isSlackStatusOnlyMessage(message: string): boolean {
-  const normalized = normalizeSlackText(message).toLowerCase();
-  return (
-    /^_?no text_?$/.test(normalized) ||
-    /^getting started on your task\b/.test(normalized) ||
-    /^i'?m (looking|pulling|running|checking|working|letting|in the final|going)\b/.test(
-      normalized,
-    ) ||
-    /^validation (is )?(green|passed)\b/.test(normalized) ||
-    /^pre-commit hooks\b/.test(normalized) ||
-    /^draft pr is up\b/.test(normalized) ||
-    /^addressed (the )?(pr|latest pr|latest) feedback\b/.test(normalized) ||
-    /^done\b/.test(normalized) ||
-    /\bwas merged by\b/.test(normalized)
-  );
-}
-
-function looksLikeSlackLogMessage(message: string): boolean {
-  const normalized = normalizeSlackText(message).toLowerCase();
-  return (
-    /^\[?roomote-(worker|dispatcher)\]?/.test(normalized) ||
-    /^\[?roomote\]?\s+error\b/.test(normalized) ||
-    /^roomote (worker|dispatcher|error)\b/.test(normalized) ||
-    /\bcodex-acp:stderr\b/.test(normalized) ||
-    /\btrpcclienterror\b/.test(normalized) ||
-    /\bquota exceeded\b/.test(normalized) ||
-    /\binvalid prompt\b/.test(normalized) ||
-    /\bpolicy\b/.test(normalized) ||
-    /\bunhandled error during turn\b/.test(normalized) ||
-    /(?:\bbell\b|:bell:)\s*[: -]?\s*(unsuccessful|new user|new waitlist|platform issue|prompt requests|alternative software|yesterday)\b/.test(
-      normalized,
-    ) ||
-    /\bnew support ticket\b/.test(normalized) ||
-    /\bmetabaseapp\.com\/question\b/.test(normalized) ||
-    /\b(status\.[a-z0-9.-]+|githubstatus\.com|vercel-status\.com)\b/.test(normalized) ||
-    /^\*?(codepush|deploy(?:[- ][a-z0-9]+)*)\*?.*\b(starting|success)\b/.test(normalized) ||
-    /^release merged to\s+[`'"]?main[`'"]?\b/.test(normalized) ||
-    /\bhandshake-new-linkedin-connection-accepted-prospect\b/.test(normalized) ||
-    /\broomote e2e (failed|passed)\b/.test(normalized) ||
-    /^published\b.+\bsuccessfully to npm\b/.test(normalized) ||
-    /\b(detached worker run exited|error level error is not supported)\b/.test(normalized) ||
-    /\bweekly stats\b/.test(normalized)
-  );
 }
 
 function meetingSummary(draft: Pick<RawMeetingDraft, "body">): string {
@@ -2288,56 +2292,6 @@ function sourceSummary(body: string): string {
     .filter((line) => !/^reactions?:/i.test(line))
     .slice(0, 10);
   return lines.length > 0 ? lines.map((line) => `- ${line}`).join("\n") : "- No summary available.";
-}
-
-function slackSummary(messages: string[], title: string): string {
-  const selected = messages
-    .filter(isMeaningfulSlackMessage)
-    .filter((message) => !isSlackStatusOnlyMessage(message))
-    .slice(0, 8);
-  if (selected.length === 0) {
-    return `- ${title}`;
-  }
-  return selected.map((message) => `- ${message}`).join("\n");
-}
-
-function slackMessageTexts(body: string): string[] {
-  const messages: string[] = [];
-  let current: string[] = [];
-  const flush = () => {
-    const text = current
-      .map((line) => line.trim())
-      .filter((line) => line !== "" && !/^reactions?:/i.test(line))
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (text !== "") {
-      messages.push(text);
-    }
-    current = [];
-  };
-  for (const line of body.split(/\r?\n/)) {
-    if (/^##\s+\d+\.\d+\s+\|/.test(line)) {
-      flush();
-      continue;
-    }
-    if (line.startsWith("#")) {
-      continue;
-    }
-    current.push(line);
-  }
-  flush();
-  return messages;
-}
-
-function slackParticipantsFromHeadings(body: string): string[] {
-  return uniqueStrings(
-    [...body.matchAll(/^##\s+\d+\.\d+\s+\|\s+(.+)$/gm)].map((match) => {
-      return (match[1] ?? "").trim();
-    }),
-  )
-    .filter((name) => !looksLikeMachineUser(name))
-    .filter(looksLikePersonName);
 }
 
 function threadCandidatesForSource(summary: string, limit: number): CandidateLine[] {

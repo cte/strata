@@ -7,6 +7,7 @@ import {
   Check,
   Copy,
   FileText,
+  History,
   ListTodo,
   LoaderCircle,
   MessageSquare,
@@ -95,15 +96,17 @@ import {
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool";
 import { AutocompletePopover } from "@/components/autocomplete-popover";
 import { ChatModelPicker } from "@/components/chat-model-picker";
+import { ChatSessionListBody, useDeleteChatSession } from "@/components/chat-session-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Command, CommandList } from "@/components/ui/command";
 import {
   addChatQueuedMessage,
+  type ChatQueueTarget,
   clearChatQueuedMessages,
   invokeChatSkill,
   listChatQueuedMessages,
   removeChatQueuedMessage,
-  type ChatQueueTarget,
 } from "@/lib/api";
 import { chatComposerSubmitState } from "@/lib/chatComposer";
 import {
@@ -119,6 +122,7 @@ import {
   clientId,
   MAX_ATTACHMENT_BYTES,
 } from "@/lib/chatRunModel";
+import { chatRunsStore } from "@/lib/chatRunsStore";
 import {
   contextUsagePercent,
   contextWindowForModel,
@@ -135,11 +139,11 @@ import {
 } from "@/lib/slashCommandProvider";
 import type { AutocompleteItem } from "@/lib/useAutocomplete";
 import { useAutocomplete } from "@/lib/useAutocomplete";
-import { chatRunsStore } from "@/lib/chatRunsStore";
 import { useChatModelChoice } from "@/lib/useChatModelChoice";
 import { useChatPromptHistory } from "@/lib/useChatPromptHistory";
 
 import { useChatRun } from "@/lib/useChatRun";
+import { useChatSessions } from "@/lib/useChatSessions";
 import { cn } from "@/lib/utils";
 
 export function ChatPage(): React.ReactElement {
@@ -453,11 +457,15 @@ export function ChatPage(): React.ReactElement {
             className={cn(transcript.length === 0 ? "min-h-full pb-32" : "pb-56 md:pb-52")}
           >
             {transcript.length === 0 ? (
-              <ConversationEmptyState
-                title="Ready."
-                description={modelLine}
-                icon={<MessageSquare size={14} strokeWidth={1.75} />}
-              />
+              urlSessionId === null ? (
+                <InlineChatHistory />
+              ) : (
+                <ConversationEmptyState
+                  title="Ready."
+                  description={modelLine}
+                  icon={<MessageSquare size={14} strokeWidth={1.75} />}
+                />
+              )
             ) : (
               transcript.map((message) => <TranscriptMessage key={message.id} message={message} />)
             )}
@@ -569,6 +577,56 @@ async function enqueueChatMessage(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Recent-chats list shown on a fresh chat surface in place of "Ready.". Reuses
+ * the same session rows as the ⌘K palette and disappears once a transcript
+ * starts. Brand-new users (no sessions yet) get a simple ready affordance.
+ */
+function InlineChatHistory(): React.ReactElement {
+  const navigate = useNavigate();
+  const { sessions, isLoaded, error } = useChatSessions();
+  const handleDelete = useDeleteChatSession();
+  const handleSelect = useCallback(
+    (sessionId: string) => {
+      void navigate({ to: "/chat/$sessionId", params: { sessionId } });
+    },
+    [navigate],
+  );
+
+  if (isLoaded && !error && sessions.length === 0) {
+    return (
+      <ConversationEmptyState
+        title="Ready."
+        description="Start a new chat below."
+        icon={<MessageSquare size={14} strokeWidth={1.75} />}
+      />
+    );
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-2xl px-1 py-8">
+      <p className="mb-2 flex items-center gap-1.5 px-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--fg-mute)]">
+        <History size={12} strokeWidth={1.75} />
+        Recent Sessions
+      </p>
+      <Command
+        shouldFilter={false}
+        className="rounded-lg border border-[var(--hairline)] bg-[var(--bg-elev)]"
+      >
+        <CommandList className="max-h-[min(60dvh,32rem)]">
+          <ChatSessionListBody
+            sessions={sessions}
+            isLoaded={isLoaded}
+            error={Boolean(error)}
+            onSelect={handleSelect}
+            onDelete={handleDelete}
+          />
+        </CommandList>
+      </Command>
+    </div>
+  );
 }
 
 function ChatPromptHeader({

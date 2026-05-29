@@ -74,16 +74,12 @@ export function useChatModelChoice(
     enabled: status?.codexLoggedIn === true,
     staleTime: 5 * 60_000,
   });
-  const compatibleModelsQuery = useQuery({
-    queryKey: ["chat", "models", "list", "openai-compatible"],
-    queryFn: () => listChatModels("openai-compatible"),
-    enabled: status?.apiKeyConfigured === true,
-    staleTime: 5 * 60_000,
-  });
+  const anthropicAvailable =
+    status?.anthropicLoggedIn === true || status?.anthropicApiKeyConfigured === true;
   const anthropicModelsQuery = useQuery({
     queryKey: ["chat", "models", "list", "anthropic-claude"],
     queryFn: () => listChatModels("anthropic-claude"),
-    enabled: status?.anthropicLoggedIn === true,
+    enabled: anthropicAvailable,
     staleTime: 5 * 60_000,
   });
 
@@ -128,8 +124,7 @@ export function useChatModelChoice(
         provider: "openai-codex",
         label: "OpenAI Codex",
         available: status?.codexLoggedIn === true,
-        message:
-          status?.codexLoggedIn === true ? "ChatGPT auth ready" : "Connect in Model auth settings",
+        message: status?.codexLoggedIn === true ? "" : "Not connected",
         models: codexModelsQuery.data ?? [],
         loading: codexModelsQuery.isFetching,
         error: errorMessage(codexModelsQuery.error),
@@ -137,27 +132,11 @@ export function useChatModelChoice(
       {
         provider: "anthropic-claude",
         label: "Anthropic Claude",
-        available: status?.anthropicLoggedIn === true,
-        message:
-          status?.anthropicLoggedIn === true
-            ? "Claude auth ready"
-            : "Connect in Model auth settings",
+        available: anthropicAvailable,
+        message: anthropicAvailable ? "" : "Not connected",
         models: anthropicModelsQuery.data ?? [],
         loading: anthropicModelsQuery.isFetching,
         error: errorMessage(anthropicModelsQuery.error),
-      },
-
-      {
-        provider: "openai-compatible",
-        label: "OpenAI-compatible",
-        available: status?.apiKeyConfigured === true,
-        message:
-          status?.apiKeyConfigured === true
-            ? "API key ready"
-            : "Set STRATA_API_KEY or OPENAI_API_KEY",
-        models: compatibleModelsQuery.data ?? [],
-        loading: compatibleModelsQuery.isFetching,
-        error: errorMessage(compatibleModelsQuery.error),
       },
     ],
     [
@@ -167,9 +146,7 @@ export function useChatModelChoice(
       anthropicModelsQuery.data,
       anthropicModelsQuery.error,
       anthropicModelsQuery.isFetching,
-      compatibleModelsQuery.data,
-      compatibleModelsQuery.error,
-      compatibleModelsQuery.isFetching,
+      anthropicAvailable,
       status,
     ],
   );

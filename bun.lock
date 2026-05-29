@@ -95,6 +95,7 @@
         "@strata/core": "workspace:*",
         "@strata/ingest": "workspace:*",
         "@strata/integration-mcp": "workspace:*",
+        "@strata/jobs": "workspace:*",
         "@strata/tools": "workspace:*",
         "@strata/tui": "workspace:*",
       },
@@ -135,6 +136,16 @@
         "@strata/tools": "workspace:*",
       },
     },
+    "packages/jobs": {
+      "name": "@strata/jobs",
+      "version": "0.1.0",
+      "dependencies": {
+        "@strata/agent": "workspace:*",
+        "@strata/core": "workspace:*",
+        "@strata/ingest": "workspace:*",
+        "@strata/tools": "workspace:*",
+      },
+    },
     "packages/tools": {
       "name": "@strata/tools",
       "version": "0.1.0",
@@ -164,6 +175,7 @@
         "@strata/core": "workspace:*",
         "@strata/ingest": "workspace:*",
         "@strata/integration-mcp": "workspace:*",
+        "@strata/jobs": "workspace:*",
         "@strata/tools": "workspace:*",
         "@trpc/server": "^11.17.0",
         "hono": "^4.12.18",
@@ -534,6 +546,8 @@
     "@strata/ingest": ["@strata/ingest@workspace:packages/ingest"],
 
     "@strata/integration-mcp": ["@strata/integration-mcp@workspace:packages/integration-mcp"],
+
+    "@strata/jobs": ["@strata/jobs@workspace:packages/jobs"],
 
     "@strata/tools": ["@strata/tools@workspace:packages/tools"],
 

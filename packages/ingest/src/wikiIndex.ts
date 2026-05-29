@@ -310,6 +310,9 @@ async function listSectionPages(
       continue;
     }
     const metadata = parseSimpleFrontmatter(text);
+    if (metadata.status?.toLowerCase() === "superseded") {
+      continue;
+    }
     pages.push({
       path: relativePath,
       title: metadata.title || metadata.name || firstHeading(text) || titleFromFilename(entry.name),

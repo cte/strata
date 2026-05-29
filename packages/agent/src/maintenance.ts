@@ -12,6 +12,7 @@ import {
   type SkillMetadata,
   type TodoItem,
   writeLearningProposal,
+  writeOrReuseLearningProposal,
 } from "@strata/core";
 
 export type MaintenanceJobStatus = "ok" | "needs_attention";
@@ -28,6 +29,7 @@ export interface MaintenanceFinding extends JsonObject {
   detail: string;
   path: string | null;
   line: number | null;
+  data: JsonObject | null;
 }
 
 export interface MaintenanceJobOutput extends JsonObject {
@@ -72,6 +74,54 @@ interface WikiPage {
   metadata: Record<string, string>;
   body: string;
 }
+
+interface ProjectEntityPageSummary extends JsonObject {
+  path: string;
+  title: string;
+  overSpecific: boolean;
+}
+
+interface ProjectEntityConsolidationGroup extends JsonObject {
+  id: string;
+  topic: string;
+  canonicalPath: string;
+  duplicatePaths: string[];
+  overSpecificPaths: string[];
+  paths: string[];
+  pages: ProjectEntityPageSummary[];
+  proposalPath: string | null;
+}
+
+interface ProjectConsolidationOperationPlanResult {
+  plan: JsonObject;
+  mergeMode: "exactPatch" | "manualReview";
+}
+
+interface ProjectConsolidationExactMergePatch extends JsonObject {
+  expectedOldText: string;
+  replacementText: string;
+}
+
+interface MarkdownSection {
+  title: string;
+  lines: string[];
+}
+
+const EXACT_PROJECT_MERGE_MAX_CANONICAL_CHARS = 16_000;
+const EXACT_PROJECT_MERGE_MAX_SOURCE_CHARS = 12_000;
+const EXACT_PROJECT_MERGE_MAX_REPLACEMENT_CHARS = 30_000;
+const EXACT_PROJECT_MERGE_MAX_LINES_PER_SOURCE = 40;
+const EXACT_PROJECT_MERGE_SECTIONS = new Set([
+  "actions",
+  "context",
+  "decisions",
+  "meetings",
+  "notes",
+  "open-threads",
+  "source-evidence",
+  "status",
+  "threads",
+]);
 
 const JOBS: MaintenanceJob[] = [
   {
@@ -273,10 +323,14 @@ async function runWikiLintJob(context: MaintenanceJobContext): Promise<Maintenan
 
 async function runWikiEntitiesJob(context: MaintenanceJobContext): Promise<MaintenanceJobOutput> {
   const pages = await readWikiPages(context.repoRoot);
-  const projectPages = pages.filter((page) => page.relativePath.startsWith(`projects${path.sep}`));
+  const projectPages = pages.filter(
+    (page) => page.relativePath.startsWith(`projects${path.sep}`) && !isSupersededPage(page),
+  );
+  const projectPagesByPath = new Map(projectPages.map((page) => [page.relativePath, page]));
   const findings: MaintenanceFinding[] = [];
   const canonicalTopics = new Map<string, WikiPage[]>();
   let overSpecificProjectPages = 0;
+  const overSpecificPages: ProjectEntityPageSummary[] = [];
 
   for (const page of projectPages) {
     const title = pageTitle(page);
@@ -288,46 +342,502 @@ async function runWikiEntitiesJob(context: MaintenanceJobContext): Promise<Maint
 
     if (looksOverSpecificProjectPage(page, title)) {
       overSpecificProjectPages += 1;
+      overSpecificPages.push(projectEntityPageSummary(page));
       findings.push(
         finding(
           "warning",
           "Over-specific project page",
           `${page.relativePath} looks source-derived rather than canonical; consider merging it into a stable project/topic page.`,
-          { path: page.relativePath },
+          {
+            path: page.relativePath,
+            data: {
+              page: projectEntityPageSummary(page),
+              topics: canonicalEntityTopics(`${title}\n${page.basename}`),
+            },
+          },
         ),
       );
     }
   }
 
   let duplicateProjectTopics = 0;
+  const consolidationGroups: ProjectEntityConsolidationGroup[] = [];
   for (const [topic, topicPages] of [...canonicalTopics.entries()].sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (topicPages.length <= 1) {
+    const uniqueTopicPages = uniquePages(topicPages);
+    if (uniqueTopicPages.length <= 1) {
       continue;
     }
-    const firstPage = topicPages[0];
-    if (firstPage === undefined) {
-      continue;
-    }
+    const canonicalPage = chooseCanonicalProjectPage(topic, uniqueTopicPages);
+    const duplicatePaths = uniqueTopicPages
+      .filter((page) => page.relativePath !== canonicalPage.relativePath)
+      .map((page) => page.relativePath);
+    const overSpecificPaths = uniqueTopicPages
+      .filter((page) => looksOverSpecificProjectPage(page, pageTitle(page)))
+      .map((page) => page.relativePath);
+    const group: ProjectEntityConsolidationGroup = {
+      id: `project-topic:${pageKey(topic)}`,
+      topic,
+      canonicalPath: canonicalPage.relativePath,
+      duplicatePaths,
+      overSpecificPaths,
+      paths: uniqueTopicPages.map((page) => page.relativePath),
+      pages: uniqueTopicPages.map(projectEntityPageSummary),
+      proposalPath: null,
+    };
+    consolidationGroups.push(group);
     duplicateProjectTopics += 1;
     findings.push(
       finding(
         "warning",
         "Duplicate project topic",
-        `${topic} appears to have ${topicPages.length} project pages: ${topicPages
+        `${topic} appears to have ${uniqueTopicPages.length} project pages: ${uniqueTopicPages
           .map((page) => page.relativePath)
           .join(", ")}.`,
-        { path: firstPage.relativePath },
+        { path: canonicalPage.relativePath, data: group },
       ),
     );
   }
 
-  return outputFromFindings("wiki.entities", findings, {
-    projectPages: projectPages.length,
-    duplicateProjectTopics,
-    overSpecificProjectPages,
+  const proposalResults = await stageProjectEntityConsolidationProposals(
+    context,
+    consolidationGroups,
+    overSpecificPages,
+    projectPagesByPath,
+  );
+  for (const proposal of proposalResults.proposals) {
+    const group = consolidationGroups.find(
+      (candidate) => candidate.id === proposal.dedupeKey?.replace(/^wiki\.entities:/, ""),
+    );
+    if (group !== undefined) {
+      group.proposalPath = proposal.path;
+    }
+  }
+
+  return {
+    status: findings.some(
+      (finding) => finding.severity === "error" || finding.severity === "warning",
+    )
+      ? "needs_attention"
+      : "ok",
+    summary:
+      findings.length === 0
+        ? "wiki.entities completed with no findings."
+        : `wiki.entities produced ${findings.length} finding(s) across ${consolidationGroups.length} consolidation group(s).`,
+    findings,
+    proposals: proposalResults.proposals,
+    metrics: {
+      projectPages: projectPages.length,
+      duplicateProjectTopics,
+      overSpecificProjectPages,
+      consolidationGroups,
+      proposals: proposalResults.proposals.length,
+      newProposals: proposalResults.created,
+      reusedProposals: proposalResults.reused,
+    },
+  };
+}
+
+async function stageProjectEntityConsolidationProposals(
+  context: MaintenanceJobContext,
+  groups: ProjectEntityConsolidationGroup[],
+  overSpecificPages: ProjectEntityPageSummary[],
+  pagesByPath: Map<string, WikiPage>,
+): Promise<{ proposals: LearningProposalRecord[]; created: number; reused: number }> {
+  const proposals: LearningProposalRecord[] = [];
+  let created = 0;
+  let reused = 0;
+
+  for (const group of groups) {
+    const operationPlan = projectConsolidationOperationPlan(group, pagesByPath);
+    const mergeInstruction =
+      operationPlan.mergeMode === "exactPatch"
+        ? "The operation plan includes an exact append-only canonical merge patch for durable context that can be reviewed before accepting."
+        : "Merge durable context, decisions, active threads, and source evidence links from:";
+    const result = await writeOrReuseLearningProposal(context.repoRoot, {
+      kind: "wiki",
+      sessionId: context.sessionId,
+      title: `Consolidate wiki project entity: ${group.topic}`,
+      reason:
+        "Maintenance found multiple project pages that appear to describe the same canonical topic.",
+      evidence: [
+        `Canonical candidate: ${group.canonicalPath}`,
+        ...group.duplicatePaths.map((pagePath) => `Duplicate candidate: ${pagePath}`),
+        ...group.overSpecificPaths.map((pagePath) => `Over-specific page: ${pagePath}`),
+      ],
+      proposedChange: [
+        `Keep ${group.canonicalPath} as the canonical ${group.topic} project page unless review finds a better target.`,
+        "",
+        mergeInstruction,
+        "",
+        ...group.duplicatePaths.map((pagePath) => `- ${pagePath}`),
+        "",
+        "After merging, replace duplicate pages with short superseded notes that link to the canonical page and preserve source evidence links. Do not delete decision pages or raw/source pages.",
+        "",
+        "Then refresh retrieval with:",
+        "",
+        "```bash",
+        "bun run strata wiki search-index refresh --source all",
+        "```",
+        "",
+        "If this cluster recurs from ingest, update raw-to-wiki canonical project aliases after reviewing the merge.",
+        "",
+        "Consolidation operation plan:",
+        "",
+        "```json",
+        JSON.stringify(operationPlan.plan, null, 2),
+        "```",
+      ].join("\n"),
+      risk: "medium: project-page merges can lose nuance if source evidence or active threads are dropped.",
+      applyCommand:
+        operationPlan.mergeMode === "exactPatch"
+          ? "Review exact consolidation diffs, then accept the proposal to apply and refresh the search index."
+          : "Manual wiki merge, then bun run strata wiki search-index refresh --source all",
+      dedupeKey: `wiki.entities:${group.id}`,
+    });
+    proposals.push(result.proposal);
+    if (result.created) {
+      created += 1;
+    } else {
+      reused += 1;
+    }
+  }
+
+  if (overSpecificPages.length > 0) {
+    const result = await writeOrReuseLearningProposal(context.repoRoot, {
+      kind: "wiki",
+      sessionId: context.sessionId,
+      title: "Review over-specific wiki project pages",
+      reason:
+        "Maintenance found project pages whose titles look source-derived rather than canonical.",
+      evidence: overSpecificPages.slice(0, 30).map((page) => `${page.path}: ${page.title}`),
+      proposedChange: [
+        "Review the over-specific project pages and either merge them into stable project pages or convert the useful context into source-backed notes.",
+        "",
+        "Pages to review:",
+        "",
+        ...overSpecificPages.map((page) => `- ${page.path} (${page.title})`),
+        "",
+        "After review, refresh retrieval with:",
+        "",
+        "```bash",
+        "bun run strata wiki search-index refresh --source all",
+        "```",
+      ].join("\n"),
+      risk: "medium: source-derived pages may still contain useful context that should be preserved.",
+      applyCommand:
+        "Manual wiki review, then bun run strata wiki search-index refresh --source all",
+      dedupeKey: "wiki.entities:over-specific-project-pages",
+    });
+    proposals.push(result.proposal);
+    if (result.created) {
+      created += 1;
+    } else {
+      reused += 1;
+    }
+  }
+
+  return { proposals, created, reused };
+}
+
+function projectConsolidationOperationPlan(
+  group: ProjectEntityConsolidationGroup,
+  pagesByPath: Map<string, WikiPage>,
+): ProjectConsolidationOperationPlanResult {
+  const canonicalPath = repoWikiPath(group.canonicalPath);
+  const sourcePaths = group.duplicatePaths.map(repoWikiPath);
+  const exactMergePatch = projectConsolidationExactMergePatch(group, pagesByPath);
+  const mergeOperation =
+    exactMergePatch === null
+      ? {
+          type: "mergeIntoCanonical",
+          targetPath: canonicalPath,
+          sourcePaths,
+          mode: "manualReview",
+        }
+      : {
+          type: "mergeIntoCanonical",
+          targetPath: canonicalPath,
+          sourcePaths,
+          mode: "exactPatch",
+          patches: [exactMergePatch],
+        };
+  return {
+    mergeMode: exactMergePatch === null ? "manualReview" : "exactPatch",
+    plan: {
+      kind: "wiki.consolidateEntity",
+      entityType: "project",
+      topic: group.topic,
+      canonicalPath,
+      sourcePaths,
+      operations: [
+        mergeOperation,
+        ...sourcePaths.map((sourcePath) => ({
+          type: "supersedePage",
+          sourcePath,
+          canonicalPath,
+          replacementContent: supersededProjectPageContent(group.topic, sourcePath, canonicalPath),
+          preserveEvidenceLinks: true,
+        })),
+        ...sourcePaths.map((sourcePath) => ({
+          type: "rewriteBacklinks",
+          fromPath: sourcePath,
+          toPath: canonicalPath,
+        })),
+        {
+          type: "refreshSearchIndex",
+          source: "all",
+        },
+      ],
+      evidenceLinks: [canonicalPath, ...sourcePaths],
+    },
+  };
+}
+
+function projectConsolidationExactMergePatch(
+  group: ProjectEntityConsolidationGroup,
+  pagesByPath: Map<string, WikiPage>,
+): ProjectConsolidationExactMergePatch | null {
+  const canonicalPage = pagesByPath.get(group.canonicalPath);
+  if (
+    canonicalPage === undefined ||
+    canonicalPage.text.length > EXACT_PROJECT_MERGE_MAX_CANONICAL_CHARS
+  ) {
+    return null;
+  }
+
+  const sourcePages: WikiPage[] = [];
+  for (const sourcePath of group.duplicatePaths) {
+    const sourcePage = pagesByPath.get(sourcePath);
+    if (sourcePage === undefined || sourcePage.text.length > EXACT_PROJECT_MERGE_MAX_SOURCE_CHARS) {
+      return null;
+    }
+    sourcePages.push(sourcePage);
+  }
+  if (sourcePages.length === 0) {
+    return null;
+  }
+
+  const mergeBlock = projectConsolidationMergeBlock(canonicalPage, sourcePages);
+  if (mergeBlock === null) {
+    return null;
+  }
+
+  const expectedOldText = canonicalPage.text.trimEnd();
+  if (expectedOldText === "") {
+    return null;
+  }
+
+  const replacementText = `${expectedOldText}\n\n${mergeBlock.trimEnd()}\n`;
+  if (replacementText.length > EXACT_PROJECT_MERGE_MAX_REPLACEMENT_CHARS) {
+    return null;
+  }
+
+  return { expectedOldText, replacementText };
+}
+
+function projectConsolidationMergeBlock(
+  canonicalPage: WikiPage,
+  sourcePages: WikiPage[],
+): string | null {
+  const emitted = new Set(
+    canonicalPage.body
+      .split(/\r?\n/)
+      .map(normalizedMergeLine)
+      .filter((line) => line !== ""),
+  );
+  const sourceBlocks: string[] = [];
+
+  for (const sourcePage of sourcePages) {
+    const sourceLines = durableProjectMergeLines(sourcePage, emitted);
+    if (sourceLines.length === 0) {
+      continue;
+    }
+    sourceBlocks.push(
+      [
+        `### ${pageTitle(sourcePage)}`,
+        "",
+        `Source page: [[${sourcePage.relativePath.replace(/\\/g, "/")}|${pageTitle(sourcePage)}]]`,
+        "",
+        ...sourceLines,
+      ].join("\n"),
+    );
+  }
+
+  if (sourceBlocks.length === 0) {
+    return null;
+  }
+
+  return ["## Consolidated Sources", "", sourceBlocks.join("\n\n")].join("\n");
+}
+
+function durableProjectMergeLines(sourcePage: WikiPage, emitted: Set<string>): string[] {
+  const lines: string[] = [];
+  for (const section of markdownSections(sourcePage.body)) {
+    if (!EXACT_PROJECT_MERGE_SECTIONS.has(pageKey(section.title))) {
+      continue;
+    }
+    const sectionLines = durableSectionMergeLines(section, emitted);
+    if (sectionLines.length === 0) {
+      continue;
+    }
+    lines.push(`- ${section.title}:`);
+    lines.push(...sectionLines.map((line) => `  ${line}`));
+    if (lines.length >= EXACT_PROJECT_MERGE_MAX_LINES_PER_SOURCE) {
+      return lines.slice(0, EXACT_PROJECT_MERGE_MAX_LINES_PER_SOURCE);
+    }
+  }
+  return lines;
+}
+
+function durableSectionMergeLines(section: MarkdownSection, emitted: Set<string>): string[] {
+  const lines: string[] = [];
+  for (const line of section.lines) {
+    const trimmed = line.trim();
+    if (!isDurableProjectMergeLine(trimmed)) {
+      continue;
+    }
+    const normalized = normalizedMergeLine(trimmed);
+    if (normalized === "" || emitted.has(normalized)) {
+      continue;
+    }
+    emitted.add(normalized);
+    lines.push(trimmed);
+  }
+  return lines;
+}
+
+function isDurableProjectMergeLine(line: string): boolean {
+  if (!line.startsWith("- ")) {
+    return false;
+  }
+  if (line.length < 8) {
+    return false;
+  }
+  if (/\b(no|none|tbd|todo)\b/i.test(line) || /created automatically/i.test(line)) {
+    return false;
+  }
+  return true;
+}
+
+function normalizedMergeLine(line: string): string {
+  return line
+    .trim()
+    .replace(/^- \[[ xX]\]\s+/, "- ")
+    .replace(/^- /, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function markdownSections(body: string): MarkdownSection[] {
+  const sections: MarkdownSection[] = [];
+  let current: MarkdownSection = { title: "Notes", lines: [] };
+  for (const line of body.split(/\r?\n/)) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    if (heading !== null) {
+      sections.push(current);
+      current = { title: heading[1] ?? "", lines: [] };
+      continue;
+    }
+    current.lines.push(line);
+  }
+  sections.push(current);
+  return sections.filter((section) => section.lines.some((line) => line.trim() !== ""));
+}
+
+function supersededProjectPageContent(
+  topic: string,
+  sourcePath: string,
+  canonicalPath: string,
+): string {
+  const title = titleFromWikiPath(sourcePath);
+  return [
+    "---",
+    "type: project",
+    `title: ${JSON.stringify(title)}`,
+    "status: superseded",
+    `superseded_by: ${canonicalPath}`,
+    "---",
+    "",
+    `# ${title}`,
+    "",
+    `Superseded by [[${topic}]].`,
+    "",
+    `Canonical page: ${canonicalPath}`,
+    "",
+    "Preserve source evidence links and merge durable context into the canonical page before applying this redirect.",
+    "",
+  ].join("\n");
+}
+
+function repoWikiPath(value: string): string {
+  const normalized = value.replace(/\\/g, "/").replace(/^\/+/, "");
+  return normalized.startsWith("wiki/") ? normalized : `wiki/${normalized}`;
+}
+
+function titleFromWikiPath(value: string): string {
+  return path
+    .basename(value, ".md")
+    .split(/[-_]+/g)
+    .filter((part) => part !== "")
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function uniquePages(pages: WikiPage[]): WikiPage[] {
+  const seen = new Set<string>();
+  const unique: WikiPage[] = [];
+  for (const page of pages) {
+    if (seen.has(page.relativePath)) {
+      continue;
+    }
+    seen.add(page.relativePath);
+    unique.push(page);
+  }
+  return unique.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+function chooseCanonicalProjectPage(topic: string, pages: WikiPage[]): WikiPage {
+  const [first] = [...pages].sort((left, right) => {
+    const leftScore = canonicalProjectPageScore(topic, left);
+    const rightScore = canonicalProjectPageScore(topic, right);
+    if (leftScore !== rightScore) {
+      return leftScore - rightScore;
+    }
+    return left.relativePath.localeCompare(right.relativePath);
   });
+  if (first === undefined) {
+    throw new Error(`Cannot choose canonical page for empty topic: ${topic}`);
+  }
+  return first;
+}
+
+function canonicalProjectPageScore(topic: string, page: WikiPage): number {
+  const title = pageTitle(page);
+  const titleKey = pageKey(title);
+  const topicKey = pageKey(topic);
+  const slug = path.basename(page.basename, ".md");
+  let score = slug.length;
+  if (titleKey === topicKey || pageKey(slug) === topicKey) {
+    score -= 1000;
+  }
+  if (!looksOverSpecificProjectPage(page, title)) {
+    score -= 500;
+  }
+  if (page.relativePath.endsWith(`${path.sep}index.md`)) {
+    score -= 50;
+  }
+  return score;
+}
+
+function projectEntityPageSummary(page: WikiPage): ProjectEntityPageSummary {
+  const title = pageTitle(page);
+  return {
+    path: page.relativePath,
+    title,
+    overSpecific: looksOverSpecificProjectPage(page, title),
+  };
 }
 
 async function runActionsReviewJob(context: MaintenanceJobContext): Promise<MaintenanceJobOutput> {
@@ -708,7 +1218,14 @@ function isIndexCandidate(page: WikiPage): boolean {
   ) {
     return false;
   }
+  if (isSupersededPage(page)) {
+    return false;
+  }
   return true;
+}
+
+function isSupersededPage(page: WikiPage): boolean {
+  return page.metadata.status?.toLowerCase() === "superseded";
 }
 
 function skipFrontmatterCheck(page: WikiPage): boolean {
@@ -823,7 +1340,7 @@ function finding(
   severity: MaintenanceFindingSeverity,
   title: string,
   detail: string,
-  location: { path?: string; line?: number } = {},
+  location: { path?: string; line?: number; data?: JsonObject } = {},
 ): MaintenanceFinding {
   return {
     severity,
@@ -831,6 +1348,7 @@ function finding(
     detail,
     path: location.path ?? null,
     line: location.line ?? null,
+    data: location.data ?? null,
   };
 }
 

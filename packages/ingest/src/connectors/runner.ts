@@ -73,6 +73,29 @@ export async function runConnectorOperation(
     );
 
     const result = await handler(options.config, runtime);
+    for (const item of connectorItemEvents(result)) {
+      await store.appendEvent(
+        session.id,
+        `connector.${definition.name}.${options.operation}.item`,
+        {
+          connector: definition.name,
+          operation: options.operation,
+          dryRun: result.dryRun,
+          ...item,
+        } as unknown as CoreJsonObject,
+      );
+    }
+    for (const failure of result.failures ?? []) {
+      await store.appendEvent(
+        session.id,
+        `connector.${definition.name}.${options.operation}.failure`,
+        {
+          ...failure,
+          connector: definition.name,
+          operation: options.operation,
+        } as unknown as CoreJsonObject,
+      );
+    }
     await store.appendEvent(
       session.id,
       `connector.${definition.name}.${options.operation}.completed`,
@@ -129,4 +152,21 @@ function firstConfigString(config: ConnectorConfig, keys: string[]): string {
     }
   }
   return "";
+}
+
+function connectorItemEvents(result: ConnectorPullResult): CoreJsonObject[] {
+  if (result.items !== undefined) {
+    return result.items as unknown as CoreJsonObject[];
+  }
+  return [
+    {
+      sourceId: result.sourceId,
+      title: result.title,
+      rawPath: result.rawPath,
+      sourceUrl: result.sourceUrl,
+      written: result.written,
+      skipped: result.skipped,
+      metadata: result.metadata,
+    },
+  ];
 }

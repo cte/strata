@@ -9,7 +9,7 @@ Strata is a local, agent-maintained personal work system.
 It has two connected parts:
 
 1. A Markdown work wiki that captures the user's priorities, projects, people, meetings, decisions, open threads, action items, and source material.
-2. A Bun/TypeScript agentic harness that can query, maintain, improve, and locally extend that wiki through explicit tools, durable traces, memory, skills, scheduled maintenance jobs, extensions, a TUI, a local browser chat UI, and a local web control plane for connector setup.
+2. A Bun/TypeScript agentic harness that can query, maintain, improve, and locally extend that wiki through explicit tools, durable traces, memory, skills, scheduled jobs, extensions, a TUI, a local browser chat UI, and a local web control plane for connector setup.
 
 The wiki is the durable knowledge base. The harness is the working system that keeps that knowledge base useful.
 
@@ -24,6 +24,7 @@ Use [docs/status.md](docs/status.md) to understand where implementation currentl
 The detailed plans are subordinate to the roadmap:
 
 - [docs/wiki-plan.md](docs/wiki-plan.md): wiki structure, source ingestion, entity schemas, and maintenance workflows.
+- [docs/extraction-framework-plan.md](docs/extraction-framework-plan.md): generalized evidence-backed extraction framework and daily TODO re-indexing plan.
 - [docs/agent-harness-plan.md](docs/agent-harness-plan.md): model loop, tools, memory, skills, traces, and learning architecture.
 - [docs/tui-plan.md](docs/tui-plan.md): terminal UI architecture and implementation direction.
 - [docs/web-chat-plan.md](docs/web-chat-plan.md): local browser chat over the shared agent loop.
@@ -33,7 +34,7 @@ The detailed plans are subordinate to the roadmap:
 
 When plans conflict, update `docs/roadmap.md` first, then reconcile `docs/status.md` and the relevant detailed plan.
 
-The current implementation focus is documented in `docs/status.md`. At the time this file was last updated, raw-to-wiki indexing could automatically create curated meeting/entity wiki pages from Granola and Notion, material Slack snapshots were routed through `wiki/sources/slack/` before selective promotion into curated folders, and the next milestone was improving classification quality, entity consolidation, and curated-first retrieval/indexing depth.
+The current implementation focus is documented in `docs/status.md`. At the time this file was last updated, raw-to-wiki indexing could automatically create curated meeting/entity wiki pages from Granola, Notion, and Slack, action promotion flowed through the generalized daily TODO extraction path, and the next milestone was a model-verified daily TODO quality pass before broader publication.
 
 If you change the core roadmap path, milestone sequencing, package boundaries, runtime architecture, agent-loop behavior, tool architecture, connector architecture, or any other load-bearing design decision, use `$maintain-documentation` and update the relevant docs in the same change.
 
@@ -89,12 +90,14 @@ bun run dev:status
 bun run dev:logs
 bun run dev:stop
 bun run strata <args>
+bun run strata jobs list
+bun run strata schedules list
 bun run web:api
 bun run web:dev
 bun run build
 ```
 
-The CLI currently exposes `auth status|login|logout`, `init`, `query`, `tui` with Pi-style session launch flags, `trace`, `sessions list|search|delete`, and `tools list|call`. Use `bun run strata --help` for the source of truth.
+The CLI currently exposes `auth status|login|logout`, `init`, `query`, `tui` with Pi-style session launch flags, `jobs list|run|worker`, `schedules list|create|enable|disable|delete|run-now`, `trace`, `sessions list|search|delete`, and `tools list|call`. Use `bun run strata --help` for the source of truth.
 
 ## Workspace Layout
 
@@ -105,8 +108,9 @@ packages/
   agent/       ModelAdapter contract, OpenAI adapters, ChatGPT OAuth, agent loop
   tui/         First-party terminal UI runtime, components, editor, app
   cli/         strata command-line entrypoint
-  ingest/      Source and wiki scripts: lintWiki, pullGranola, pullSlack, pullNotion
-  web-api/     Local HTTP API for connector setup and operations
+  ingest/      Connector/runtime contracts, raw-to-wiki indexing, extraction, and ingest activity normalization
+  jobs/        Registered jobs, job runner, durable schedules, and scheduler loop
+  web-api/     Local HTTP API for chat, connector setup, schedules, activity, and operations
   e2e/         End-to-end TUI/agent tests driven through FakeTerminal
   extensions/  Planned Pi-style local extension runtime
 apps/
@@ -124,6 +128,14 @@ The agent loop is the source of truth. `runAgentLoopEvents()` in `packages/agent
 Cancellation is end-to-end. `AgentRunConfig.signal` and `ModelRequest.signal` flow into model adapters and are checked by the loop at iteration and tool-call boundaries. Cancelled runs should end as `interrupted` with `stoppedReason: "cancelled"`.
 
 Session storage is centralized. Use `SessionStore.open(repoRoot?)`; runs persist to `.strata/state.sqlite` and `.strata/traces/<sessionId>.jsonl`. Delete sessions through `SessionStore.deleteSession()` so SQLite state and the matching trace file are removed together.
+
+Recurring local automation goes through `@strata/jobs`. Jobs are registered typed operations run by `runJob()`, schedules are persisted in the `job_schedules` table, and the scheduler worker claims due schedules before invoking the shared job runner. Do not add connector-specific daemons or web-request-owned polling loops for recurring source ingestion; register a job or schedule instead. Scheduled prompt-driven agent sessions should use the registered `agent.prompt` job, which calls the shared agent loop with an explicit tool profile, rather than introducing a separate background agent runtime. Wiki hygiene should use the safe `wiki.hygiene`/`maintenance.run` paths that stage review proposals and refresh indexes, not silent page merges.
+
+Ingest observability is trace-backed. Connector, raw-to-wiki, and job activity should be reconstructed from `SessionStore` events through `@strata/ingest/activity`; do not parse `wiki/log.md` or browser state to answer what was ingested, skipped, indexed, or failed. `ingest_activity_runs` is only a local materialized run-list projection of those append-only events for fast list filtering and should be refreshed from events, not treated as the canonical record. Add small redacted append-only events when a connector or indexer lacks the activity metadata the UI/CLI needs.
+
+Raw-to-wiki classification is subject-matter agnostic. Product code may contain generic source parsing, evidence extraction, and safety rules, but workspace vocabulary belongs in the local ingest taxonomy at `.strata/ingest/taxonomy.json` or in reviewed taxonomy proposals. Do not hard-code project aliases, self names, customer/team terms, Slack bot names, or local low-signal phrases in raw-to-wiki TypeScript; load them through `@strata/ingest/ingest-taxonomy`. The loader still reads the legacy `.strata/ingest/profile.json` path for compatibility, but new docs and tools should use taxonomy terminology.
+
+Evidence-backed extraction should go through the shared extraction framework described in `docs/extraction-framework-plan.md`. Daily TODO extraction should be day-addressable, idempotent, and traceable to source spans, extractor/verifier versions, confidence, and rationale. Raw-to-wiki action promotion should flow through `daily.todo` candidate persistence/publication, not bespoke writes to `wiki/actions/`; new TODO extraction logic should not be implemented as browser-only code or as one-off Slack-specific rules outside the shared ingest/extraction layer.
 
 Web chat runs are server-side jobs, not HTTP request lifetimes. `packages/web-api/src/chat.ts` owns active-run state and an abort controller per run; browser SSE streams are subscribers. A dropped browser/proxy stream must not cancel the agent. Only explicit run cancellation should abort the run signal.
 
