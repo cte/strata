@@ -54,8 +54,8 @@ import {
   type DailyTodoApplyResult,
   type DailyTodoBackfillResult,
   type DailyTodoExtractionResult,
-  runDailyTodoExtractionBackfillApply,
   runDailyTodoExtractionApply,
+  runDailyTodoExtractionBackfillApply,
   runDailyTodoExtractionBackfillDryRun,
   runDailyTodoExtractionDryRun,
   type TodoVerifier,
@@ -2492,7 +2492,9 @@ function printDailyTodoApplyResult(result: DailyTodoApplyResult): void {
 }
 
 function printDailyTodoBackfillResult(result: DailyTodoBackfillResult): void {
-  console.log(`daily.todo backfill ${result.from}..${result.to} (${result.dryRun ? "dry-run" : "apply"})`);
+  console.log(
+    `daily.todo backfill ${result.from}..${result.to} (${result.dryRun ? "dry-run" : "apply"})`,
+  );
   console.log(`processed: ${result.processed}`);
   console.log(`skipped: ${result.skipped}`);
   console.log(`candidates: ${result.candidateCount}`);
