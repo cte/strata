@@ -50,6 +50,21 @@
   --ring: rgba(13, 148, 136, 0.32);
 }
 
+:root {
+  /*
+   * Typography knobs — single point of control for type identity. Geist for body
+   * with Geist Mono for labels/metrics/code; tight tracking and snug leading. The
+   * companion --text-* ramp lives in the @theme block below. To resize the whole
+   * UI, change the root font-size (set on html) rather than per-element overrides.
+   */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --type-base-size: 1rem; /* tracks --text-base */
+  --type-leading: 1.45;
+  --type-tracking: -0.014em;
+  --type-features: "ss01";
+}
+
 * {
   box-sizing: border-box;
 }
@@ -57,6 +72,12 @@
 *::selection {
   background: var(--accent);
   color: var(--accent-fg);
+}
+
+html {
+  /* Global type scale. The whole rem-based ramp + spacing keys off this; nudge
+   * here (not per-element) to resize the UI. 106% = the agreed comfortable size. */
+  font-size: 106%;
 }
 
 html,
@@ -69,11 +90,11 @@ body {
 
 body {
   position: relative;
-  font-family: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  font-feature-settings: "ss01", "cv11";
-  font-size: 14px;
-  line-height: 1.55;
-  letter-spacing: -0.005em;
+  font-family: var(--font-sans);
+  font-feature-settings: var(--type-features);
+  font-size: var(--type-base-size);
+  line-height: var(--type-leading);
+  letter-spacing: var(--type-tracking);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -127,12 +148,12 @@ body {
 }
 
 .font-mono {
-  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
   font-feature-settings: "ss01", "ss02", "cv01";
 }
 
 .label-eyebrow {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.18em;
@@ -452,31 +473,38 @@ body {
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
+}
 
-  /*
-   * Font-size scale — the single source of truth for type sizing.
-   *
-   * Always size text with these named tokens (text-2xs … text-2xl); never with
-   * arbitrary values like text-[13px]. To make the whole UI larger or smaller,
-   * adjust these rem values (or the root font-size, since they are rem-based).
-   * Companion line-heights are intentionally loose (1.5) to match the body's
-   * inherited rhythm; pair with an explicit leading-* utility when a tighter or
-   * looser line is needed (leading-* always wins over the token default).
-   */
-  --text-2xs: 0.75rem; /* 12px */
+/*
+ * Font-size scale — the single source of truth for type sizing.
+ *
+ * Always size text with these named tokens (text-2xs … text-2xl); never with
+ * arbitrary values like text-[13px]. To make the whole UI larger or smaller,
+ * adjust these rem values (or the root font-size, since they are rem-based).
+ * Companion line-heights are intentionally loose (1.5) to match the body's
+ * inherited rhythm; pair with an explicit leading-* utility when a tighter or
+ * looser line is needed (leading-* always wins over the token default).
+ *
+ * This block is intentionally NON-inline (no `inline` keyword) so the tokens
+ * emit as :root custom properties that the [data-type] presets above can
+ * override at runtime. An `@theme inline` block would bake the literal values
+ * into the utilities and make live ramp-swapping impossible.
+ */
+@theme {
+  --text-2xs: 0.8125rem; /* 13px @ 100% root (≈13.8px at the 106% root scale) */
   --text-2xs--line-height: 1.5;
-  --text-xs: 0.8125rem; /* 13px */
+  --text-xs: 0.875rem; /* 14px */
   --text-xs--line-height: 1.5;
-  --text-sm: 0.875rem; /* 14px */
+  --text-sm: 0.9375rem; /* 15px */
   --text-sm--line-height: 1.5;
-  --text-base: 0.9375rem; /* 15px */
+  --text-base: 1rem; /* 16px */
   --text-base--line-height: 1.5;
-  --text-md: 1rem; /* 16px */
+  --text-md: 1.0625rem; /* 17px */
   --text-md--line-height: 1.5;
-  --text-lg: 1.0625rem; /* 17px */
+  --text-lg: 1.125rem; /* 18px */
   --text-lg--line-height: 1.5;
-  --text-xl: 1.1875rem; /* 19px */
+  --text-xl: 1.25rem; /* 20px */
   --text-xl--line-height: 1.4;
-  --text-2xl: 1.375rem; /* 22px */
+  --text-2xl: 1.5rem; /* 24px */
   --text-2xl--line-height: 1.3;
 }

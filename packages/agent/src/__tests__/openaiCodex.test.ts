@@ -127,6 +127,53 @@ describe("OpenAICodexModelAdapter", () => {
     expect(captured[3]?.reasoning).toBeUndefined();
   });
 
+  test("streams reasoning summary deltas and captures the reasoning item", async () => {
+    const fetchImpl = Object.assign(
+      async () =>
+        new Response(
+          [
+            sse({ type: "response.created", response: { id: "resp_r" } }),
+            sse({ type: "response.reasoning_summary_part.added" }),
+            sse({ type: "response.reasoning_summary_text.delta", delta: "First I will " }),
+            sse({ type: "response.reasoning_summary_text.delta", delta: "check the index." }),
+            sse({ type: "response.reasoning_summary_part.added" }),
+            sse({ type: "response.reasoning_summary_text.delta", delta: "Then answer." }),
+            sse({
+              type: "response.output_item.done",
+              item: { type: "reasoning", id: "rs_1", encrypted_content: "ENC", summary: [] },
+            }),
+            sse({ type: "response.output_text.delta", delta: "Done." }),
+            sse({ type: "response.completed", response: { id: "resp_r", status: "completed" } }),
+          ].join(""),
+          { status: 200 },
+        ),
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+
+    const adapter = new OpenAICodexModelAdapter({
+      credentials: fakeCredentials(),
+      model: "gpt-5.5",
+      fetchImpl,
+    });
+
+    const reasoningDeltas: string[] = [];
+    const response = await adapter.complete({
+      messages: [{ role: "user", content: "Read index." }],
+      tools: [],
+      onReasoningDelta: (delta) => reasoningDeltas.push(delta),
+    });
+
+    expect(reasoningDeltas.join("")).toBe("First I will check the index.\n\nThen answer.");
+    expect(response.reasoning).toBe("First I will check the index.\n\nThen answer.");
+    expect(response.content).toBe("Done.");
+    // The full reasoning item (incl. encrypted_content) is preserved for replay.
+    expect(response.reasoningSignature).toBeDefined();
+    expect(JSON.parse(response.reasoningSignature ?? "{}")).toMatchObject({
+      type: "reasoning",
+      encrypted_content: "ENC",
+    });
+  });
+
   test("encodes image attachments as input_image content parts", async () => {
     let capturedBody: JsonObject | undefined;
     const fetchImpl = Object.assign(

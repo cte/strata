@@ -62,6 +62,13 @@ export interface ModelRequest {
    * tool-call argument streaming is not exposed here yet.
    */
   onAssistantDelta?(delta: string): void;
+  /**
+   * Streaming hook for model reasoning/thinking summary fragments, when the
+   * provider streams them (OpenAI reasoning summaries, Anthropic thinking
+   * blocks). Separate from `onAssistantDelta` so the visible answer and the
+   * thinking trace stay distinct in the UI.
+   */
+  onReasoningDelta?(delta: string): void;
 }
 
 export interface ModelResponse {
@@ -70,6 +77,15 @@ export interface ModelResponse {
   finishReason: string;
   providerResponseId?: string;
   usage?: JsonObject;
+  /** Concatenated reasoning/thinking summary text, when the provider emitted any. */
+  reasoning?: string;
+  /**
+   * Opaque provider payload needed to replay this turn's reasoning on the next
+   * request (OpenAI: JSON-encoded reasoning item incl. encrypted content;
+   * Anthropic: the thinking block signature). Captured for multi-turn
+   * continuity; not shown to the user.
+   */
+  reasoningSignature?: string;
 }
 
 export interface ModelAdapter {
@@ -176,12 +192,15 @@ export type AgentRunEvent =
       message: string;
     }
   | { type: "assistant.delta"; iteration: number; contentDelta: string }
+  | { type: "assistant.reasoning"; iteration: number; reasoningDelta: string }
   | {
       type: "model.response";
       iteration: number;
       content: string;
       toolCalls: AgentToolCall[];
       usage?: JsonObject;
+      /** Full reasoning/thinking summary text for this turn, when present. */
+      reasoning?: string;
     }
   | {
       type: "compaction.started";

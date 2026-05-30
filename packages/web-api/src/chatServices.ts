@@ -449,6 +449,16 @@ function summarizeToolExecution(
         ? clipSummary(query)
         : `${clipSummary(query)} · ${count} match(es)`;
   }
+  if (toolName === "fs.grep") {
+    const pattern =
+      stringValue(result?.pattern) ?? stringValue(args?.pattern) ?? stringValue(args?.query);
+    const count = numberValue(result?.count);
+    return pattern === null
+      ? null
+      : count === null
+        ? clipSummary(pattern)
+        : `${clipSummary(pattern)} · ${count} match(es)`;
+  }
   if (toolName === "wiki.readPage" || toolName === "fs.read") {
     return clipSummary(stringValue(result?.path) ?? stringValue(args?.path));
   }

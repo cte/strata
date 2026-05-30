@@ -4,6 +4,7 @@ import type { ChatStreamEvent } from "@/lib/api";
 import {
   agentCompletionMessage,
   appendAssistantDelta,
+  appendAssistantReasoning,
   type ChatMessageView,
   finalizeAssistantResponse,
   messagesToTranscript,
@@ -40,6 +41,31 @@ describe("streaming transcript updates", () => {
     assert.equal(assistantMessages.length, 1);
     assert.equal(assistantMessages[0]?.content, "Hello");
     assert.equal(assistantMessages[0]?.status, "complete");
+  });
+
+  test("reasoning deltas accumulate on the same assistant message as the answer", () => {
+    const afterReasoning = appendAssistantReasoning(
+      appendAssistantReasoning([], "run-1", 1, "Let me "),
+      "run-1",
+      1,
+      "think.",
+    );
+    const withAnswer = appendAssistantDelta(afterReasoning, "run-1", 1, "Hello");
+    const finalized = finalizeAssistantResponse(
+      withAnswer,
+      "run-1",
+      1,
+      "Hello",
+      [],
+      undefined,
+      "Let me think.",
+    );
+    const assistant = finalized.filter((message) => message.role === "assistant");
+
+    assert.equal(assistant.length, 1);
+    assert.equal(assistant[0]?.content, "Hello");
+    assert.equal(assistant[0]?.reasoning, "Let me think.");
+    assert.equal(assistant[0]?.status, "complete");
   });
 
   test("event updaters capture the run id before delayed React state flushing", () => {

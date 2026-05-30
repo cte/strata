@@ -901,6 +901,12 @@ export const routineTriggerIdInput = z.object({
 export type RoutineTriggerDeleteRpcInput = z.output<typeof routineTriggerIdInput>;
 export type RoutineTriggerRunNowRpcInput = z.output<typeof routineTriggerIdInput>;
 
+export interface WebAuthStatusResult {
+  enabled: boolean;
+  authenticated: boolean;
+  tokenSource: "env" | "local" | "disabled";
+}
+
 export interface WebApiServices {
   health(): { ok: true; repoRoot: string };
   chatModelStatus(): Promise<ChatModelStatus>;

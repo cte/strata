@@ -95,6 +95,7 @@ import {
   QueueSectionLabel,
   QueueSectionTrigger,
 } from "@/components/ai-elements/queue";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import {
   TerminalActions,
   TerminalContent,
@@ -108,7 +109,6 @@ import { AutocompletePopover } from "@/components/autocomplete-popover";
 import { ChatModelPicker } from "@/components/chat-model-picker";
 import { ChatSessionDeleteConfirm, useDeleteChatSession } from "@/components/chat-session-list";
 import { TerminalPanel } from "@/components/terminal-panel";
-
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -193,6 +193,10 @@ export function ChatPage(): React.ReactElement {
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [showCommandHelp, setShowCommandHelp] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+
+  const handleCloseTerminal = useCallback(() => {
+    setTerminalOpen(false);
+  }, []);
 
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const autocompleteProviders = useMemo(
@@ -489,10 +493,9 @@ export function ChatPage(): React.ReactElement {
     return `${selectedModelChoice.provider} / ${selectedModelChoice.model}${effort}`;
   }, [selectedModelChoice]);
 
-  // Below this point: the original return JSX is preserved verbatim.
   return (
-    <div className="chat-surface -mx-6 -my-8 flex h-[calc(100dvh-2.75rem)] overflow-hidden bg-bg md:-mx-10 md:-my-10">
-      <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="chat-surface relative -mx-6 -my-8 h-[calc(100dvh-2.75rem)] overflow-hidden bg-bg md:-mx-10 md:-my-10">
+      <section className="relative flex h-full min-h-0 min-w-0 flex-col">
         <ChatSessionToolbar
           sessionId={urlSessionId}
           terminalOpen={terminalOpen}
@@ -607,7 +610,7 @@ export function ChatPage(): React.ReactElement {
           </div>
         </div>
       </section>
-      {terminalOpen ? <TerminalPanel onClose={() => setTerminalOpen(false)} /> : null}
+      {terminalOpen ? <TerminalPanel onClose={handleCloseTerminal} /> : null}
     </div>
   );
 }
@@ -1016,6 +1019,14 @@ const TranscriptMessage = memo(function TranscriptMessage({
             ))}
           </Attachments>
         ) : null}
+        {message.role === "assistant" &&
+        message.reasoning !== undefined &&
+        message.reasoning !== "" ? (
+          <Reasoning isStreaming={message.status === "streaming"}>
+            <ReasoningTrigger />
+            <ReasoningContent>{message.reasoning}</ReasoningContent>
+          </Reasoning>
+        ) : null}
         {message.content === "" ? null : (
           <MessageContent>
             {message.role === "assistant" ? (
@@ -1097,7 +1108,7 @@ const ToolPanel = memo(function ToolPanel({
   tool: ChatToolCallView;
   sessionId: string | null;
 }): React.ReactElement {
-  const [open, setOpen] = useState(() => tool.status === "running");
+  const [open, setOpen] = useState(false);
   const [loadedResult, setLoadedResult] = useState<{
     result: unknown;
     status: ChatToolCallView["status"];
@@ -1107,19 +1118,12 @@ const ToolPanel = memo(function ToolPanel({
   const [resultError, setResultError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (tool.status === "running") {
-      setOpen(true);
-    }
-  }, [tool.status]);
-
-  useEffect(() => {
     if (
       !open ||
       sessionId === null ||
       !tool.resultAvailable ||
       tool.result !== undefined ||
-      loadedResult !== null ||
-      loadingResult
+      loadedResult !== null
     ) {
       return;
     }
@@ -1153,7 +1157,7 @@ const ToolPanel = memo(function ToolPanel({
     return () => {
       cancelled = true;
     };
-  }, [loadedResult, loadingResult, open, sessionId, tool.id, tool.result, tool.resultAvailable]);
+  }, [loadedResult, open, sessionId, tool.id, tool.result, tool.resultAvailable]);
 
   const handleToggle = useCallback((event: React.SyntheticEvent<HTMLDetailsElement>) => {
     setOpen(event.currentTarget.open);
@@ -1168,18 +1172,22 @@ const ToolPanel = memo(function ToolPanel({
           ...(loadedResult.summary === null ? {} : { summary: loadedResult.summary }),
           result: loadedResult.result,
         };
-  const args = open ? parseToolArguments(displayTool.argumentsText) : null;
-  const execution = open ? normalizeToolExecution(displayTool) : null;
-  const summary = displayTool.summary ?? (open ? toolSummary(displayTool, args, execution) : null);
+  const args = parseToolArguments(displayTool.argumentsText);
+  const execution = normalizeToolExecution(displayTool);
+  const summary = displayTool.summary ?? toolSummary(displayTool, args, execution);
 
   return (
     <Tool status={displayTool.status} open={open} onToggle={handleToggle}>
       <ToolHeader>
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex min-w-0 flex-1 items-center gap-2">
           <ToolIcon name={displayTool.name} />
-          <span className="truncate font-mono text-xs text-fg">{displayTool.name}</span>
+          <span className="shrink-0 whitespace-nowrap font-mono text-xs text-fg">
+            {displayTool.name}
+          </span>
           {summary === null ? null : (
-            <span className="hidden truncate text-xs text-fg-mute sm:inline">{summary}</span>
+            <span className="hidden min-w-0 truncate text-xs text-fg-mute sm:inline">
+              {summary}
+            </span>
           )}
         </span>
         <span
@@ -1983,6 +1991,12 @@ function toolSummary(
     const query = stringValue(result?.query) ?? stringValue(args?.query);
     const count = numberValue(result?.count);
     return query === null ? null : count === null ? query : `${query} · ${count} match(es)`;
+  }
+  if (tool.name === "fs.grep") {
+    const pattern =
+      stringValue(result?.pattern) ?? stringValue(args?.pattern) ?? stringValue(args?.query);
+    const count = numberValue(result?.count);
+    return pattern === null ? null : count === null ? pattern : `${pattern} · ${count} match(es)`;
   }
   if (tool.name === "wiki.readPage" || tool.name === "fs.read") {
     return stringValue(result?.path) ?? stringValue(args?.path);

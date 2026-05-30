@@ -82,6 +82,62 @@ describe("AnthropicModelAdapter", () => {
     expect(response.finishReason).toBe("tool_calls");
   });
 
+  test("streams thinking deltas and captures the block signature", async () => {
+    const reasoningDeltas: string[] = [];
+    const fetchImpl = Object.assign(
+      async () =>
+        new Response(
+          [
+            sse({ type: "message_start", message: { id: "msg_t" } }),
+            sse({ type: "content_block_start", index: 0, content_block: { type: "thinking" } }),
+            sse({
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "thinking_delta", thinking: "Let me " },
+            }),
+            sse({
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "thinking_delta", thinking: "think about it." },
+            }),
+            sse({
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "signature_delta", signature: "SIGN" },
+            }),
+            sse({ type: "content_block_start", index: 1, content_block: { type: "text" } }),
+            sse({
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "text_delta", text: "Here." },
+            }),
+            sse({ type: "message_delta", delta: { stop_reason: "end_turn" } }),
+            sse({ type: "message_stop" }),
+          ].join(""),
+          { status: 200 },
+        ),
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+
+    const adapter = new AnthropicModelAdapter({
+      credentials: fakeCredentials(),
+      model: "claude-opus-4-8",
+      fetchImpl,
+    });
+
+    const response = await adapter.complete({
+      messages: [{ role: "user", content: "Think." }],
+      tools: [],
+      reasoningEffort: "high",
+      onReasoningDelta: (delta) => reasoningDeltas.push(delta),
+    });
+
+    expect(reasoningDeltas).toEqual(["Let me ", "think about it."]);
+    expect(response.reasoning).toBe("Let me think about it.");
+    expect(response.reasoningSignature).toBe("SIGN");
+    expect(response.content).toBe("Here.");
+  });
+
   test("normalizes replayed tool call ids to Anthropic's allowed id pattern", async () => {
     let capturedBody: JsonObject | undefined;
     const fetchImpl = Object.assign(

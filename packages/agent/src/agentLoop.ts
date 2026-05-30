@@ -223,7 +223,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         // await the response. Push them into a queue, race the response promise
         // against a "delta-arrived" wakeup, and yield queued deltas as soon as
         // they appear so the TUI can render them in real time.
-        const deltaQueue: string[] = [];
+        const deltaQueue: Array<{ kind: "text" | "reasoning"; delta: string }> = [];
         let emittedDelta = false;
         let wakeup: (() => void) | undefined;
         const wake = () => {
@@ -237,12 +237,18 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
           signal?: AbortSignal;
           reasoningEffort?: typeof config.reasoningEffort;
           onAssistantDelta?: (delta: string) => void;
+          onReasoningDelta?: (delta: string) => void;
         } = {
           messages,
           tools: tools.list(),
           onAssistantDelta: (delta: string) => {
             if (delta === "") return;
-            deltaQueue.push(delta);
+            deltaQueue.push({ kind: "text", delta });
+            wake();
+          },
+          onReasoningDelta: (delta: string) => {
+            if (delta === "") return;
+            deltaQueue.push({ kind: "reasoning", delta });
             wake();
           },
         };
@@ -269,9 +275,20 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         try {
           while (settled === undefined || deltaQueue.length > 0) {
             while (deltaQueue.length > 0) {
-              const delta = deltaQueue.shift() ?? "";
+              const item = deltaQueue.shift();
+              if (item === undefined) continue;
+              if (item.kind === "reasoning") {
+                yield {
+                  type: "assistant.reasoning",
+                  iteration: iterations,
+                  reasoningDelta: item.delta,
+                };
+                continue;
+              }
+              // Only visible-answer deltas gate retry: a partially streamed
+              // answer must not be re-streamed, but reasoning-only output can.
               emittedDelta = true;
-              yield { type: "assistant.delta", iteration: iterations, contentDelta: delta };
+              yield { type: "assistant.delta", iteration: iterations, contentDelta: item.delta };
             }
             if (settled !== undefined) break;
             await new Promise<void>((resolve) => {
@@ -381,6 +398,10 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         ...(response.providerResponseId === undefined
           ? {}
           : { providerResponseId: response.providerResponseId }),
+        ...(response.reasoning === undefined ? {} : { reasoning: response.reasoning }),
+        ...(response.reasoningSignature === undefined
+          ? {}
+          : { reasoningSignature: response.reasoningSignature }),
       });
       const modelResponseEvent: Extract<AgentRunEvent, { type: "model.response" }> = {
         type: "model.response",
@@ -390,6 +411,9 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       };
       if (response.usage !== undefined) {
         modelResponseEvent.usage = response.usage;
+      }
+      if (response.reasoning !== undefined) {
+        modelResponseEvent.reasoning = response.reasoning;
       }
       yield modelResponseEvent;
 

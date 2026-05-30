@@ -20,7 +20,7 @@ class SequenceModelAdapter implements ModelAdapter {
   constructor(private readonly responses: ModelResponse[]) {}
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const { onAssistantDelta: _omit, ...rest } = request;
+    const { onAssistantDelta: _omit, onReasoningDelta: _omitReasoning, ...rest } = request;
     this.requests.push(structuredClone(rest));
     const response = this.responses[this.index];
     this.index += 1;

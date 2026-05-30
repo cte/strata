@@ -1,3 +1,4 @@
+import { type GhosttyWasmTerminal, loadGhosttyWasmTerminal } from "./ghosttyWasm.js";
 import { type TerminalDataListener, TerminalInputController } from "./input.js";
 import { HandwrittenVtParser, type TerminalVtParser } from "./parser.js";
 import { TerminalDomRenderer } from "./renderer.js";
@@ -13,10 +14,18 @@ export interface TerminalTheme {
 export interface TerminalOptions {
   cols?: number;
   rows?: number;
+  emulator?: "fallback" | "ghostty" | "auto";
+  ghosttyWasmUrl?: string | URL;
   fontFamily?: string;
   fontSize?: number;
   lineHeight?: number;
+  scrollback?: number;
   theme?: TerminalTheme;
+  /**
+   * CSS background for the scroll root. Defaults to the theme background;
+   * pass "transparent" to let a translucent host surface show through.
+   */
+  rootBackground?: string;
   parser?: TerminalVtParser;
 }
 
@@ -25,11 +34,17 @@ export class Terminal {
   private readonly parser: TerminalVtParser;
   private readonly renderer: TerminalDomRenderer;
   private readonly input = new TerminalInputController();
+  private readonly scrollback: number;
+  private ghostty: GhosttyWasmTerminal | null = null;
+  private ghosttyLoad: Promise<void> | null = null;
+  private replayText = "";
+  private disposed = false;
 
   constructor(options: TerminalOptions = {}) {
     const cols = positiveInt(options.cols, 80);
     const rows = positiveInt(options.rows, 24);
-    this.screen = new TerminalScreen(cols, rows);
+    this.scrollback = positiveInt(options.scrollback, 1000);
+    this.screen = new TerminalScreen(cols, rows, this.scrollback);
     this.parser = options.parser ?? new HandwrittenVtParser();
     this.renderer = new TerminalDomRenderer({
       fontFamily:
@@ -43,7 +58,12 @@ export class Terminal {
         cursor: options.theme?.cursor ?? "#f4f4f5",
         selection: options.theme?.selection ?? "rgba(125, 211, 252, 0.28)",
       },
+      ...(options.rootBackground === undefined ? {} : { rootBackground: options.rootBackground }),
     });
+
+    if (options.emulator === "ghostty" || options.emulator === "auto") {
+      this.startGhostty(options.ghosttyWasmUrl);
+    }
   }
 
   open(container: HTMLElement): void {
@@ -59,8 +79,11 @@ export class Terminal {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.input.dispose();
     this.renderer.dispose();
+    this.ghostty?.dispose();
+    this.ghostty = null;
   }
 
   onData(listener: TerminalDataListener): { dispose: () => void } {
@@ -69,17 +92,30 @@ export class Terminal {
 
   write(data: string | Uint8Array): void {
     const text = typeof data === "string" ? data : new TextDecoder().decode(data);
-    this.parser.write(text, this.screen);
+    if (this.ghostty !== null) {
+      this.ghostty.write(text);
+    } else {
+      if (this.ghosttyLoad !== null) this.replayText += text;
+      this.parser.write(text, this.screen);
+    }
     this.render();
   }
 
   clear(): void {
+    if (this.ghostty !== null) this.ghostty.write("\x1bc");
     this.parser.reset(this.screen);
+    this.replayText = "";
     this.render();
   }
 
   resize(cols: number, rows: number): void {
     this.screen.resize(cols, rows);
+    this.ghostty?.resize(cols, rows);
+    this.render();
+  }
+
+  setFontSize(fontSize: number, lineHeight?: number): void {
+    this.renderer.setFont(fontSize, lineHeight);
     this.render();
   }
 
@@ -94,13 +130,51 @@ export class Terminal {
   }
 
   get snapshot(): TerminalSnapshot {
-    return this.screen.snapshot();
+    return this.currentSnapshot();
   }
 
   private render(): void {
-    const snapshot = this.screen.snapshot();
+    const snapshot = this.currentSnapshot();
     this.input.setBracketedPaste(snapshot.modes.bracketedPaste);
+    this.input.setModes({
+      applicationCursor: snapshot.modes.applicationCursor,
+      mouseTracking: snapshot.modes.mouseTracking,
+      sgrMouse: snapshot.modes.sgrMouse,
+    });
     this.renderer.render(snapshot);
+  }
+
+  private currentSnapshot(): TerminalSnapshot {
+    return this.ghostty?.snapshot() ?? this.screen.snapshot();
+  }
+
+  private startGhostty(wasmUrl: string | URL | undefined): void {
+    const size = this.screen.size;
+    this.ghosttyLoad = loadGhosttyWasmTerminal({
+      ...(wasmUrl === undefined ? {} : { wasmUrl }),
+      cols: size.cols,
+      rows: size.rows,
+      scrollback: this.scrollback,
+    })
+      .then((terminal) => {
+        if (this.disposed) {
+          terminal.dispose();
+          return;
+        }
+        const latestSize = this.screen.size;
+        terminal.resize(latestSize.cols, latestSize.rows);
+        if (this.replayText.length > 0) terminal.write(this.replayText);
+        this.replayText = "";
+        this.ghostty = terminal;
+        this.render();
+      })
+      .catch((error: unknown) => {
+        console.warn("Falling back to handwritten terminal emulator.", error);
+        this.replayText = "";
+      })
+      .finally(() => {
+        this.ghosttyLoad = null;
+      });
   }
 }
 
@@ -114,6 +188,7 @@ function positiveNumber(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+export * from "./ghosttyWasm.js";
 export * from "./input.js";
 export * from "./parser.js";
 export * from "./renderer.js";

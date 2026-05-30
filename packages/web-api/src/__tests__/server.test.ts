@@ -8,15 +8,18 @@ import { type AgentRunEvent, type AgentRunResult, type ModelAdapter } from "@str
 import { writeLearningProposal } from "@strata/core/proposal-store";
 import { SessionStore } from "@strata/core/session-store";
 import { RoutineStore } from "@strata/routines";
+import { webAuthTokenPath } from "@strata/web-api/web-auth";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createWebApiHandler } from "../server.js";
 import type { AppRouter } from "../trpc.js";
+
+const WEB_AUTH_OFF = { STRATA_WEB_AUTH: "off" };
 
 describe("web api", () => {
   test("lists connector setup state without exposing secrets", async () => {
     const handler = createWebApiHandler({
       repoRoot: "/tmp/strata",
-      env: { NOTION_TOKEN: "secret_should_not_render" },
+      env: { ...WEB_AUTH_OFF, NOTION_TOKEN: "secret_should_not_render" },
     });
 
     const response = await handler(new Request("http://127.0.0.1/api/connectors"));
@@ -27,11 +30,95 @@ describe("web api", () => {
     expect(text).not.toContain("secret_should_not_render");
   });
 
+  test("requires web auth for privileged API routes", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-auth-"));
+    try {
+      const handler = createWebApiHandler({ repoRoot, env: { STRATA_WEB_TOKEN: "unlock-me" } });
+
+      const health = await handler(new Request("http://127.0.0.1/api/health"));
+      expect(health.status).toBe(200);
+
+      const unauthenticated = await handler(new Request("http://127.0.0.1/api/connectors"));
+      expect(unauthenticated.status).toBe(401);
+      expect(unauthenticated.headers.get("www-authenticate")).toContain("Bearer");
+
+      const bearer = await handler(
+        new Request("http://127.0.0.1/api/connectors", {
+          headers: { authorization: "Bearer unlock-me" },
+        }),
+      );
+      expect(bearer.status).toBe(200);
+
+      const deniedSession = await handler(
+        new Request("http://127.0.0.1/api/auth/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "wrong" }),
+        }),
+      );
+      expect(deniedSession.status).toBe(401);
+
+      const session = await handler(
+        new Request("http://127.0.0.1/api/auth/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "unlock-me" }),
+        }),
+      );
+      expect(session.status).toBe(200);
+      expect(await session.json()).toMatchObject({
+        enabled: true,
+        authenticated: true,
+        tokenSource: "env",
+      });
+      const cookie = session.headers.get("set-cookie");
+      expect(cookie).toContain("strata_web_session=");
+      expect(cookie).toContain("HttpOnly");
+
+      const cookieAuthed = await handler(
+        new Request("http://127.0.0.1/api/connectors", {
+          headers: { cookie: cookie ?? "" },
+        }),
+      );
+      expect(cookieAuthed.status).toBe(200);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("creates a local web token when STRATA_WEB_TOKEN is unset", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-auth-"));
+    try {
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const status = await handler(new Request("http://127.0.0.1/api/auth/status"));
+      expect(status.status).toBe(200);
+      await expect(status.json()).resolves.toMatchObject({
+        enabled: true,
+        authenticated: false,
+        tokenSource: "local",
+      });
+      const token = (await readFile(webAuthTokenPath({ repoRoot, env: {} }), "utf8")).trim();
+      expect(token.length).toBeGreaterThan(20);
+
+      const session = await handler(
+        new Request("http://127.0.0.1/api/auth/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+        }),
+      );
+      expect(session.status).toBe(200);
+      await expect(session.json()).resolves.toMatchObject({ authenticated: true });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("resizes terminal sessions over HTTP", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     const handler = createWebApiHandler({
       repoRoot,
-      env: { SHELL: "/bin/sh" },
+      env: { ...WEB_AUTH_OFF, SHELL: "/bin/sh" },
     });
     let sessionId: string | undefined;
     try {
@@ -70,7 +157,7 @@ describe("web api", () => {
     try {
       const handler = createWebApiHandler({
         repoRoot,
-        env: { NOTION_TOKEN: "secret" },
+        env: { ...WEB_AUTH_OFF, NOTION_TOKEN: "secret" },
         fetchImpl: fakeNotionFetch(),
         now: new Date("2026-05-05T10:00:00.000Z"),
       });
@@ -95,7 +182,7 @@ describe("web api", () => {
     try {
       const handler = createWebApiHandler({
         repoRoot,
-        env: { NOTION_TOKEN: "secret" },
+        env: { ...WEB_AUTH_OFF, NOTION_TOKEN: "secret" },
         fetchImpl: fakeNotionFetch(),
         now: new Date("2026-05-05T10:00:00.000Z"),
       });
@@ -132,7 +219,7 @@ describe("web api", () => {
     try {
       const handler = createWebApiHandler({
         repoRoot,
-        env: {},
+        env: WEB_AUTH_OFF,
         now: new Date("2026-05-27T10:00:00.000Z"),
       });
       const { client, close } = createTestClient(handler);
@@ -227,7 +314,7 @@ describe("web api", () => {
         store.close();
       }
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const list = await client.activity.list.query({ limit: 5, source: "slack" });
@@ -272,7 +359,7 @@ describe("web api", () => {
         "utf8",
       );
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const list = await client.wiki.actions.list.query({ owner: "mine", status: "open" });
@@ -375,7 +462,7 @@ describe("web api", () => {
         risk: "low",
       });
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const list = await client.proposals.list.query({ status: "pending", limit: 10 });
@@ -432,7 +519,7 @@ describe("web api", () => {
     try {
       const handler = createWebApiHandler({
         repoRoot,
-        env: {},
+        env: WEB_AUTH_OFF,
         now: new Date("2026-05-27T10:00:00.000Z"),
       });
       const { client, close } = createTestClient(handler);
@@ -506,7 +593,7 @@ describe("web api", () => {
 
       const handler = createWebApiHandler({
         repoRoot,
-        env: {},
+        env: WEB_AUTH_OFF,
         createModelAdapter: async () => model,
       });
       const { client, close } = createTestClient(handler);
@@ -585,7 +672,7 @@ describe("web api", () => {
   test("creates, edits, toggles, and deletes routines through tRPC", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     try {
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const created = await client.routines.create.mutate({
@@ -640,7 +727,7 @@ describe("web api", () => {
   test("rejects invalid routine definitions through tRPC", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     try {
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         await expect(
@@ -666,6 +753,7 @@ describe("web api", () => {
       const handler = createWebApiHandler({
         repoRoot,
         env: {
+          ...WEB_AUTH_OFF,
           OPENAI_API_KEY: "secret_should_not_render",
           OPENAI_MODEL: "gpt-test",
         },
@@ -697,7 +785,7 @@ describe("web api", () => {
     try {
       const handler = createWebApiHandler({
         repoRoot,
-        env: {},
+        env: WEB_AUTH_OFF,
         now: new Date("2026-05-26T10:00:00.000Z"),
       });
       const { client, close } = createTestClient(handler);
@@ -763,7 +851,7 @@ describe("web api", () => {
       const tokenRequests: Request[] = [];
       const handler = createWebApiHandler({
         repoRoot,
-        env: {},
+        env: WEB_AUTH_OFF,
         fetchImpl: fakeAnthropicTokenFetch(tokenRequests),
       });
       const { client, close } = createTestClient(handler);
@@ -872,7 +960,7 @@ describe("web api", () => {
       await writeFile(path.join(repoRoot, "packages/core/src/repoFiles.ts"), "export {};\n");
       await writeFile(path.join(repoRoot, "docs/web-chat-plan.md"), "# Web chat\n");
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const files = await client.chat.files.list.query({ query: "src", limit: 10 });
@@ -913,7 +1001,7 @@ describe("web api", () => {
         ].join("\n"),
       );
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const skills = await client.chat.skills.list.query({ query: "diag", limit: 10 });
@@ -953,7 +1041,7 @@ describe("web api", () => {
       );
       await writeFile(path.join(repoRoot, "wiki/raw/slack/thread.md"), "# Raw\n");
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const tree = await client.wiki.tree.query({ includeRaw: false });
@@ -995,7 +1083,7 @@ describe("web api", () => {
         "# Raw Granola\n\nRetrieval index status can include raw evidence when requested.\n",
       );
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const before = await client.system.retrievalIndex.status.query();
@@ -1053,6 +1141,7 @@ describe("web api", () => {
       const handler = createWebApiHandler({
         repoRoot,
         env: {
+          ...WEB_AUTH_OFF,
           OPENAI_API_KEY: "secret_should_not_render",
           OPENAI_BASE_URL: "https://models.example/v1",
         },
@@ -1152,7 +1241,7 @@ describe("web api", () => {
         store.close();
       }
 
-      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const handler = createWebApiHandler({ repoRoot, env: WEB_AUTH_OFF });
       const { client, close } = createTestClient(handler);
       try {
         const listed = await client.chat.sessions.list.query({ limit: 10 });
@@ -1569,7 +1658,7 @@ const fakeModel: ModelAdapter = {
 function chatTestOptions() {
   return {
     repoRoot: path.join(os.tmpdir(), `strata-chat-${randomUUID()}`),
-    env: { STRATA_API_KEY: "sk-test", STRATA_MODEL: "gpt-test" },
+    env: { ...WEB_AUTH_OFF, STRATA_API_KEY: "sk-test", STRATA_MODEL: "gpt-test" },
     createModelAdapter: async () => fakeModel,
   };
 }

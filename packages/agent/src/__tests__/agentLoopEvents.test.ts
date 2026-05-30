@@ -137,6 +137,61 @@ describe("runAgentLoopEvents", () => {
     }
   });
 
+  test("emits assistant.reasoning events and carries reasoning on model.response", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-reasoning-"));
+    try {
+      const model: ModelAdapter = {
+        name: "reasoning-test",
+        async complete(request: ModelRequest): Promise<ModelResponse> {
+          request.onReasoningDelta?.("Thinking ");
+          request.onReasoningDelta?.("hard.");
+          request.onAssistantDelta?.("Answer.");
+          return {
+            content: "Answer.",
+            finishReason: "stop",
+            toolCalls: [],
+            reasoning: "Thinking hard.",
+            reasoningSignature: "SIG",
+          };
+        },
+      };
+
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "think then answer",
+        model,
+        repoRoot,
+      })) {
+        events.push(event);
+      }
+
+      const reasoningDeltas = events.filter((e) => e.type === "assistant.reasoning");
+      expect(
+        reasoningDeltas.map((e) => (e.type === "assistant.reasoning" ? e.reasoningDelta : "")),
+      ).toEqual(["Thinking ", "hard."]);
+
+      // Reasoning deltas precede the visible-answer delta for the turn.
+      const firstReasoningIdx = events.findIndex((e) => e.type === "assistant.reasoning");
+      const firstDeltaIdx = events.findIndex((e) => e.type === "assistant.delta");
+      expect(firstReasoningIdx).toBeLessThan(firstDeltaIdx);
+
+      const response = events.find((e) => e.type === "model.response");
+      expect(response?.type === "model.response" && response.reasoning).toBe("Thinking hard.");
+
+      // The durable model.response event records reasoning + signature for replay.
+      const started = events.find((e) => e.type === "session.started");
+      const sessionId = started?.type === "session.started" ? started.sessionId : "";
+      const trace = await readFile(
+        path.join(repoRoot, ".strata", "traces", `${sessionId}.jsonl`),
+        "utf8",
+      );
+      expect(trace).toContain('"reasoning":"Thinking hard."');
+      expect(trace).toContain('"reasoningSignature":"SIG"');
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("aborts mid-run when the signal fires and ends the session interrupted", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-cancel-"));
     try {

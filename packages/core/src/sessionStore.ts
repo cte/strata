@@ -220,6 +220,8 @@ export class SessionStore {
     toolCalls: { id: string; name: string; argumentsText: string }[];
     usage?: TokenUsage;
     providerResponseId?: string;
+    reasoning?: string;
+    reasoningSignature?: string;
   }): Promise<number> {
     const toolCallsJson: JsonValue = input.toolCalls.map((toolCall) => ({
       id: toolCall.id,
@@ -237,6 +239,12 @@ export class SessionStore {
     }
     if (input.usage !== undefined) {
       responsePayload.usage = input.usage;
+    }
+    if (input.reasoning !== undefined) {
+      responsePayload.reasoning = input.reasoning;
+    }
+    if (input.reasoningSignature !== undefined) {
+      responsePayload.reasoningSignature = input.reasoningSignature;
     }
     await this.appendEvent(input.sessionId, "model.response", responsePayload);
     return this.appendMessage({

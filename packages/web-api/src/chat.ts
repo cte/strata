@@ -849,6 +849,7 @@ const KNOWN_CHAT_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "model.request",
   "model.retry",
   "assistant.delta",
+  "assistant.reasoning",
   "model.response",
   "compaction.started",
   "compaction.completed",

@@ -28,7 +28,12 @@ class SequenceModelAdapter implements ModelAdapter {
     // Drop the streaming callback before snapshotting — structuredClone
     // can't clone functions or AbortSignals, and the test only inspects
     // message/tool data.
-    const { onAssistantDelta: _omit, signal: _signal, ...rest } = request;
+    const {
+      onAssistantDelta: _omit,
+      onReasoningDelta: _omitReasoning,
+      signal: _signal,
+      ...rest
+    } = request;
     this.requests.push(structuredClone(rest));
     const response = this.responses[this.index];
     this.index += 1;
@@ -47,7 +52,12 @@ class FlakyModelAdapter implements ModelAdapter {
   constructor(private readonly outcomes: Array<ModelResponse | Error>) {}
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const { onAssistantDelta: _omit, signal: _signal, ...rest } = request;
+    const {
+      onAssistantDelta: _omit,
+      onReasoningDelta: _omitReasoning,
+      signal: _signal,
+      ...rest
+    } = request;
     this.requests.push(structuredClone(rest));
     const outcome = this.outcomes[this.index];
     this.index += 1;

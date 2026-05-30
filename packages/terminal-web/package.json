@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "build:ghostty-wasm": "bash ./scripts/build-ghostty-wasm.sh",
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",
     "test": "bun test"
   }

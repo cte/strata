@@ -42,6 +42,8 @@ function renderItem(item: TranscriptItem, width: number): string[] {
       return renderUserMessage(item.content, width);
     case "assistant":
       return renderAssistantMessage(item.content, width);
+    case "reasoning":
+      return renderReasoningMessage(item.content, width, item.streaming === true);
     case "tool":
       return renderToolItem(item, width);
     case "status":
@@ -89,6 +91,20 @@ function renderAssistantMessage(content: string, width: number): string[] {
   const innerWidth = Math.max(1, width - 2);
   const inner = new Markdown(content).render({ width: innerWidth, height: 0 }).lines;
   return inner.map((line) => padToWidth(` ${line}`, width));
+}
+
+// Reasoning/thinking trace: muted, indented, with a small marker header so it
+// reads as secondary context distinct from the visible answer.
+function renderReasoningMessage(content: string, width: number, streaming: boolean): string[] {
+  if (content.trim() === "") return [];
+  const innerWidth = Math.max(1, width - 4);
+  const wrapped = wrapText(content.trim(), innerWidth);
+  const out: string[] = [];
+  out.push(padToWidth(theme.muted(streaming ? "✻ thinking…" : "✻ thought"), width));
+  for (const line of wrapped) {
+    out.push(padToWidth(theme.muted(`  ${line}`), width));
+  }
+  return out;
 }
 
 function renderImageItem(attachment: AgentAttachment, width: number): string[] {

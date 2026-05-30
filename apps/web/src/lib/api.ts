@@ -44,6 +44,7 @@ export type McpServerStatus = McpSettingsStatus["servers"][number];
 export type McpSettingsUpdateInput = RouterInput["mcps"]["update"];
 export type McpToolSummary = RouterOutput["mcps"]["tools"]["list"]["tools"][number];
 export type ChatModelStatus = RouterOutput["chat"]["models"]["status"];
+export type WebAuthStatus = import("@strata/web-api/trpc").WebAuthStatusResult;
 
 export type ChatModelSummary = RouterOutput["chat"]["models"]["list"]["models"][number];
 export type ChatFileEntry = RouterOutput["chat"]["files"]["list"]["entries"][number];
@@ -176,6 +177,40 @@ export async function configureGranola(input: GranolaConfigureInput): Promise<Gr
 
 export async function disconnectGranola(): Promise<GranolaStatus> {
   return trpc.connectors.granola.disconnect.mutate();
+}
+
+export async function getWebAuthStatus(): Promise<WebAuthStatus> {
+  const response = await fetch("/api/auth/status", {
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response));
+  }
+  return response.json() as Promise<WebAuthStatus>;
+}
+
+export async function unlockWeb(token: string): Promise<WebAuthStatus> {
+  const response = await fetch("/api/auth/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ token }),
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response));
+  }
+  return response.json() as Promise<WebAuthStatus>;
+}
+
+export async function logoutWeb(): Promise<WebAuthStatus> {
+  const response = await fetch("/api/auth/logout", {
+    method: "POST",
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response));
+  }
+  return response.json() as Promise<WebAuthStatus>;
 }
 
 export async function getModelAuthStatus(): Promise<ModelAuthStatus> {
@@ -544,6 +579,7 @@ export async function startChatRun(
   if (signal !== undefined) {
     init.signal = signal;
   }
+  init.credentials = "same-origin";
   const response = await fetch("/api/chat/runs", init);
   if (!response.ok) {
     throw new Error(await responseErrorMessage(response));
@@ -561,7 +597,7 @@ export async function streamChatRunEvents(
   onEvent: (event: ChatStreamEvent, meta: ChatStreamEventMeta) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const init: RequestInit = {};
+  const init: RequestInit = { credentials: "same-origin" };
   if (signal !== undefined) {
     init.signal = signal;
   }
@@ -627,7 +663,7 @@ export async function streamSessionChanges(
   onNotice: (notice: SessionChangeNotice) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const init: RequestInit = {};
+  const init: RequestInit = { credentials: "same-origin" };
   if (signal !== undefined) {
     init.signal = signal;
   }
@@ -672,6 +708,7 @@ export async function streamSessionChanges(
 export async function cancelChatRun(runId: string): Promise<boolean> {
   const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel`, {
     method: "POST",
+    credentials: "same-origin",
   });
   if (response.status === 404) {
     return false;

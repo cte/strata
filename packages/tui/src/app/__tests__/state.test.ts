@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendAssistantDelta,
+  appendAssistantReasoning,
   finalizeAssistantStream,
+  finalizeReasoningStream,
   initialAppState,
   nextThinkingLevel,
   recordModelUsage,
@@ -99,6 +101,30 @@ describe("assistant streaming", () => {
     const [first, second] = state.transcript;
     expect(first).toMatchObject({ iteration: 1, content: "first", streaming: false });
     expect(second).toMatchObject({ iteration: 2, content: "second", streaming: true });
+  });
+
+  test("reasoning deltas build a separate streaming item ahead of the assistant answer", () => {
+    const state = makeState();
+    appendAssistantReasoning(state, 1, "Let me ");
+    appendAssistantReasoning(state, 1, "think.");
+    appendAssistantDelta(state, 1, "Answer");
+
+    expect(state.transcript).toHaveLength(2);
+    expect(state.transcript[0]).toMatchObject({
+      kind: "reasoning",
+      iteration: 1,
+      content: "Let me think.",
+      streaming: true,
+    });
+    expect(state.transcript[1]).toMatchObject({
+      kind: "assistant",
+      iteration: 1,
+      content: "Answer",
+      streaming: true,
+    });
+
+    finalizeReasoningStream(state, 1);
+    expect(state.transcript[0]).toMatchObject({ kind: "reasoning", streaming: false });
   });
 
   test("finalize replaces streamed content with the canonical model text and clears the streaming flag", () => {

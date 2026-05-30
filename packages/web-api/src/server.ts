@@ -16,15 +16,14 @@ import {
 } from "./chat.js";
 import { finishModelAuth, modelAuthCompleteHtml } from "./modelAuth.js";
 import { finishNotionMcpAuth } from "./notionMcp.js";
-
 import {
   connectorSummaries,
   createWebApiServices,
   repoRoot,
   type WebApiOptions,
 } from "./services.js";
-
 import { appRouter } from "./trpc.js";
+import { isWebAuthExemptPath, WebAuthController } from "./webAuth.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4174;
@@ -34,6 +33,7 @@ const CHAT_STREAM_HEARTBEAT_MS = 5_000;
 export function createWebApiApp(options: WebApiOptions = {}): Hono {
   const app = new Hono();
   const services = createWebApiServices(options);
+  const auth = WebAuthController.create(options);
   const root = repoRoot(options);
   const terminals = new TerminalHttpBridge(
     new TerminalSessionManager(root, options.env ?? Bun.env),
@@ -43,10 +43,43 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
     "*",
     cors({
       origin: ["http://127.0.0.1:5173", "http://localhost:5173"],
-      allowHeaders: ["Content-Type"],
+      allowHeaders: ["Content-Type", "Authorization"],
       allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      credentials: true,
     }),
   );
+
+  app.use("*", async (c, next) => {
+    const url = new URL(c.req.url);
+    if (isWebAuthExemptPath(url.pathname, c.req.method) || auth.isAuthenticated(c.req.raw)) {
+      await next();
+      return;
+    }
+    return c.json(errorResponse("unauthorized", "Unlock Strata web with the local token."), 401, {
+      "www-authenticate": 'Bearer realm="Strata web"',
+    });
+  });
+
+  app.get("/api/auth/status", (c) => c.json(auth.status(c.req.raw)));
+
+  app.post("/api/auth/session", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { token?: unknown } | null;
+    if (auth.enabled && (body === null || typeof body.token !== "string")) {
+      return c.json(errorResponse("bad_request", "Token is required."), 400);
+    }
+    const result = auth.createSession(typeof body?.token === "string" ? body.token : "", c.req.raw);
+    if (result === undefined) {
+      return c.json(errorResponse("unauthorized", "Invalid Strata web token."), 401);
+    }
+    c.header("set-cookie", result.cookie);
+    return c.json(result.status);
+  });
+
+  app.post("/api/auth/logout", (c) => {
+    const result = auth.logout(c.req.raw);
+    c.header("set-cookie", result.cookie);
+    return c.json(result.status);
+  });
 
   app.get("/api/health", (c) =>
     c.json({
@@ -243,7 +276,17 @@ export async function startWebApiServer(
     fetch: handler,
   });
 
+  const auth = WebAuthController.create({ ...options, repoRoot: root });
   console.log(`Strata web API listening on http://${server.hostname}:${server.port}`);
+  if (auth.enabled) {
+    if (auth.tokenSource === "local") {
+      console.log(`Strata web auth token: ${auth.tokenPath}`);
+    } else {
+      console.log("Strata web auth: STRATA_WEB_TOKEN enabled");
+    }
+  } else {
+    console.log("Strata web auth: disabled by STRATA_WEB_AUTH");
+  }
   return server;
 }
 

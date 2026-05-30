@@ -119,6 +119,7 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
       parseSseEvents<ResponseEvent>(response),
       toolNameMap.providerToCanonical,
       request.onAssistantDelta,
+      request.onReasoningDelta,
     );
   }
 }
@@ -409,8 +410,11 @@ async function parseCodexSseResponse(
   events: AsyncIterable<ResponseEvent>,
   providerToCanonical: Map<string, string>,
   onAssistantDelta?: (delta: string) => void,
+  onReasoningDelta?: (delta: string) => void,
 ): Promise<ModelResponse> {
   let content = "";
+  let reasoning = "";
+  let reasoningSignature: string | undefined;
   let finishReason = "unknown";
   let providerResponseId: string | undefined;
   let usage: JsonObject | undefined;
@@ -418,6 +422,12 @@ async function parseCodexSseResponse(
     | { callId: string; itemId?: string; name: string; argumentsText: string }
     | undefined;
   const toolCalls: AgentToolCall[] = [];
+  // Emit a blank line between successive reasoning summary parts so multi-part
+  // summaries read as paragraphs rather than running together.
+  const pushReasoning = (delta: string): void => {
+    reasoning += delta;
+    onReasoningDelta?.(delta);
+  };
 
   for await (const event of events) {
     const type = typeof event.type === "string" ? event.type : "";
@@ -431,6 +441,17 @@ async function parseCodexSseResponse(
       if (typeof event.delta === "string") {
         content += event.delta;
         onAssistantDelta?.(event.delta);
+      }
+    } else if (
+      type === "response.reasoning_summary_text.delta" ||
+      type === "response.reasoning_text.delta"
+    ) {
+      if (typeof event.delta === "string") {
+        pushReasoning(event.delta);
+      }
+    } else if (type === "response.reasoning_summary_part.added") {
+      if (reasoning !== "") {
+        pushReasoning("\n\n");
       }
     } else if (type === "response.output_item.added") {
       const item = event.item as
@@ -487,6 +508,10 @@ async function parseCodexSseResponse(
         currentTool = undefined;
       } else if (item?.type === "message" && content === "") {
         content = extractMessageText(item.content);
+      } else if (item?.type === "reasoning") {
+        // Preserve the full reasoning item (incl. any encrypted_content) so the
+        // next turn can replay it for reasoning continuity.
+        reasoningSignature = JSON.stringify(item);
       }
     } else if (
       type === "response.completed" ||
@@ -532,6 +557,12 @@ async function parseCodexSseResponse(
   }
   if (usage !== undefined) {
     response.usage = usage;
+  }
+  if (reasoning !== "") {
+    response.reasoning = reasoning;
+  }
+  if (reasoningSignature !== undefined) {
+    response.reasoningSignature = reasoningSignature;
   }
   return response;
 }

@@ -810,8 +810,9 @@ export const PromptInput = ({
             return (formData.get("message") as string) || "";
           })();
       const submittedFiles = files;
+      const submittedFileIds = new Set(submittedFiles.map((file) => file.id));
 
-      // Reset inputs immediately after capturing the submitted draft. This lets
+      // Reset text immediately after capturing the submitted draft. This lets
       // users type a queued follow-up while blob conversion/onSubmit completes;
       // without this, a running chat still shows the old text until the async
       // path returns and the next draft can be lost when we clear.
@@ -820,10 +821,12 @@ export const PromptInput = ({
       } else {
         form.reset();
       }
-      clear();
+      clearReferencedSources();
 
       try {
-        // Convert blob URLs to data URLs asynchronously
+        // Convert blob URLs to data URLs before removing submitted attachments.
+        // Removing first revokes the blob URLs, which breaks transcript previews
+        // and prevents image bytes from reaching the chat API.
         const convertedFiles: FileUIPart[] = await Promise.all(
           submittedFiles.map(async ({ id: _id, ...item }) => {
             if (item.url?.startsWith("blob:")) {
@@ -838,6 +841,10 @@ export const PromptInput = ({
           }),
         );
 
+        for (const id of submittedFileIds) {
+          remove(id);
+        }
+
         const result = onSubmit({ files: convertedFiles, text }, event);
 
         // Handle both sync and async onSubmit
@@ -850,10 +857,13 @@ export const PromptInput = ({
           }
         }
       } catch {
+        for (const id of submittedFileIds) {
+          remove(id);
+        }
         // Don't interrupt the composer if attachment conversion fails.
       }
     },
-    [usingProvider, controller, files, onSubmit, clear],
+    [usingProvider, controller, files, onSubmit, clearReferencedSources, remove],
   );
 
   // Render with or without local provider
