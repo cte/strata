@@ -15,6 +15,8 @@ export interface ChatToolCallView {
   name: string;
   argumentsText: string;
   status: ToolStatus;
+  summary?: string;
+  resultAvailable?: boolean;
   result?: unknown;
   /** Incremental stdout/stderr streamed via `tool.output` while the tool runs. */
   liveOutput?: { stdout: string; stderr: string };
@@ -424,10 +426,16 @@ function storedToolCalls(value: ChatMessageSummary["toolCalls"]): ChatToolCallVi
       id,
       name,
       argumentsText: typeof argumentsText === "string" ? argumentsText : "",
-      status: "running",
+      status: toolStatus(entry.status) ?? "running",
+      ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}),
+      ...(entry.resultAvailable === true ? { resultAvailable: true } : {}),
     });
   }
   return toolCalls;
+}
+
+function toolStatus(value: unknown): ToolStatus | null {
+  return value === "running" || value === "complete" || value === "error" ? value : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -534,35 +542,6 @@ export function sanitizeDisplayText(value: string): string {
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
   return sanitized.trim() === "" ? "Untitled session" : sanitized;
-}
-
-// ---------------------------------------------------------------------------
-// Attachment helpers.
-// ---------------------------------------------------------------------------
-
-export function readFileAsAttachment(file: File): Promise<AttachmentData | null> {
-  if (file.size > MAX_ATTACHMENT_BYTES || !file.type.startsWith("image/")) {
-    return Promise.resolve(null);
-  }
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
-    reader.onload = () => {
-      const url = typeof reader.result === "string" ? reader.result : "";
-      if (url === "") {
-        resolve(null);
-        return;
-      }
-      resolve({
-        id: clientId("att"),
-        type: "file",
-        mediaType: file.type,
-        filename: file.name,
-        url,
-      });
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 export function toChatImageAttachment(attachment: AttachmentData): ChatImageAttachment | null {

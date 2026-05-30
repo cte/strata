@@ -80,7 +80,7 @@ Run state:
 - Server startup marks abandoned running web chat rows and their linked Strata sessions as failed with `stoppedReason: "server_restarted"` so stale active runs are visible instead of silently hanging forever.
 - Web chat run lifecycle diagnostics are appended to the persisted session trace, including run start, browser stream close reason, explicit cancel requests, and run finish.
 - Planned native human-interaction requests from `user.ask` should also be server-owned: `packages/web-api/src/chat.ts` should provide the `AgentUserInteraction` adapter, persist/replay pending request events, and expose an explicit response/cancel path from the browser without making the browser own the agent loop.
-- The experimental terminal side panel is separate from the chat run lifecycle: `@strata/terminal-web` renders the browser terminal, `packages/web-api` owns the local shell WebSocket bridge, and terminal scrollback is not automatically written into chat sessions, traces, wiki pages, memory, or proposals. See [web-terminal-plan.md](./web-terminal-plan.md).
+- The experimental terminal side panel is separate from the chat run lifecycle: `@strata/terminal-web` renders the browser terminal, `@strata/terminal-backend` owns local shell sessions plus the HTTP/SSE bridge, `packages/web-api` only mounts thin local terminal routes, and terminal scrollback is not automatically written into chat sessions, traces, wiki pages, memory, or proposals. See [web-terminal-plan.md](./web-terminal-plan.md).
 
 
 Concurrency rules:

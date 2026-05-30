@@ -14,6 +14,8 @@ export interface ToolContext {
   repoRoot: string;
   sessionId?: string;
   toolCallId?: string;
+  /** Active run cancellation signal, forwarded to tools that can stop work early. */
+  signal?: AbortSignal;
   recordFileChange?: (change: ToolFileChange) => Promise<void> | void;
   /**
    * Optional sink for incremental tool output (e.g. a shell command's

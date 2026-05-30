@@ -11,7 +11,6 @@ import {
 import {
   Activity,
   BookOpen,
-  CalendarClock,
   Database,
   GitPullRequest,
   Inbox,

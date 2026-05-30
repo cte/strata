@@ -41,12 +41,6 @@ export interface StorageLike {
 }
 
 export const CHAT_MODEL_CHOICE_STORAGE_KEY = "strata:chat:model";
-export const CHAT_PROVIDERS: readonly ChatProviderName[] = [
-  "openai-codex",
-  "anthropic-claude",
-  "openai-compatible",
-];
-
 export const CHAT_REASONING_EFFORTS: readonly ChatReasoningEffort[] = [
   "off",
   "minimal",

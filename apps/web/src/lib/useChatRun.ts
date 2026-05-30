@@ -24,6 +24,8 @@ export interface UseChatRunResult {
   externallyRunning: boolean;
   activeRunId: string | null;
   error: string | null;
+  hasMoreBefore: boolean;
+  olderMessagesLoading: boolean;
   setError(message: string | null): void;
   usageTotals: TokenUsageTotals;
   /** Submit a new turn. No-op if the viewed session is mid-run or input is empty. */
@@ -34,6 +36,8 @@ export interface UseChatRunResult {
   clearSession(): void;
   /** Fork the viewed session into a new one and switch to it. */
   forkSession(): void;
+  /** Load the next older persisted transcript page, when available. */
+  loadOlderMessages(): void;
   /** Invalidate cached sessions list (sidebar). */
   refreshSessions(): void;
 }
@@ -80,6 +84,9 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
       error: null,
       usageTotals: createTokenUsageTotals(),
       loaded: false,
+      hasMoreBefore: false,
+      oldestDisplayMessageId: null,
+      olderMessagesLoading: false,
       externallyRunning: false,
     }),
     [runKey, urlSessionId],
@@ -110,6 +117,10 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     chatRunsStore.fork(runKey, onSessionChange);
   }, [runKey, onSessionChange]);
 
+  const loadOlderMessages = useCallback(() => {
+    chatRunsStore.loadOlder(runKey);
+  }, [runKey]);
+
   const setError = useCallback(
     (message: string | null) => {
       chatRunsStore.setError(runKey, message);
@@ -129,12 +140,15 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     externallyRunning: view.externallyRunning,
     activeRunId: view.activeRunId,
     error: view.error,
+    hasMoreBefore: view.hasMoreBefore,
+    olderMessagesLoading: view.olderMessagesLoading,
     setError,
     usageTotals: view.usageTotals,
     submit,
     cancel,
     clearSession,
     forkSession,
+    loadOlderMessages,
     refreshSessions,
   };
 }

@@ -26,8 +26,9 @@ class SequenceModelAdapter implements ModelAdapter {
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     // Drop the streaming callback before snapshotting — structuredClone
-    // can't clone functions, and the test only inspects message/tool data.
-    const { onAssistantDelta: _omit, ...rest } = request;
+    // can't clone functions or AbortSignals, and the test only inspects
+    // message/tool data.
+    const { onAssistantDelta: _omit, signal: _signal, ...rest } = request;
     this.requests.push(structuredClone(rest));
     const response = this.responses[this.index];
     this.index += 1;
@@ -46,7 +47,7 @@ class FlakyModelAdapter implements ModelAdapter {
   constructor(private readonly outcomes: Array<ModelResponse | Error>) {}
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const { onAssistantDelta: _omit, ...rest } = request;
+    const { onAssistantDelta: _omit, signal: _signal, ...rest } = request;
     this.requests.push(structuredClone(rest));
     const outcome = this.outcomes[this.index];
     this.index += 1;
@@ -185,6 +186,81 @@ describe("runAgentLoop", () => {
       ).toEqual(["call_1", "call_2"]);
     } finally {
       releaseFirst?.();
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("passes the run cancellation signal into tool contexts", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-tool-signal-"));
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    try {
+      const tools = new ToolRegistry();
+      tools.register({
+        name: "test.wait",
+        description: "Wait until cancelled.",
+        mode: "read",
+        inputSchema: { type: "object" },
+        async handler(_args, context) {
+          observedSignal = context.signal;
+          return await new Promise<{ aborted: boolean }>((resolve) => {
+            if (context.signal === undefined) {
+              resolve({ aborted: false });
+              return;
+            }
+            context.signal?.addEventListener(
+              "abort",
+              () => resolve({ aborted: context.signal?.aborted ?? false }),
+              { once: true },
+            );
+          });
+        },
+      });
+      const model = new SequenceModelAdapter([
+        {
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_wait",
+              name: "test.wait",
+              argumentsText: "{}",
+            },
+          ],
+        },
+      ]);
+      const events: AgentRunEvent[] = [];
+      await withTimeout(
+        (async () => {
+          for await (const event of runAgentLoopEvents({
+            question: "Wait.",
+            model,
+            repoRoot,
+            tools,
+            signal: controller.signal,
+          })) {
+            events.push(event);
+            if (event.type === "tool.call.started") {
+              controller.abort();
+            }
+          }
+        })(),
+        2_000,
+      );
+
+      expect(observedSignal).toBe(controller.signal);
+      expect(events.at(-1)).toMatchObject({
+        type: "agent.completed",
+        result: { stoppedReason: "cancelled" },
+      });
+      expect(events.find((event) => event.type === "tool.call.completed")).toMatchObject({
+        result: {
+          ok: true,
+          result: { aborted: true },
+        },
+      });
+    } finally {
+      controller.abort();
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
@@ -957,3 +1033,21 @@ describe("runAgentLoop", () => {
     }
   });
 });
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: Timer | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}

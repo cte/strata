@@ -8,7 +8,6 @@
     "./definitions": "./src/definitions.ts",
     "./registry": "./src/registry.ts",
     "./runner": "./src/runner.ts",
-    "./schedule-store": "./src/scheduleStore.ts",
     "./scheduler": "./src/scheduler.ts",
     "./types": "./src/types.ts"
   },
@@ -16,8 +15,7 @@
     "@strata/agent": "workspace:*",
     "@strata/core": "workspace:*",
     "@strata/ingest": "workspace:*",
-    "@strata/routines": "workspace:*",
-    "@strata/tools": "workspace:*"
+    "@strata/routines": "workspace:*"
   },
   "scripts": {
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json"

@@ -1,5 +1,4 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { AttachmentData } from "@/components/ai-elements/attachments";
 import {
   type ChatImageAttachment,
   type ChatStreamEvent,
@@ -26,6 +25,7 @@ import {
   markPendingMessagesErrored,
   messagesToTranscript,
   sanitizeDisplayText,
+  type TranscriptUpdate,
   toChatImageAttachment,
   transcriptUpdateForStreamEvent,
 } from "@/lib/chatRunModel";
@@ -39,6 +39,7 @@ import {
 import type { ChatModelChoice } from "@/lib/useChatModelChoice";
 
 const MAX_STREAM_RECONNECTS = 2;
+const CHAT_SESSION_PAGE_SIZE = 80;
 /** Interval for discovering server-side runs not yet streamed by this client. */
 const DISCOVER_INTERVAL_MS = 4_000;
 const DISCONNECT_MESSAGE =
@@ -62,6 +63,9 @@ export interface SessionRunState {
   usageTotals: TokenUsageTotals;
   /** True once the persisted transcript has been seeded for this view. */
   loaded: boolean;
+  hasMoreBefore: boolean;
+  oldestDisplayMessageId: number | null;
+  olderMessagesLoading: boolean;
   /**
    * The session has a run active server-side that this tab is *not* streaming
    * itself (e.g. advanced by the CLI/TUI, or a non-web run). Distinct from
@@ -109,8 +113,16 @@ function blankState(key: string): SessionRunState {
     error: null,
     usageTotals: createTokenUsageTotals(),
     loaded: false,
+    hasMoreBefore: false,
+    oldestDisplayMessageId: null,
+    olderMessagesLoading: false,
     externallyRunning: false,
   };
+}
+
+interface PendingTranscriptBatch {
+  updaters: TranscriptUpdate[];
+  patch: Partial<SessionRunState>;
 }
 
 /**
@@ -131,6 +143,9 @@ class ChatRunsStore {
   private discoverTimer: ReturnType<typeof setInterval> | null = null;
   private discovering = false;
   private changeFeedStarted = false;
+  private pendingTranscriptBatches = new Map<string, PendingTranscriptBatch>();
+  private transcriptFlushHandle: number | ReturnType<typeof setTimeout> | null = null;
+  private sessionTranscriptLoads = new Map<string, Promise<void>>();
 
   // Cached so the running-set selector keeps a stable identity between renders.
   private runningSnapshot: ReadonlySet<string> = new Set();
@@ -188,8 +203,74 @@ class ChatRunsStore {
     key: string,
     updater: (transcript: ChatMessageView[]) => ChatMessageView[],
   ): void {
+    this.flushPendingTranscript(key);
     const base = this.states.get(key) ?? blankState(key);
     this.update(key, { transcript: updater(base.transcript) });
+  }
+
+  private queueTranscriptUpdate(
+    key: string,
+    updater: TranscriptUpdate,
+    patch: Partial<SessionRunState> = {},
+  ): void {
+    const batch = this.pendingTranscriptBatches.get(key) ?? { updaters: [], patch: {} };
+    batch.updaters.push(updater);
+    batch.patch = { ...batch.patch, ...patch };
+    this.pendingTranscriptBatches.set(key, batch);
+    this.scheduleTranscriptFlush();
+  }
+
+  private scheduleTranscriptFlush(): void {
+    if (this.transcriptFlushHandle !== null) {
+      return;
+    }
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.transcriptFlushHandle = globalThis.requestAnimationFrame(() => {
+        this.transcriptFlushHandle = null;
+        this.flushPendingTranscripts();
+      });
+      return;
+    }
+    this.transcriptFlushHandle = globalThis.setTimeout(() => {
+      this.transcriptFlushHandle = null;
+      this.flushPendingTranscripts();
+    }, 16);
+  }
+
+  private flushPendingTranscripts(): void {
+    if (this.pendingTranscriptBatches.size === 0) {
+      return;
+    }
+    const batches = this.pendingTranscriptBatches;
+    this.pendingTranscriptBatches = new Map();
+    for (const [key, batch] of batches) {
+      const base = this.states.get(key) ?? blankState(key);
+      const transcript = batch.updaters.reduce(
+        (current, updater) => updater(current),
+        base.transcript,
+      );
+      this.states.set(key, { ...base, ...batch.patch, transcript });
+    }
+    this.emit();
+  }
+
+  private flushPendingTranscript(key: string): void {
+    const batch = this.pendingTranscriptBatches.get(key);
+    if (batch === undefined) {
+      return;
+    }
+    this.pendingTranscriptBatches.delete(key);
+    const base = this.states.get(key) ?? blankState(key);
+    const transcript = batch.updaters.reduce(
+      (current, updater) => updater(current),
+      base.transcript,
+    );
+    this.states.set(key, { ...base, ...batch.patch, transcript });
+    this.emit();
+  }
+
+  private streamingPatch(key: string): Partial<SessionRunState> {
+    return this.states.get(key)?.runState === "streaming" ? {} : { runState: "streaming" };
   }
 
   private refsFor(key: string): RunRefs {
@@ -235,7 +316,22 @@ class ChatRunsStore {
    * an empty transcript. Returns early when already loaded or when a live stream
    * is in progress (don't clobber an in-flight run's buffer).
    */
-  private async seedSessionTranscript(sessionId: string): Promise<void> {
+  private seedSessionTranscript(sessionId: string): Promise<void> {
+    const pending = this.sessionTranscriptLoads.get(sessionId);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const load = this.loadSessionTranscript(sessionId);
+    this.sessionTranscriptLoads.set(sessionId, load);
+    void load.finally(() => {
+      if (this.sessionTranscriptLoads.get(sessionId) === load) {
+        this.sessionTranscriptLoads.delete(sessionId);
+      }
+    });
+    return load;
+  }
+
+  private async loadSessionTranscript(sessionId: string): Promise<void> {
     const existing = this.states.get(sessionId);
     if (existing !== undefined && existing.loaded) {
       return;
@@ -246,7 +342,7 @@ class ChatRunsStore {
       this.emit();
     }
     try {
-      const detail = await getChatSession(sessionId);
+      const detail = await getChatSession(sessionId, { messageLimit: CHAT_SESSION_PAGE_SIZE });
       if (detail === null) {
         this.update(sessionId, { error: `Session not found: ${sessionId}`, loaded: true });
         return;
@@ -270,6 +366,9 @@ class ChatRunsStore {
         transcript,
         usageTotals: usageTotalsFromMessages(detail.messages),
         loaded: true,
+        hasMoreBefore: detail.messagePage.hasMoreBefore,
+        oldestDisplayMessageId: detail.messagePage.oldestDisplayMessageId,
+        olderMessagesLoading: false,
         externallyRunning:
           detail.session.status === "running" && this.refs.get(sessionId)?.abort == null,
         error:
@@ -284,6 +383,48 @@ class ChatRunsStore {
 
   setError(key: string, message: string | null): void {
     this.update(key, { error: message });
+  }
+
+  loadOlder(key: string): void {
+    const state = this.states.get(key);
+    if (
+      state === undefined ||
+      state.sessionId === null ||
+      state.olderMessagesLoading ||
+      !state.hasMoreBefore ||
+      state.oldestDisplayMessageId === null
+    ) {
+      return;
+    }
+    const { sessionId, oldestDisplayMessageId } = state;
+    this.update(key, { olderMessagesLoading: true, error: null });
+    void getChatSession(sessionId, {
+      messageLimit: CHAT_SESSION_PAGE_SIZE,
+      beforeMessageId: oldestDisplayMessageId,
+    }).then(
+      (detail) => {
+        if (detail === null) {
+          this.update(key, {
+            error: `Session not found: ${sessionId}`,
+            olderMessagesLoading: false,
+          });
+          return;
+        }
+        const current = this.states.get(key) ?? blankState(key);
+        const olderTranscript = messagesToTranscript(detail.messages);
+        const nextOldest =
+          detail.messagePage.oldestDisplayMessageId ?? current.oldestDisplayMessageId;
+        this.update(key, {
+          transcript: [...olderTranscript, ...current.transcript],
+          hasMoreBefore: detail.messagePage.hasMoreBefore,
+          oldestDisplayMessageId: nextOldest,
+          olderMessagesLoading: false,
+        });
+      },
+      (cause: unknown) => {
+        this.update(key, { error: errorMessage(cause), olderMessagesLoading: false });
+      },
+    );
   }
 
   // --- Submit --------------------------------------------------------------
@@ -478,14 +619,20 @@ class ChatRunsStore {
         break;
       case "model.request":
       case "model.retry":
-        this.update(key, { runState: "streaming" });
+        if (this.states.get(key)?.runState !== "streaming") {
+          this.update(key, { runState: "streaming" });
+        }
         break;
       case "assistant.delta": {
-        this.update(key, { runState: "streaming" });
-        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        this.queueTranscriptUpdate(
+          key,
+          transcriptUpdateForStreamEvent(event, refs.runId),
+          this.streamingPatch(key),
+        );
         break;
       }
       case "model.response": {
+        this.flushPendingTranscript(key);
         const turnUsage = event.usage === undefined ? undefined : normalizeModelUsage(event.usage);
         const base = this.states.get(key) ?? blankState(key);
         this.update(key, {
@@ -495,7 +642,9 @@ class ChatRunsStore {
         break;
       }
       case "compaction.started":
-        this.update(key, { runState: "streaming" });
+        if (this.states.get(key)?.runState !== "streaming") {
+          this.update(key, { runState: "streaming" });
+        }
         break;
       case "compaction.completed":
         this.update(key, { usageTotals: createTokenUsageTotals() });
@@ -504,15 +653,16 @@ class ChatRunsStore {
         this.update(key, { error: event.message });
         break;
       case "tool.call.started":
-        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        this.queueTranscriptUpdate(key, transcriptUpdateForStreamEvent(event, refs.runId));
         break;
       case "tool.output":
-        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        this.queueTranscriptUpdate(key, transcriptUpdateForStreamEvent(event, refs.runId));
         break;
       case "tool.call.completed":
-        this.updateTranscript(key, transcriptUpdateForStreamEvent(event, refs.runId));
+        this.queueTranscriptUpdate(key, transcriptUpdateForStreamEvent(event, refs.runId));
         break;
       case "agent.completed": {
+        this.flushPendingTranscript(key);
         refs.runTerminal = true;
         refs.runId = null;
         const sessionId = event.result.sessionId !== "" ? event.result.sessionId : undefined;
@@ -535,6 +685,7 @@ class ChatRunsStore {
         break;
       }
       case "agent.failed":
+        this.flushPendingTranscript(key);
         refs.runTerminal = true;
         refs.runId = null;
         this.update(key, { runState: "idle", activeRunId: null, error: event.message });
@@ -625,6 +776,9 @@ class ChatRunsStore {
           transcript: messagesToTranscript(detail.messages),
           usageTotals: usageTotalsFromMessages(detail.messages),
           loaded: true,
+          hasMoreBefore: detail.messagePage.hasMoreBefore,
+          oldestDisplayMessageId: detail.messagePage.oldestDisplayMessageId,
+          olderMessagesLoading: false,
         });
         this.emit();
         navigate(detail.session.id);
@@ -696,7 +850,7 @@ class ChatRunsStore {
       return;
     }
     try {
-      const detail = await getChatSession(sessionId);
+      const detail = await getChatSession(sessionId, { messageLimit: CHAT_SESSION_PAGE_SIZE });
       if (detail === null) {
         return;
       }
@@ -718,6 +872,9 @@ class ChatRunsStore {
         transcript,
         usageTotals: usageTotalsFromMessages(detail.messages),
         loaded: true,
+        hasMoreBefore: detail.messagePage.hasMoreBefore,
+        oldestDisplayMessageId: detail.messagePage.oldestDisplayMessageId,
+        olderMessagesLoading: false,
         externallyRunning:
           detail.session.status === "running" && this.refs.get(sessionId)?.abort == null,
       });
@@ -818,7 +975,7 @@ class ChatRunsStore {
 
   private reconcileFinishedRun(sessionId: string, runId: string | null): void {
     const finalize = (status: string | undefined, stoppedReason: string | undefined) => {
-      void getChatSession(sessionId).then((detail) => {
+      void getChatSession(sessionId, { messageLimit: CHAT_SESSION_PAGE_SIZE }).then((detail) => {
         if (detail !== null) {
           this.update(sessionId, {
             transcript: messagesToTranscript(
@@ -826,6 +983,9 @@ class ChatRunsStore {
               this.states.get(sessionId)?.transcript,
             ),
             usageTotals: usageTotalsFromMessages(detail.messages),
+            hasMoreBefore: detail.messagePage.hasMoreBefore,
+            oldestDisplayMessageId: detail.messagePage.oldestDisplayMessageId,
+            olderMessagesLoading: false,
           });
         }
         const resolved = status ?? detail?.session.status ?? "unknown";

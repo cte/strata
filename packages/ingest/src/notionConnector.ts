@@ -3,7 +3,6 @@ import type {
   ConnectorDefinition,
   ConnectorPullResult,
   ConnectorRuntime,
-  ConnectorStatus,
 } from "./connectors/types.js";
 import { normalizeNotionPageId, pullNotionPage } from "./notion.js";
 

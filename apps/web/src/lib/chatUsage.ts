@@ -1,7 +1,6 @@
 import {
   addTokenUsage,
   createTokenUsageTotals as createTotals,
-  hasTokenUsage as hasUsage,
   normalizeModelUsage,
 } from "@strata/core/token-usage";
 import type { TokenUsage as CoreTokenUsage } from "@strata/core/types";
@@ -57,10 +56,6 @@ export function usageTotalsFromMessages(
       .map((message) => message.usage)
       .filter((usage): usage is CoreTokenUsage => usage !== undefined && usage !== null),
   );
-}
-
-export function hasTokenUsage(totals: TokenUsageTotals): boolean {
-  return hasUsage(totals) || totals.latestContextTokens !== undefined;
 }
 
 export function formatTokens(count: number): string {

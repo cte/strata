@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createDefaultToolRegistry } from "../index.js";
@@ -100,19 +100,23 @@ describe("shell tools", () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
     try {
       const registry = createDefaultToolRegistry({ profile: "dangerous" });
-      await expect(
-        registry.execute(
-          "shell.run",
-          {
-            command: "printf abcdef && printf 123456 >&2",
-            maxOutputChars: 3,
-          },
-          { repoRoot },
-        ),
-      ).resolves.toMatchObject({
-        stdout: { text: "abc", chars: 6, truncated: true },
-        stderr: { text: "123", chars: 6, truncated: true },
+      const result = (await registry.execute(
+        "shell.run",
+        {
+          command: "printf abcdef && printf 123456 >&2",
+          maxOutputChars: 3,
+        },
+        { repoRoot },
+      )) as any;
+
+      expect(result).toMatchObject({
+        stdout: { text: "def", chars: 6, truncated: true },
+        stderr: { text: "456", chars: 6, truncated: true },
       });
+      expect(await readFile(result.stdout.fullOutputPath, "utf8")).toBe("abcdef");
+      expect(await readFile(result.stderr.fullOutputPath, "utf8")).toBe("123456");
+      await rm(result.stdout.fullOutputPath, { force: true });
+      await rm(result.stderr.fullOutputPath, { force: true });
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
@@ -128,6 +132,59 @@ describe("shell tools", () => {
         timedOut: true,
       });
     } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("cancels running commands through the tool context signal", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
+    try {
+      const registry = createDefaultToolRegistry({ profile: "dangerous" });
+      const controller = new AbortController();
+      const promise = registry.execute(
+        "shell.run",
+        { command: "printf started; sleep 30", timeoutMs: 10_000 },
+        { repoRoot, signal: controller.signal },
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      controller.abort();
+      const result = await withTimeout(promise, 2_000);
+
+      expect(result).toMatchObject({
+        timedOut: false,
+        cancelled: true,
+        stdout: { text: "started" },
+      });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("resolves after the shell exits when a background child keeps stdio open", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-shell-tools-"));
+    const pidFile = path.join(repoRoot, "child.pid");
+    try {
+      const registry = createDefaultToolRegistry({ profile: "dangerous" });
+      const result = await withTimeout(
+        registry.execute(
+          "shell.run",
+          {
+            command: `sleep 30 & echo $! > ${shellQuote(pidFile)}; printf parent-done`,
+            timeoutMs: 500,
+          },
+          { repoRoot },
+        ),
+        2_000,
+      );
+
+      expect(result).toMatchObject({
+        exitCode: 0,
+        timedOut: false,
+        stdout: { text: "parent-done" },
+      });
+    } finally {
+      await killPidFromFile(pidFile);
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
@@ -151,3 +208,36 @@ describe("shell tools", () => {
     }
   });
 });
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: Timer | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function killPidFromFile(pidFile: string): Promise<void> {
+  try {
+    const pid = Number.parseInt((await readFile(pidFile, "utf8")).trim(), 10);
+    if (Number.isFinite(pid) && pid > 0) {
+      process.kill(pid, "SIGKILL");
+    }
+  } catch {
+    // The process may have already exited.
+  }
+}

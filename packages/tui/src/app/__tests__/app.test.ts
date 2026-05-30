@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -16,6 +16,7 @@ function pump(ms = 30): Promise<void> {
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
+  mock.restore();
   globalThis.fetch = originalFetch;
 });
 
@@ -589,6 +590,81 @@ describe("StrataApp", () => {
       terminal.feed("/quit\r");
       await pump();
       expect(app.running).toBe(false);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("Ctrl+Z stops the TUI and restores it on SIGCONT", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    try {
+      const terminal = new FakeTerminal(60, 12);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const startSpy = spyOn(runtime, "start");
+      const stopSpy = spyOn(runtime, "stop");
+      const forceRedrawSpy = spyOn(runtime, "forceRedraw");
+      const app = new StrataApp(
+        runtime,
+        { repoRoot, provider: "openai-codex", model: "gpt-test" },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+
+      const keepAliveHandle = setTimeout(() => undefined, 0);
+      clearTimeout(keepAliveHandle);
+      const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
+        (() => keepAliveHandle) as typeof setInterval,
+      );
+      const clearIntervalSpy = spyOn(globalThis, "clearInterval").mockImplementation(
+        (() => undefined) as typeof clearInterval,
+      );
+      let sigintHandler: (() => void) | undefined;
+      let sigcontHandler: (() => void) | undefined;
+      const processOnSpy = spyOn(process, "on").mockImplementation(((
+        event: string,
+        listener: (...args: unknown[]) => void,
+      ) => {
+        if (event === "SIGINT") {
+          sigintHandler = listener;
+        }
+        return process;
+      }) as typeof process.on);
+      const removeListenerSpy = spyOn(process, "removeListener").mockImplementation(
+        (() => process) as typeof process.removeListener,
+      );
+      const processOnceSpy = spyOn(process, "once").mockImplementation(((
+        event: string,
+        listener: (...args: unknown[]) => void,
+      ) => {
+        if (event === "SIGCONT") {
+          sigcontHandler = listener;
+        }
+        return process;
+      }) as typeof process.once);
+      const processKillSpy = spyOn(process, "kill").mockImplementation(
+        (() => true) as typeof process.kill,
+      );
+
+      runtime.start();
+      await pump();
+      terminal.feed("\x1a");
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2 ** 30);
+      expect(processOnSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
+      expect(processOnceSpy).toHaveBeenCalledWith("SIGCONT", expect.any(Function));
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(processKillSpy).toHaveBeenCalledWith(0, "SIGTSTP");
+      expect(sigintHandler).toBeDefined();
+      expect(sigcontHandler).toBeDefined();
+
+      sigcontHandler?.();
+
+      expect(clearIntervalSpy).toHaveBeenCalledWith(keepAliveHandle);
+      expect(removeListenerSpy).toHaveBeenCalledWith("SIGINT", sigintHandler);
+      expect(startSpy).toHaveBeenCalledTimes(2);
+      expect(forceRedrawSpy).toHaveBeenCalledTimes(1);
+      expect(app.running).toBe(true);
+      runtime.stop();
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

@@ -6,11 +6,8 @@ import {
   type LearningProposalRecord,
   listSkills,
   listTodos,
-  type MemoryDocument,
   readMemoryDocuments,
   SessionStore,
-  type SkillMetadata,
-  type TodoItem,
   writeLearningProposal,
   writeOrReuseLearningProposal,
 } from "@strata/core";

@@ -532,7 +532,6 @@ export function buildGranolaMeetingDraft(
 }
 
 function buildGranolaWikiApplyPlan(
-  repoRoot: string,
   draft: RawMeetingDraft,
   now: Date,
   taxonomy: ResolvedIngestTaxonomy,
@@ -774,9 +773,9 @@ function buildSourceApplyPlan(
   taxonomy: ResolvedIngestTaxonomy,
 ): GranolaWikiApplyPlan | SourceWikiApplyPlan {
   if ("proposedMeetingPath" in draft) {
-    return buildGranolaWikiApplyPlan(repoRoot, draft, now, taxonomy);
+    return buildGranolaWikiApplyPlan(draft, now, taxonomy);
   }
-  const classified = classifySourceDraft(draft, taxonomy);
+  const classified = classifySourceDraft(draft);
   const primaryContent = formatSourcePrimaryPage(draft, classified, now);
   const writtenPaths = uniqueStrings([
     draft.primaryPath,
@@ -917,10 +916,7 @@ function classifyGranolaMeeting(
   };
 }
 
-function classifySourceDraft(
-  draft: SourceWikiDraft,
-  taxonomy: ResolvedIngestTaxonomy,
-): SourceClassified {
+function classifySourceDraft(draft: SourceWikiDraft): SourceClassified {
   const people = draft.peopleCandidates.map((name) => ({
     label: name,
     path: path.join("wiki", "people", `${slugify(name, "person")}.md`),

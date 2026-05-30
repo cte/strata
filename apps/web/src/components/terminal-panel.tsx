@@ -4,6 +4,16 @@ import type * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 
+interface TerminalSessionResponse {
+  id: string;
+  shell: string;
+}
+
+interface TerminalFrame {
+  event: string;
+  data: unknown;
+}
+
 export function TerminalPanel({ onClose }: { onClose: () => void }): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState("connecting");
@@ -11,33 +21,74 @@ export function TerminalPanel({ onClose }: { onClose: () => void }): React.React
   useEffect(() => {
     const host = hostRef.current;
     if (host === null) return;
+
+    const abort = new AbortController();
+    let disposed = false;
+    let sessionId: string | null = null;
+    let dataSub: { dispose: () => void } | null = null;
     const terminal = new Terminal({ cols: 96, rows: 24 });
     terminal.open(host);
     terminal.write("Strata experimental terminal\r\n");
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/api/terminal/connect`);
-    socket.binaryType = "arraybuffer";
-    const dataSub = terminal.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(data);
+    terminal.write("Connecting over HTTP stream\r\n");
+    setStatus("connecting");
+
+    const sendInput = async (data: string) => {
+      if (disposed || sessionId === null) return;
+      await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/input`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data }),
+        signal: abort.signal,
+      }).catch(() => {
+        if (!disposed) setStatus("input error");
+      });
+    };
+
+    dataSub = terminal.onData((data) => {
+      const echo = localEcho(data);
+      if (echo.length > 0) terminal.write(echo);
+      void sendInput(data);
     });
-    socket.addEventListener("open", () => {
-      setStatus("connected");
-      terminal.focus();
-    });
-    socket.addEventListener("message", (event) => {
-      if (typeof event.data === "string") {
-        terminal.write(event.data);
-        return;
+
+    void (async () => {
+      try {
+        const created = await fetch("/api/terminal/sessions", {
+          method: "POST",
+          signal: abort.signal,
+        });
+        if (!created.ok) throw new Error(`create failed ${created.status}`);
+        const session = (await created.json()) as TerminalSessionResponse;
+        if (disposed) return;
+        sessionId = session.id;
+        setStatus("connected");
+        terminal.write(`Shell: ${session.shell}\r\n`);
+        terminal.focus();
+        await streamTerminal(session.id, abort.signal, (frame) => {
+          if (disposed) return;
+          if (frame.event === "stdout" || frame.event === "stderr") {
+            if (typeof frame.data === "string") terminal.write(frame.data);
+            return;
+          }
+          if (frame.event === "closed") {
+            setStatus("closed");
+          }
+        });
+      } catch (error: unknown) {
+        if (disposed || abort.signal.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus("error");
+        terminal.write(`\r\n[terminal connection error: ${message}]\r\n`);
       }
-      if (event.data instanceof ArrayBuffer) {
-        terminal.write(new Uint8Array(event.data));
-      }
-    });
-    socket.addEventListener("close", () => setStatus("closed"));
-    socket.addEventListener("error", () => setStatus("error"));
+    })();
+
     return () => {
-      dataSub.dispose();
-      socket.close();
+      disposed = true;
+      dataSub?.dispose();
+      abort.abort();
+      const id = sessionId;
+      if (id !== null) {
+        void fetch(`/api/terminal/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      }
       terminal.dispose();
     };
   }, []);
@@ -70,4 +121,57 @@ export function TerminalPanel({ onClose }: { onClose: () => void }): React.React
       <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden" />
     </aside>
   );
+}
+
+async function streamTerminal(
+  sessionId: string,
+  signal: AbortSignal,
+  onFrame: (frame: TerminalFrame) => void,
+): Promise<void> {
+  const response = await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/stream`, {
+    signal,
+  });
+  if (!response.ok) throw new Error(`stream failed ${response.status}`);
+  if (response.body === null) throw new Error("stream body missing");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (!signal.aborted) {
+    const next = await reader.read();
+    if (next.done) break;
+    buffer += decoder.decode(next.value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const frame = parseSseFrame(part);
+      if (frame !== null) onFrame(frame);
+    }
+  }
+}
+
+function localEcho(data: string): string {
+  let echo = "";
+  for (const char of data) {
+    if (char === "\r") {
+      echo += "\r\n";
+    } else if (char === "\x7f") {
+      echo += "\b \b";
+    } else if (char >= " " || char === "\t") {
+      echo += char;
+    }
+  }
+  return echo;
+}
+
+function parseSseFrame(frame: string): TerminalFrame | null {
+  const event = frame
+    .split("\n")
+    .find((line) => line.startsWith("event: "))
+    ?.slice("event: ".length);
+  const data = frame
+    .split("\n")
+    .find((line) => line.startsWith("data: "))
+    ?.slice("data: ".length);
+  if (event === undefined || data === undefined) return null;
+  return { event, data: JSON.parse(data) as unknown };
 }

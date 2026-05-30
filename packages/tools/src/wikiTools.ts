@@ -16,7 +16,7 @@ import {
   PolicyViolationError,
 } from "./policy.js";
 import { ToolRegistry } from "./registry.js";
-import type { ToolContext, ToolDefinition } from "./types.js";
+import type { ToolDefinition } from "./types.js";
 
 interface WikiListPagesArgs extends JsonObject {
   root?: JsonValue;

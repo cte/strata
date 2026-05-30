@@ -221,8 +221,7 @@ export function renderInlinePicker<T>(ctx: RenderContext, opts: InlinePickerOpti
  * roughly centered in the visible slice; the slice clamps to the bounds so
  * the first/last entries don't get pinned off-screen at the list edges.
  *
- * The caller decides `maxVisible` based on the available row budget (see
- * `availableListRows` for `centerModal`-hosted lists).
+ * The caller decides `maxVisible` based on the available row budget.
  */
 export function computeScrollWindow(
   total: number,
@@ -239,68 +238,6 @@ export function computeScrollWindow(
   );
   const endIndex = Math.min(startIndex + visible, total);
   return { startIndex, endIndex };
-}
-
-/**
- * Row budget for a scrolling list rendered inside a `centerModal`. The modal
- * has 4 lines of chrome (top border + top padding + bottom padding + bottom
- * border), and `centerModal` clamps the whole frame to `ctx.height`, so the
- * list can use `ctx.height - 4 - reservedRows` rows without being truncated.
- *
- * `reservedRows` should account for any non-list lines the caller will append
- * (hint footer, blank separator, scroll indicator).
- */
-export function availableListRows(ctx: RenderContext, reservedRows: number): number {
-  return Math.max(1, ctx.height - 4 - reservedRows);
-}
-
-export function centerModal(content: string[], title: string, ctx: RenderContext): Frame {
-  const boxWidth = Math.min(ctx.width, Math.max(40, Math.min(80, ctx.width - 4)));
-  const padding = 2;
-  const innerWidth = Math.max(1, boxWidth - 2 - padding * 2);
-  const wrapped: string[] = [];
-  for (const line of content) {
-    wrapped.push(truncateToWidth(line, innerWidth));
-  }
-  const boxLines: string[] = [];
-  const horizontalRest = "─".repeat(Math.max(0, boxWidth - 2 - title.length - 4));
-  const titleLabel = title === "" ? "─".repeat(boxWidth - 2) : `─ ${title} ${horizontalRest}`;
-  boxLines.push(theme.accent(`┌${titleLabel.padEnd(boxWidth - 2, "─")}┐`));
-  boxLines.push(theme.accent(`│${" ".repeat(boxWidth - 2)}│`));
-  for (const line of wrapped) {
-    boxLines.push(
-      theme.accent("│") +
-        " ".repeat(padding) +
-        padToWidth(line, innerWidth) +
-        " ".repeat(padding) +
-        theme.accent("│"),
-    );
-  }
-  boxLines.push(theme.accent(`│${" ".repeat(boxWidth - 2)}│`));
-  boxLines.push(theme.accent(`└${"─".repeat(boxWidth - 2)}┘`));
-  const horizontalCentered = boxLines.map((line) => centerLine(line, ctx.width));
-  const verticalPadAbove = Math.max(0, Math.floor((ctx.height - horizontalCentered.length) / 2));
-  const out: string[] = [];
-  for (let i = 0; i < verticalPadAbove; i += 1) {
-    out.push(padToWidth("", ctx.width));
-  }
-  out.push(...horizontalCentered);
-  while (out.length < ctx.height) {
-    out.push(padToWidth("", ctx.width));
-  }
-  if (out.length > ctx.height) {
-    out.length = ctx.height;
-  }
-  return { lines: out };
-}
-
-function centerLine(line: string, width: number): string {
-  const len = visibleWidth(line);
-  if (len >= width) {
-    return line;
-  }
-  const left = Math.floor((width - len) / 2);
-  return " ".repeat(left) + padToWidth(line, width - left);
 }
 
 function shortenPath(repoRoot: string): string {

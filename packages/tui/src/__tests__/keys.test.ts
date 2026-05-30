@@ -17,6 +17,7 @@ describe("parseKey", () => {
     expect(parseKey("\x7f")).toBe("backspace");
     expect(parseKey("\x03")).toBe("ctrl+c");
     expect(parseKey("\x04")).toBe("ctrl+d");
+    expect(parseKey("\x1a")).toBe("ctrl+z");
     expect(parseKey("\x1b")).toBe("escape");
   });
 
@@ -78,6 +79,7 @@ describe("sequenceToInputEvent", () => {
   test("returns key events for recognized KeyIds", () => {
     expect(sequenceToInputEvent("\r")).toEqual({ type: "key", key: "enter", raw: "\r" });
     expect(sequenceToInputEvent("\x03")).toEqual({ type: "key", key: "ctrl+c", raw: "\x03" });
+    expect(sequenceToInputEvent("\x1a")).toEqual({ type: "key", key: "ctrl+z", raw: "\x1a" });
     expect(sequenceToInputEvent("\x1b[13;2u")).toEqual({
       type: "key",
       key: "shift+enter",

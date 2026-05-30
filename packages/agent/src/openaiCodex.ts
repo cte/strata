@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@strata/core";
+import type { JsonObject } from "@strata/core";
 import type { ToolMetadata } from "@strata/tools";
 import type { ChatGptCredentials } from "./authStore.js";
 import { ModelAdapterError } from "./model.js";

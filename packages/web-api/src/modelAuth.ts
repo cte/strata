@@ -337,10 +337,6 @@ function assertApiKeyTarget(value: string): ApiKeyTarget {
   throw new Error(`Unknown API key target: ${value}`);
 }
 
-export function modelAuthCallbackRoute(provider: ModelAuthProviderName): string {
-  return `/api/auth/models/${provider}/callback`;
-}
-
 function providerStatus(input: {
   provider: ModelAuthProviderName;
   displayName: string;

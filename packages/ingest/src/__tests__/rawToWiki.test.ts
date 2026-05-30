@@ -665,31 +665,6 @@ Ada Lovelace: Sam will draft the connector runbook.
 `;
 }
 
-function rawGranolaToolOutputActionSnapshot(): string {
-  return `${frontmatter({
-    type: "raw_granola_transcript",
-    source: "granola",
-    date: "2026-05-12",
-    title: "Connector Tool Output Sync",
-    attendees: ["Sam Rivera", "Ada Lovelace"],
-    projects: ["Connector Reliability"],
-    pulled_at: "2026-05-12T12:00:00.000Z",
-  })}
-# Connector Tool Output Sync
-
-## Summary
-
-### Connector Reliability
-
-- Decision: We will keep connector retry reporting observable.
-- [ ] search: 999. Action item: Investigate ROOMOTE-WORKER-28Y first.
-
-## Transcript
-
-Ada Lovelace: Decision: We will keep connector retry reporting observable.
-`;
-}
-
 function rawNotionSnapshot(title: string): string {
   return `${frontmatter({
     type: "raw_notion_page",
@@ -1290,25 +1265,5 @@ function rawSlackQuickDataQuestionsSnapshot(): string {
 ## 1779417216.778269 | UD03N4P0W
 
 Ok. Can Swapnil or someone look at my data questions? Should be quick verifications
-`;
-}
-
-function rawSlackUserIdMaterialFirstPersonActionSnapshot(): string {
-  return `${frontmatter({
-    type: "raw_slack_thread",
-    source: "slack",
-    date: "2026-05-09",
-    channel: "CD9NUN7UJ",
-    thread_ts: "1779417202.778269",
-    latest_ts: "1779417202.778269",
-    title: "I need to investigate the release bug before launch",
-    message_count: 1,
-    pulled_at: "2026-05-09T10:00:00.000Z",
-  })}
-# I need to investigate the release bug before launch
-
-## 1779417202.778269 | UD03N4P0W
-
-I need to investigate the release bug before launch.
 `;
 }

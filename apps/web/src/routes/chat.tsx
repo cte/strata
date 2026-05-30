@@ -20,7 +20,15 @@ import {
   X,
 } from "lucide-react";
 import type * as React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { AttachmentData } from "@/components/ai-elements/attachments";
 import {
   Attachment,
@@ -127,6 +135,7 @@ import {
   addChatQueuedMessage,
   type ChatQueueTarget,
   clearChatQueuedMessages,
+  getChatToolResult,
   invokeChatSkill,
   listChatQueuedMessages,
   removeChatQueuedMessage,
@@ -258,12 +267,15 @@ export function ChatPage(): React.ReactElement {
     externallyRunning,
     activeRunId,
     error,
+    hasMoreBefore,
+    olderMessagesLoading,
     setError,
     usageTotals,
     submit,
     cancel,
     clearSession,
     forkSession,
+    loadOlderMessages,
   } = chatRun;
 
   const queueTarget = useMemo<ChatQueueTarget>(() => {
@@ -505,7 +517,17 @@ export function ChatPage(): React.ReactElement {
                 />
               )
             ) : (
-              transcript.map((message) => <TranscriptMessage key={message.id} message={message} />)
+              <>
+                {hasMoreBefore ? (
+                  <LoadOlderMessagesButton
+                    loading={olderMessagesLoading}
+                    onClick={loadOlderMessages}
+                  />
+                ) : null}
+                {transcript.map((message) => (
+                  <TranscriptMessage key={message.id} message={message} sessionId={sessionId} />
+                ))}
+              </>
             )}
           </ConversationContent>
           <ConversationScrollButton />
@@ -773,6 +795,30 @@ function InlineChatEmptyState(): React.ReactElement {
   );
 }
 
+function LoadOlderMessagesButton({
+  loading,
+  onClick,
+}: {
+  loading: boolean;
+  onClick(): void;
+}): React.ReactElement {
+  return (
+    <div className="flex justify-center pb-1">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={loading}
+        onClick={onClick}
+        className="h-7 rounded-md border-hairline bg-bg-elev px-2.5 text-xs text-fg-dim hover:bg-surface-2 hover:text-fg"
+      >
+        {loading ? <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin" /> : null}
+        Load older
+      </Button>
+    </div>
+  );
+}
+
 function KeyboardShortcut({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
     <kbd className="rounded border border-hairline px-1 py-px font-mono text-2xs leading-none tracking-tight text-fg-mute">
@@ -936,7 +982,13 @@ function ChatPromptSubmit({
   );
 }
 
-function TranscriptMessage({ message }: { message: ChatMessageView }): React.ReactElement {
+const TranscriptMessage = memo(function TranscriptMessage({
+  message,
+  sessionId,
+}: {
+  message: ChatMessageView;
+  sessionId: string | null;
+}): React.ReactElement {
   const showActions =
     (message.role === "assistant" || message.role === "user") &&
     message.status === "complete" &&
@@ -944,7 +996,11 @@ function TranscriptMessage({ message }: { message: ChatMessageView }): React.Rea
   const showUsage =
     message.role === "assistant" && message.status === "complete" && message.usage !== undefined;
   return (
-    <Message from={message.role} status={message.status}>
+    <Message
+      from={message.role}
+      status={message.status}
+      className="[content-visibility:auto] [contain-intrinsic-size:96px]"
+    >
       <div
         className={cn(
           "flex min-w-0 max-w-[min(820px,100%)] flex-1 flex-col",
@@ -972,7 +1028,7 @@ function TranscriptMessage({ message }: { message: ChatMessageView }): React.Rea
         {message.toolCalls.length === 0 ? null : (
           <div className="mt-2 flex w-full flex-col gap-2">
             {message.toolCalls.map((tool) => (
-              <ToolPanel key={tool.id} tool={tool} />
+              <ToolPanel key={tool.id} tool={tool} sessionId={sessionId} />
             ))}
           </div>
         )}
@@ -987,7 +1043,7 @@ function TranscriptMessage({ message }: { message: ChatMessageView }): React.Rea
       </div>
     </Message>
   );
-}
+});
 
 function MessageUsageBadge({ usage }: { usage: TokenUsage }): React.ReactElement | null {
   if (usage.input === 0 && usage.output === 0 && usage.cacheRead === 0 && usage.cacheWrite === 0) {
@@ -1034,17 +1090,94 @@ function CopyMessageAction({ text }: { text: string }): React.ReactElement {
   );
 }
 
-function ToolPanel({ tool }: { tool: ChatToolCallView }): React.ReactElement {
-  const args = parseToolArguments(tool.argumentsText);
-  const execution = normalizeToolExecution(tool);
-  const summary = toolSummary(tool, args, execution);
+const ToolPanel = memo(function ToolPanel({
+  tool,
+  sessionId,
+}: {
+  tool: ChatToolCallView;
+  sessionId: string | null;
+}): React.ReactElement {
+  const [open, setOpen] = useState(() => tool.status === "running");
+  const [loadedResult, setLoadedResult] = useState<{
+    result: unknown;
+    status: ChatToolCallView["status"];
+    summary: string | null;
+  } | null>(null);
+  const [loadingResult, setLoadingResult] = useState(false);
+  const [resultError, setResultError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tool.status === "running") {
+      setOpen(true);
+    }
+  }, [tool.status]);
+
+  useEffect(() => {
+    if (
+      !open ||
+      sessionId === null ||
+      !tool.resultAvailable ||
+      tool.result !== undefined ||
+      loadedResult !== null ||
+      loadingResult
+    ) {
+      return;
+    }
+    let cancelled = false;
+    setLoadingResult(true);
+    setResultError(null);
+    void getChatToolResult(sessionId, tool.id).then(
+      (detail) => {
+        if (cancelled) {
+          return;
+        }
+        setLoadingResult(false);
+        if (detail === null) {
+          setResultError("Tool result is no longer available.");
+          return;
+        }
+        setLoadedResult({
+          result: parseJsonValue(detail.content),
+          status: detail.status,
+          summary: detail.summary,
+        });
+      },
+      (cause: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setLoadingResult(false);
+        setResultError(errorMessage(cause));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [loadedResult, loadingResult, open, sessionId, tool.id, tool.result, tool.resultAvailable]);
+
+  const handleToggle = useCallback((event: React.SyntheticEvent<HTMLDetailsElement>) => {
+    setOpen(event.currentTarget.open);
+  }, []);
+
+  const displayTool =
+    loadedResult === null
+      ? tool
+      : {
+          ...tool,
+          status: loadedResult.status,
+          ...(loadedResult.summary === null ? {} : { summary: loadedResult.summary }),
+          result: loadedResult.result,
+        };
+  const args = open ? parseToolArguments(displayTool.argumentsText) : null;
+  const execution = open ? normalizeToolExecution(displayTool) : null;
+  const summary = displayTool.summary ?? (open ? toolSummary(displayTool, args, execution) : null);
 
   return (
-    <Tool status={tool.status}>
+    <Tool status={displayTool.status} open={open} onToggle={handleToggle}>
       <ToolHeader>
         <span className="flex min-w-0 items-center gap-2">
-          <ToolIcon name={tool.name} />
-          <span className="truncate font-mono text-xs text-fg">{tool.name}</span>
+          <ToolIcon name={displayTool.name} />
+          <span className="truncate font-mono text-xs text-fg">{displayTool.name}</span>
           {summary === null ? null : (
             <span className="hidden truncate text-xs text-fg-mute sm:inline">{summary}</span>
           )}
@@ -1052,20 +1185,28 @@ function ToolPanel({ tool }: { tool: ChatToolCallView }): React.ReactElement {
         <span
           className={cn(
             "label-eyebrow ml-auto",
-            tool.status === "running" && "!text-warn",
-            tool.status === "complete" && "!text-good",
-            tool.status === "error" && "!text-bad",
+            displayTool.status === "running" && "!text-warn",
+            displayTool.status === "complete" && "!text-good",
+            displayTool.status === "error" && "!text-bad",
           )}
         >
-          {tool.status}
+          {displayTool.status}
         </span>
       </ToolHeader>
-      <ToolContent>
-        <SpecializedToolContent tool={tool} args={args} execution={execution} />
-      </ToolContent>
+      {open ? (
+        <ToolContent>
+          {loadingResult ? (
+            <p className="text-xs text-fg-mute">Loading result...</p>
+          ) : resultError === null ? (
+            <SpecializedToolContent tool={displayTool} args={args} execution={execution} />
+          ) : (
+            <p className="text-xs text-bad">{resultError}</p>
+          )}
+        </ToolContent>
+      ) : null}
     </Tool>
   );
-}
+});
 
 function ToolIcon({ name }: { name: string }): React.ReactElement {
   const className = "shrink-0 text-accent";
