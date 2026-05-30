@@ -76,6 +76,26 @@ describe("buildRunContext", () => {
       const context = await buildRunContext({
         question: "What matters now?",
         repoRoot,
+        tools: [
+          {
+            name: "fs.edit",
+            description: "Edit files.",
+            mode: "write",
+            inputSchema: { type: "object" },
+            promptSnippet: "Make precise file edits",
+            promptGuidelines: ["Use fs.edit for precise changes."],
+            maxResultChars: null,
+          },
+          {
+            name: "fs.write",
+            description: "Write files.",
+            mode: "write",
+            inputSchema: { type: "object" },
+            promptSnippet: "Create or overwrite files",
+            promptGuidelines: ["Use fs.write only for new files or complete rewrites."],
+            maxResultChars: null,
+          },
+        ],
       });
 
       expect(context.messages).toHaveLength(3);
@@ -86,9 +106,16 @@ describe("buildRunContext", () => {
       expect(context.messages[1]?.content).toContain("query-wiki");
       expect(context.messages[1]?.content).toContain("review-code");
       expect(context.messages[1]?.content).not.toContain("manual-only");
+      expect(context.messages[1]?.content).toContain("## Tool Guidance");
+      expect(context.messages[1]?.content).toContain("Available tools:");
+      expect(context.messages[1]?.content).toContain("- fs.edit: Make precise file edits");
+      expect(context.messages[1]?.content).toContain(
+        "- Use fs.write only for new files or complete rewrites.",
+      );
       expect(context.messages[2]).toEqual({ role: "user", content: "What matters now?" });
       expect(context.systemContext).toMatchObject({
         agentInstructions: [{ path: "AGENTS.md" }],
+        toolGuidance: [{ name: "fs.edit" }, { name: "fs.write" }],
         activeTodos: [{ title: "Finish learning-state tools" }],
         skills: [{ name: "query-wiki" }, { name: "review-code" }],
       });

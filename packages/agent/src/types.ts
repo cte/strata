@@ -124,6 +124,24 @@ export interface AgentRunConfig {
    * `executionMode: "sequential"` forces the whole batch sequential.
    */
   toolExecution?: ToolExecutionMode;
+
+  /**
+   * Returns steering messages to inject while the agent is still working.
+   *
+   * Pi-compatible drain point: called after the current assistant response and
+   * any tool calls from that response finish, before the next model request.
+   * Callers should return [] when no messages are pending.
+   */
+  getSteeringMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
+
+  /**
+   * Returns follow-up messages to process after the agent would otherwise stop.
+   *
+   * Pi-compatible drain point: called only when there are no tool calls left and
+   * no steering messages waiting. Callers should return [] when no messages are
+   * pending.
+   */
+  getFollowUpMessages?: () => AgentMessage[] | Promise<AgentMessage[]>;
 }
 
 export interface AgentRunResult {
@@ -146,7 +164,7 @@ export type ToolResultContent = JsonValue;
 
 export type AgentRunEvent =
   | { type: "session.started"; sessionId: string; title: string; model: string }
-  | { type: "message.user"; content: string }
+  | { type: "message.user"; content: string; attachments?: AgentAttachment[] }
   | { type: "model.request"; iteration: number; messageCount: number; attempt?: number }
   | {
       type: "model.retry";

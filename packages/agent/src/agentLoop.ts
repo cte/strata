@@ -61,7 +61,12 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   });
 
   try {
-    const runContext = await buildRunContext({ question: config.question, repoRoot });
+    const availableTools = tools.list();
+    const runContext = await buildRunContext({
+      question: config.question,
+      repoRoot,
+      tools: availableTools,
+    });
     systemContext = runContext.systemContext;
 
     // Attach any image/file payloads the user provided to the new user-role
@@ -172,13 +177,32 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       yield event;
     }
     if (continuingSession === undefined || appendedContinuationUser) {
-      yield { type: "message.user", content: config.question };
+      const userEvent: Extract<AgentRunEvent, { type: "message.user" }> = {
+        type: "message.user",
+        content: config.question,
+      };
+      if (config.attachments !== undefined && config.attachments.length > 0) {
+        userEvent.attachments = config.attachments;
+      }
+      yield userEvent;
     }
 
+    let pendingMessages = await drainQueuedMessages(config.getSteeringMessages);
     while (true) {
       if (isAborted()) {
         cancelled = true;
         break;
+      }
+      if (pendingMessages.length > 0) {
+        const events = await appendQueuedMessages(store, session.id, messages, pendingMessages);
+        for (const event of events) {
+          yield event;
+        }
+        pendingMessages = [];
+        if (isAborted()) {
+          cancelled = true;
+          break;
+        }
       }
       iterations += 1;
       let response: ModelResponse | undefined;
@@ -371,6 +395,14 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
 
       if (response.toolCalls.length === 0) {
         finalAnswer = response.content;
+        pendingMessages = await drainQueuedMessages(config.getSteeringMessages);
+        if (pendingMessages.length > 0) {
+          continue;
+        }
+        pendingMessages = await drainQueuedMessages(config.getFollowUpMessages);
+        if (pendingMessages.length > 0) {
+          continue;
+        }
         const compactEvents = await maybeAutoCompactSession({
           store,
           sessionId: session.id,
@@ -448,6 +480,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         cancelled = true;
         break;
       }
+      pendingMessages = await drainQueuedMessages(config.getSteeringMessages);
     }
 
     // The only way to fall out of `while (true)` is cancellation — final
@@ -863,6 +896,44 @@ async function appendInitialMessage(
     input.attachments = message.attachments as unknown as JsonValue;
   }
   await store.appendMessage(input);
+}
+
+async function drainQueuedMessages(
+  drain: AgentRunConfig["getSteeringMessages"] | AgentRunConfig["getFollowUpMessages"],
+): Promise<AgentMessage[]> {
+  return drain === undefined ? [] : await drain();
+}
+
+async function appendQueuedMessages(
+  store: SessionStore,
+  sessionId: string,
+  messages: AgentMessage[],
+  queuedMessages: AgentMessage[],
+): Promise<Array<Extract<AgentRunEvent, { type: "message.user" }>>> {
+  const events: Array<Extract<AgentRunEvent, { type: "message.user" }>> = [];
+  for (const message of queuedMessages) {
+    messages.push(message);
+    if (message.role === "user") {
+      await store.recordUserMessage({
+        sessionId,
+        content: message.content,
+        ...(message.attachments === undefined || message.attachments.length === 0
+          ? {}
+          : { attachments: message.attachments as unknown as JsonValue }),
+      });
+      const event: Extract<AgentRunEvent, { type: "message.user" }> = {
+        type: "message.user",
+        content: message.content,
+      };
+      if (message.attachments !== undefined && message.attachments.length > 0) {
+        event.attachments = message.attachments;
+      }
+      events.push(event);
+    } else {
+      await appendInitialMessage(store, sessionId, message);
+    }
+  }
+  return events;
 }
 
 interface ToolCallBatchOptions {

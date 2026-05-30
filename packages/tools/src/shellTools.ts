@@ -44,6 +44,7 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
   description:
     "Run an arbitrary shell command. Dangerous mode only; no command allowlist or denylist is applied.",
   mode: "dangerous",
+  promptSnippet: "Execute shell commands for tests, formatting, and local automation",
   inputSchema: {
     type: "object",
     additionalProperties: false,

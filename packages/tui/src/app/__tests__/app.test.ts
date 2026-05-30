@@ -441,6 +441,53 @@ describe("StrataApp", () => {
     }
   });
 
+  test("queues Enter as steering, Alt+Enter as follow-up, and restores queues on interrupt", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    try {
+      const terminal = new FakeTerminal(80, 24);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new StrataApp(
+        runtime,
+        { repoRoot, provider: "openai-codex", model: "gpt-test" },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: false },
+      );
+      runtime.setRoot(app);
+      runtime.start();
+      await pump();
+
+      const fakeAbort = new AbortController();
+      const internal = app as unknown as {
+        state: {
+          running: boolean;
+          steeringMessages: Array<{ content: string }>;
+          followUpMessages: Array<{ content: string }>;
+        };
+        editor: { setText: (value: string) => void; text: string };
+        currentRun: AbortController | undefined;
+        onSubmit: (text: string) => Promise<void>;
+        handleAltEnter: () => void;
+        handleEditorEscape: () => void;
+      };
+      internal.state.running = true;
+      internal.currentRun = fakeAbort;
+
+      await internal.onSubmit("steer now");
+      internal.editor.setText("follow later");
+      internal.handleAltEnter();
+      internal.editor.setText("draft");
+      internal.handleEditorEscape();
+      await pump();
+      runtime.stop();
+
+      expect(fakeAbort.signal.aborted).toBe(true);
+      expect(internal.state.steeringMessages).toHaveLength(0);
+      expect(internal.state.followUpMessages).toHaveLength(0);
+      expect(internal.editor.text).toBe("steer now\n\nfollow later\n\ndraft");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("keeps the status loader animating while an agent run is active", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
     try {

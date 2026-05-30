@@ -696,6 +696,107 @@ describe("runAgentLoop", () => {
     }
   });
 
+  test("injects steering messages after a tool batch before the next model request", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-steer-"));
+    try {
+      const tools = new ToolRegistry().register({
+        name: "test.wait",
+        description: "Test wait tool.",
+        mode: "read",
+        inputSchema: { type: "object", additionalProperties: false },
+        handler: () => ({ waited: true }),
+      });
+      const model = new SequenceModelAdapter([
+        {
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_1",
+              name: "test.wait",
+              argumentsText: "{}",
+            },
+          ],
+        },
+        {
+          content: "steered answer",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+      let steeringPolls = 0;
+      const events: AgentRunEvent[] = [];
+
+      for await (const event of runAgentLoopEvents({
+        question: "start",
+        model,
+        repoRoot,
+        tools,
+        getSteeringMessages: () => {
+          steeringPolls += 1;
+          return steeringPolls === 2 ? [{ role: "user", content: "steer now" }] : [];
+        },
+      })) {
+        events.push(event);
+      }
+
+      expect(model.requests).toHaveLength(2);
+      const secondRequest = model.requests[1]?.messages.filter(
+        (message) => message.role !== "system",
+      );
+      expect(secondRequest?.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "tool",
+        "user",
+      ]);
+      expect(secondRequest?.at(-1)?.content).toBe("steer now");
+      expect(events).toContainEqual({ type: "message.user", content: "steer now" });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("injects follow-up messages only after the agent would otherwise stop", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-follow-up-"));
+    try {
+      const model = new SequenceModelAdapter([
+        {
+          content: "original answer",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+        {
+          content: "follow-up answer",
+          finishReason: "stop",
+          toolCalls: [],
+        },
+      ]);
+      let followUpPolls = 0;
+
+      const result = await runAgentLoop({
+        question: "start",
+        model,
+        repoRoot,
+        getSteeringMessages: () => [],
+        getFollowUpMessages: () => {
+          followUpPolls += 1;
+          return followUpPolls === 1 ? [{ role: "user", content: "after current answer" }] : [];
+        },
+      });
+
+      expect(result.finalAnswer).toBe("follow-up answer");
+      expect(model.requests).toHaveLength(2);
+      const secondRequest = model.requests[1]?.messages.filter(
+        (message) => message.role !== "system",
+      );
+      expect(secondRequest?.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+      expect(secondRequest?.at(-1)?.content).toBe("after current answer");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("continueSessionId reuses an already-persisted trailing user turn", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {

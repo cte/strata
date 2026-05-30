@@ -57,6 +57,8 @@ export class ToolRegistry {
         description: tool.description,
         mode: tool.mode,
         inputSchema: tool.inputSchema,
+        promptSnippet: normalizePromptSnippet(tool.promptSnippet),
+        promptGuidelines: normalizePromptGuidelines(tool.promptGuidelines),
         maxResultChars: tool.maxResultChars ?? null,
       }))
       .sort((left, right) => left.name.localeCompare(right.name));
@@ -193,6 +195,34 @@ function limitJsonValue(
     },
     truncated: true,
   };
+}
+
+function normalizePromptSnippet(text: string | undefined): string | null {
+  if (text === undefined) {
+    return null;
+  }
+  const normalized = text
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized === "" ? null : normalized;
+}
+
+function normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
+  if (guidelines === undefined || guidelines.length === 0) {
+    return [];
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const guideline of guidelines) {
+    const normalized = guideline.trim();
+    if (normalized === "" || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
 }
 
 function toToolError(error: unknown): ToolErrorPayload {

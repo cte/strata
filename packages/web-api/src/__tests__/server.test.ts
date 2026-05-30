@@ -27,6 +27,44 @@ describe("web api", () => {
     expect(text).not.toContain("secret_should_not_render");
   });
 
+  test("resizes terminal sessions over HTTP", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    const handler = createWebApiHandler({
+      repoRoot,
+      env: { SHELL: "/bin/sh" },
+    });
+    let sessionId: string | undefined;
+    try {
+      const created = await handler(
+        new Request("http://127.0.0.1/api/terminal/sessions", { method: "POST" }),
+      );
+      expect(created.status).toBe(200);
+      const session = (await created.json()) as { id: string; cols: number; rows: number };
+      sessionId = session.id;
+      expect(session.cols).toBe(80);
+      expect(session.rows).toBe(24);
+
+      const resized = await handler(
+        new Request(`http://127.0.0.1/api/terminal/sessions/${session.id}/resize`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cols: 132, rows: 43 }),
+        }),
+      );
+      expect(resized.status).toBe(200);
+      await expect(resized.json()).resolves.toMatchObject({ ok: true, cols: 132, rows: 43 });
+    } finally {
+      if (sessionId !== undefined) {
+        await handler(
+          new Request(`http://127.0.0.1/api/terminal/sessions/${sessionId}`, {
+            method: "DELETE",
+          }),
+        );
+      }
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("dry-runs Notion through a trace-backed session", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     try {

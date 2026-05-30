@@ -64,12 +64,13 @@ export function buildHelpNotice(commands: { name: string; description: string }[
   lines.push(`${theme.bold(theme.accent("strata"))}${theme.dim(` v${VERSION}`)}`);
   lines.push("");
   lines.push(section("Editor"));
-  lines.push(`  ${key("Enter".padEnd(14))}submit`);
+  lines.push(`  ${key("Enter".padEnd(14))}submit / steer while running`);
   lines.push(`  ${key("Shift+Enter".padEnd(14))}newline`);
   lines.push(`  ${key("Tab".padEnd(14))}autocomplete /commands and @files`);
   lines.push(`  ${key("Shift+Tab".padEnd(14))}cycle thinking level`);
   lines.push(`  ${key("Up/Down".padEnd(14))}history`);
   lines.push(`  ${key("Alt+Enter".padEnd(14))}queue follow-up message`);
+  lines.push(`  ${key("Alt+Up".padEnd(14))}restore queued messages`);
   lines.push(`  ${key("Ctrl+L".padEnd(14))}redraw`);
   lines.push(`  ${key("Ctrl+C".padEnd(14))}interrupt run / clear input / exit`);
   lines.push(`  ${key("Ctrl+D".padEnd(14))}exit (when input is empty)`);

@@ -50,6 +50,10 @@ export interface ToolDefinition<
   description: string;
   mode: ToolMode;
   inputSchema: JsonObject;
+  /** Optional one-line summary for prompt-visible tool guidance. */
+  promptSnippet?: string;
+  /** Optional model-facing usage guidance for this tool. */
+  promptGuidelines?: string[];
   maxResultChars?: number;
   /**
    * Per-tool execution mode override for batches containing multiple tool calls.
@@ -65,6 +69,8 @@ export interface ToolMetadata {
   description: string;
   mode: ToolMode;
   inputSchema: JsonObject;
+  promptSnippet: string | null;
+  promptGuidelines: string[];
   maxResultChars: number | null;
 }
 

@@ -9,11 +9,13 @@ import {
   type SkillMetadata,
   type TodoItem,
 } from "@strata/core";
+import type { ToolMetadata } from "@strata/tools";
 import type { AgentMessage } from "./types.js";
 
 export interface BuildRunContextOptions {
   question: string;
   repoRoot: string;
+  tools?: ToolMetadata[];
   maxMemoryChars?: number;
   maxTodos?: number;
   maxSkills?: number;
@@ -28,6 +30,12 @@ const DEFAULT_MAX_MEMORY_CHARS = 4_000;
 const DEFAULT_MAX_TODOS = 20;
 const DEFAULT_MAX_SKILLS = 40;
 
+interface PromptToolGuidance {
+  name: string;
+  promptSnippet?: string;
+  promptGuidelines: string[];
+}
+
 export async function buildRunContext(options: BuildRunContextOptions): Promise<BuiltRunContext> {
   const maxMemoryChars = options.maxMemoryChars ?? DEFAULT_MAX_MEMORY_CHARS;
   const maxTodos = options.maxTodos ?? DEFAULT_MAX_TODOS;
@@ -41,8 +49,10 @@ export async function buildRunContext(options: BuildRunContextOptions): Promise<
 
   const activeTodos = todos.slice(0, maxTodos);
   const skillIndex = skills.slice(0, maxSkills);
+  const toolGuidance = normalizeToolGuidance(options.tools ?? []);
   const systemContext: JsonObject = {
     agentInstructions: agentInstructions.map(agentInstructionToContext),
+    toolGuidance: toolGuidance.map(toolGuidanceToContext),
     memory: memory.map(memoryDocumentToContext),
     activeTodos: activeTodos.map(todoToContext),
     skills: skillIndex.map(skillToContext),
@@ -58,7 +68,13 @@ export async function buildRunContext(options: BuildRunContextOptions): Promise<
       { role: "system", content: createBaseSystemPrompt() },
       {
         role: "system",
-        content: formatSystemContext(agentInstructions, memory, activeTodos, skillIndex),
+        content: formatSystemContext(
+          agentInstructions,
+          toolGuidance,
+          memory,
+          activeTodos,
+          skillIndex,
+        ),
       },
       { role: "user", content: options.question },
     ],
@@ -83,13 +99,15 @@ function createBaseSystemPrompt(): string {
 
 function formatSystemContext(
   agentInstructions: AgentInstructionFile[],
+  toolGuidance: PromptToolGuidance[],
   memory: MemoryDocument[],
   activeTodos: TodoItem[],
   skills: SkillMetadata[],
 ): string {
   return [
-    "Strata durable context for this run.",
+    "Strata context for this run.",
     ...formatAgentInstructionsSection(agentInstructions),
+    ...formatToolGuidanceSection(toolGuidance),
     "",
     "## Memory",
     formatMemory(memory),
@@ -102,6 +120,82 @@ function formatSystemContext(
     "",
     "Call skills.read for full skill content when a listed skill applies.",
   ].join("\n");
+}
+
+function normalizeToolGuidance(tools: ToolMetadata[]): PromptToolGuidance[] {
+  return tools
+    .map((tool) => {
+      const promptSnippet = normalizePromptSnippet(tool.promptSnippet);
+      const promptGuidelines = normalizePromptGuidelines(tool.promptGuidelines);
+      if (promptSnippet === undefined && promptGuidelines.length === 0) {
+        return undefined;
+      }
+      const guidance: PromptToolGuidance = {
+        name: tool.name,
+        promptGuidelines,
+      };
+      if (promptSnippet !== undefined) {
+        guidance.promptSnippet = promptSnippet;
+      }
+      return guidance;
+    })
+    .filter((tool): tool is PromptToolGuidance => tool !== undefined)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function normalizePromptSnippet(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized === "" ? undefined : normalized;
+}
+
+function normalizePromptGuidelines(values: string[] | undefined): string[] {
+  if (values === undefined || values.length === 0) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (normalized === "" || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function formatToolGuidanceSection(toolGuidance: PromptToolGuidance[]): string[] {
+  if (toolGuidance.length === 0) {
+    return [];
+  }
+
+  const lines = ["", "## Tool Guidance"];
+  const snippets = toolGuidance.filter((tool) => tool.promptSnippet !== undefined);
+  if (snippets.length > 0) {
+    lines.push("Available tools:");
+    for (const tool of snippets) {
+      lines.push(`- ${tool.name}: ${tool.promptSnippet}`);
+    }
+  }
+
+  const guidelineLines = toolGuidance.flatMap((tool) =>
+    tool.promptGuidelines.map((guideline) => `- ${guideline}`),
+  );
+  const uniqueGuidelineLines = [...new Set(guidelineLines)];
+  if (uniqueGuidelineLines.length > 0) {
+    if (snippets.length > 0) {
+      lines.push("");
+    }
+    lines.push("Guidelines:", ...uniqueGuidelineLines);
+  }
+  return lines;
 }
 
 function formatAgentInstructionsSection(agentInstructions: AgentInstructionFile[]): string[] {
@@ -198,6 +292,14 @@ function skillToContext(skill: SkillMetadata): JsonObject {
     triggers: skill.triggers,
     source: skill.source,
     disableModelInvocation: skill.disableModelInvocation,
+  };
+}
+
+function toolGuidanceToContext(tool: PromptToolGuidance): JsonObject {
+  return {
+    name: tool.name,
+    promptSnippet: tool.promptSnippet ?? null,
+    promptGuidelines: tool.promptGuidelines,
   };
 }
 

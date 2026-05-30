@@ -1,8 +1,10 @@
-import { type TerminalSession, TerminalSessionManager } from "./terminal.js";
+import { type TerminalSession, TerminalSessionManager, type TerminalSize } from "./terminal.js";
 
 export interface TerminalHttpSessionInfo {
   id: string;
   shell: string;
+  cols: number;
+  rows: number;
 }
 
 interface TerminalHttpSession {
@@ -11,6 +13,8 @@ interface TerminalHttpSession {
   session: TerminalSession;
   subscribers: Set<ReadableStreamDefaultController<Uint8Array>>;
   closed: boolean;
+  cols: number;
+  rows: number;
   exitCode?: number;
 }
 
@@ -22,14 +26,16 @@ export class TerminalHttpBridge {
 
   constructor(private readonly manager: TerminalSessionManager) {}
 
-  create(): TerminalHttpSessionInfo {
-    const session = this.manager.create();
+  create(size: Partial<TerminalSize> = {}): TerminalHttpSessionInfo {
+    const session = this.manager.create(size);
     const record: TerminalHttpSession = {
       id: session.id,
       shell: session.shell,
       session,
       subscribers: new Set(),
       closed: false,
+      cols: session.cols,
+      rows: session.rows,
     };
     this.sessions.set(session.id, record);
     void this.pump(record, session.process.stdout, "stdout");
@@ -38,13 +44,23 @@ export class TerminalHttpBridge {
       record.exitCode = exitCode;
       this.close(session.id, `process exited ${exitCode}`);
     });
-    return { id: session.id, shell: session.shell };
+    return { id: session.id, shell: session.shell, cols: session.cols, rows: session.rows };
   }
 
   write(id: string, data: string): boolean {
     const record = this.sessions.get(id);
     if (record === undefined || record.closed) return false;
     record.session.write(data);
+    return true;
+  }
+
+  resize(id: string, size: TerminalSize): boolean {
+    const record = this.sessions.get(id);
+    if (record === undefined || record.closed) return false;
+    if (!this.manager.resize(id, size.cols, size.rows)) return false;
+    record.cols = record.session.cols;
+    record.rows = record.session.rows;
+    this.publish(record, "resized", { cols: record.cols, rows: record.rows });
     return true;
   }
 
@@ -61,7 +77,14 @@ export class TerminalHttpBridge {
           return;
         }
         record.subscribers.add(controller);
-        controller.enqueue(sse("ready", { id: record.id, shell: record.shell }));
+        controller.enqueue(
+          sse("ready", {
+            id: record.id,
+            shell: record.shell,
+            cols: record.cols,
+            rows: record.rows,
+          }),
+        );
         const abort = () => {
           record.subscribers.delete(controller);
           try {

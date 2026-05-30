@@ -80,6 +80,7 @@ describe("sequenceToInputEvent", () => {
     expect(sequenceToInputEvent("\r")).toEqual({ type: "key", key: "enter", raw: "\r" });
     expect(sequenceToInputEvent("\x03")).toEqual({ type: "key", key: "ctrl+c", raw: "\x03" });
     expect(sequenceToInputEvent("\x1a")).toEqual({ type: "key", key: "ctrl+z", raw: "\x1a" });
+    expect(sequenceToInputEvent("\x1bp")).toEqual({ type: "key", key: "alt+up", raw: "\x1bp" });
     expect(sequenceToInputEvent("\x1b[13;2u")).toEqual({
       type: "key",
       key: "shift+enter",
