@@ -14,7 +14,9 @@ import migration0000 from "../drizzle/0000_cooing_mole_man.sql" with { type: "te
 import migration0001 from "../drizzle/0001_cute_earthquake.sql" with { type: "text" };
 import migration0002 from "../drizzle/0002_many_jobs.sql" with { type: "text" };
 import migration0003 from "../drizzle/0003_ingest_activity_projection.sql" with { type: "text" };
-import migration0004 from "../drizzle/0004_extraction_runs.sql" with { type: "text" };
+import migration0004 from "../drizzle/0004_routines.sql" with { type: "text" };
+import migration0005 from "../drizzle/0005_minor_katie_power.sql" with { type: "text" };
+import migration0006 from "../drizzle/0006_routine_triggers.sql" with { type: "text" };
 import journal from "../drizzle/meta/_journal.json" with { type: "json" };
 
 const SOURCES: Record<string, string> = {
@@ -22,7 +24,9 @@ const SOURCES: Record<string, string> = {
   "0001_cute_earthquake": migration0001,
   "0002_many_jobs": migration0002,
   "0003_ingest_activity_projection": migration0003,
-  "0004_extraction_runs": migration0004,
+  "0004_routines": migration0004,
+  "0005_minor_katie_power": migration0005,
+  "0006_routine_triggers": migration0006,
 };
 
 export interface EmbeddedMigration {

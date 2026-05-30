@@ -2,10 +2,10 @@ import type * as React from "react";
 import { cn } from "@/lib/utils";
 
 const toneClasses = {
-  ready: "text-[var(--good)]",
-  warning: "text-[var(--warn)]",
-  muted: "text-[var(--fg-mute)]",
-  bad: "text-[var(--bad)]",
+  ready: "text-good",
+  warning: "text-warn",
+  muted: "text-fg-mute",
+  bad: "text-bad",
 };
 
 export interface BadgeProps extends React.ComponentProps<"span"> {

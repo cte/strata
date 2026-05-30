@@ -1,0 +1,23 @@
+{
+  "name": "@strata/routines",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./output-tool": "./src/outputTool.ts",
+    "./runner": "./src/runner.ts",
+    "./schemas": "./src/schemas.ts",
+    "./store": "./src/store.ts",
+    "./types": "./src/types.ts"
+  },
+  "dependencies": {
+    "@strata/agent": "workspace:*",
+    "@strata/core": "workspace:*",
+    "@strata/tools": "workspace:*"
+  },
+  "scripts": {
+    "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",
+    "test": "bun test"
+  }
+}

@@ -20,13 +20,13 @@ Patterns worth adapting:
 - Runtime ownership: one `TuiRuntime` owns the terminal, render scheduling, focus, overlays, input dispatch, resize handling, and shutdown cleanup.
 - Differential rendering: render the full component tree into logical lines, compare with the previous frame, then only redraw changed regions.
 - Editor behavior: multiline prompt, history navigation, bracketed paste, sane submit/newline behavior, autocomplete, and large-paste markers.
-- Overlay/dialog behavior: selectors and auth dialogs are focusable components that temporarily replace or overlay the editor and then restore focus.
+- Overlay/dialog behavior: selectors, auth dialogs, and planned `user.ask` question prompts are focusable components that temporarily replace or overlay the editor and then restore focus.
 - Event-driven agent UI: the agent emits message/tool/status lifecycle events; the UI maps those events into components and invalidates render state.
 
 Patterns to avoid or defer:
 
 - Do not create a single giant interactive-mode class. Pi's controller is powerful, but Strata should split controller, state reducer, command registry, components, and runtime bindings.
-- Do not implement extensions, custom UI plugin APIs, terminal image protocols, theme hot reload, full settings UI, keybinding customization, session tree/fork flows, or compaction UI in the first pass. After the extension runtime exists, add only the TUI extension hooks described in [extensions-plan.md](./extensions-plan.md).
+- Do not implement extensions, custom UI plugin APIs, terminal image protocols, theme hot reload, full settings UI, keybinding customization, session tree/fork flows, or compaction UI in the first pass. Native `user.ask` support is separate from extensions and should follow [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md): bounded select/confirm/text prompts over a shared adapter, not arbitrary custom extension components. After the extension runtime exists, add only the TUI extension hooks described in [extensions-plan.md](./extensions-plan.md).
 - Do not copy pi code wholesale. Reimplement the core ideas in smaller Strata-specific modules.
 
 Useful local reference points:
@@ -286,7 +286,7 @@ Editor v1 requirements:
 
 Add `strata tui` as a CLI command and root script.
 
-Launch flags follow Pi's session ergonomics: `--continue`/`-c` resumes the most recent session, `--resume`/`-r` opens the session picker, `--session <id-prefix>` resumes a specific session, and `--fork <id-prefix>` clones a specific session before opening it.
+Launch flags follow Pi's session ergonomics: `--continue`/`-c` resumes the most recent session, bare `--resume`/`-r` opens the session picker, `--resume <id-prefix>`/`-r <id-prefix>` resumes a specific session, legacy `--session <id-prefix>` remains accepted, and `--fork <id-prefix>` clones a specific session before opening it.
 
 Initial layout:
 
@@ -448,6 +448,7 @@ App tests:
 - Agent event to transcript mapping.
 - Fake auth dialog callback flow.
 - Fake terminal integration: submit question, receive fake events, render transcript.
+- Native `user.ask` adapter integration: render select/confirm/text prompts, answer/cancel them, restore editor focus/text, and cancel pending prompts when the run is aborted.
 
 Use `bun test`. Do not require a real terminal in CI-style tests.
 

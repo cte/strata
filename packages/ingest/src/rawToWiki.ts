@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -11,30 +10,16 @@ import {
 } from "@strata/core";
 import { frontmatter, slugify, splitFrontmatter, utcNow } from "./common.js";
 import {
-  evaluateTodoCandidates,
-  fakeDailyTodoVerifier,
-  publishDailyTodoCandidateResultsInStore,
-} from "./extraction/dailyTodo.js";
-import type {
-  DailyTodoPublicationSkip,
-  DailyTodoPublishedAction,
-  EvidenceSpan,
-  ExtractionSourceType,
-  TodoCandidateResult,
-} from "./extraction/types.js";
-import {
   type IngestTaxonomy,
   loadIngestTaxonomy,
   type ResolvedIngestTaxonomy,
 } from "./ingestTaxonomy.js";
 import {
-  actionOwner,
   canonicalProjectLabelForText,
   normalizeProjectLabels,
   projectLabelsFromTaxonomyText,
 } from "./raw-to-wiki/entityResolution.js";
 import {
-  actionCandidateLines,
   candidateLines,
   cleanCandidateText,
   decisionCandidateLines,
@@ -42,11 +27,7 @@ import {
   speakerCandidates,
 } from "./raw-to-wiki/extraction.js";
 import { slackMateriality, slackSummary } from "./raw-to-wiki/materiality.js";
-import {
-  slackActionCandidateLines,
-  slackMessageTexts,
-  slackParticipantsFromHeadings,
-} from "./raw-to-wiki/slack.js";
+import { slackMessageTexts, slackParticipantsFromHeadings } from "./raw-to-wiki/slack.js";
 import type { CandidateLine, ClassificationReason, RawFrontmatter } from "./raw-to-wiki/types.js";
 
 export type { CandidateLine, ClassificationReason } from "./raw-to-wiki/types.js";
@@ -67,7 +48,6 @@ export interface GranolaRawMeetingProposal {
   proposedMeetingPath: string;
   peopleCandidates: string[];
   projectCandidates: string[];
-  actionCandidates: CandidateLine[];
   decisionCandidates: CandidateLine[];
   uncertainty: string[];
   proposalPath: string;
@@ -106,9 +86,6 @@ export interface GranolaWikiIndexItem {
   projectPaths: string[];
   decisionPaths: string[];
   threadPaths: string[];
-  actionCount: number;
-  extractionRunIds: string[];
-  actionCandidateIds: string[];
   writtenPaths: string[];
   classificationReasons: ClassificationReason[];
 }
@@ -146,9 +123,6 @@ export interface RawToWikiIndexItem {
   projectPaths: string[];
   decisionPaths: string[];
   threadPaths: string[];
-  actionCount: number;
-  extractionRunIds: string[];
-  actionCandidateIds: string[];
   writtenPaths: string[];
   classificationReasons: ClassificationReason[];
 }
@@ -171,7 +145,6 @@ interface RawMeetingDraft {
   proposedMeetingPath: string;
   peopleCandidates: string[];
   projectCandidates: string[];
-  actionCandidates: CandidateLine[];
   decisionCandidates: CandidateLine[];
   uncertainty: string[];
 }
@@ -188,32 +161,8 @@ interface EntityCandidate {
   line?: number;
 }
 
-interface ActionCandidate {
-  text: string;
-  owner: "mine" | "theirs";
-  line?: number;
-}
-
-interface RawToWikiActionExtractionPlan {
-  extractionRunId: string;
-  sourceDocuments: { sourceType: ExtractionSourceType; path: string }[];
-  spans: EvidenceSpan[];
-  results: TodoCandidateResult[];
-  confirmedCount: number;
-}
-
-interface RawToWikiActionExtractionResult {
-  extractionRunIds: string[];
-  actionCandidateIds: string[];
-  confirmedCount: number;
-  published: DailyTodoPublishedAction[];
-  skipped: DailyTodoPublicationSkip[];
-  writtenPaths: string[];
-}
-
 interface RawToWikiPlanApplyResult {
   writtenPaths: string[];
-  actionExtraction: RawToWikiActionExtractionResult;
 }
 
 interface SourceWikiDraft {
@@ -228,7 +177,6 @@ interface SourceWikiDraft {
   primaryPath: string;
   peopleCandidates: string[];
   projectCandidates: string[];
-  actionCandidates: CandidateLine[];
   decisionCandidates: CandidateLine[];
   threadCandidates: CandidateLine[];
   metadata: RawFrontmatter;
@@ -247,7 +195,6 @@ interface SourceClassified {
   projects: ProjectCandidate[];
   decisions: EntityCandidate[];
   threads: EntityCandidate[];
-  actions: ActionCandidate[];
   classificationReasons: ClassificationReason[];
 }
 
@@ -263,7 +210,6 @@ interface ClassifiedMeeting {
   projects: ProjectCandidate[];
   decisions: EntityCandidate[];
   threads: EntityCandidate[];
-  actions: ActionCandidate[];
   classificationReasons: ClassificationReason[];
 }
 
@@ -273,9 +219,6 @@ interface GranolaWikiApplyPlan {
   meetingContent: string;
   writtenPaths: string[];
 }
-
-const RAW_TO_WIKI_TODO_EXTRACTOR_VERSION = "daily.todo.raw-to-wiki-v1";
-const RAW_TO_WIKI_TODO_VERIFIER_VERSION = "raw-to-wiki.todo-verifier-v1";
 
 export async function runGranolaRawToWikiProposals(
   options: GranolaRawToWikiOptions,
@@ -324,10 +267,10 @@ export async function runGranolaRawToWikiProposals(
         sessionId: session.id,
         title: `Create meeting page for ${draft.date} ${draft.title}`,
         reason:
-          "Granola raw snapshots are immutable source material. This stages the first wiki meeting page and related extraction candidates for human review before any wiki pages are edited.",
+          "Granola raw snapshots are immutable source material. This stages the first wiki meeting page and related entity candidates for human review before any wiki pages are edited.",
         evidence: proposalEvidence(draft),
         proposedChange: formatProposedChange(draft),
-        risk: "Medium. The source transcript may omit speaker identity or context, so project links, decisions, and action ownership need manual review before applying.",
+        risk: "Medium. The source transcript may omit speaker identity or context, so project links and decisions need manual review before applying.",
       });
       await store.appendEvent(session.id, "proposal.created", proposal);
       proposals.push(proposal);
@@ -340,7 +283,6 @@ export async function runGranolaRawToWikiProposals(
         proposedMeetingPath: draft.proposedMeetingPath,
         peopleCandidates: draft.peopleCandidates,
         projectCandidates: draft.projectCandidates,
-        actionCandidates: draft.actionCandidates,
         decisionCandidates: draft.decisionCandidates,
         uncertainty: draft.uncertainty,
         proposalPath: proposal.path,
@@ -388,9 +330,6 @@ export async function runGranolaRawToWikiIndex(
       projectPaths: item.projectPaths,
       decisionPaths: item.decisionPaths,
       threadPaths: item.threadPaths,
-      actionCount: item.actionCount,
-      extractionRunIds: item.extractionRunIds,
-      actionCandidateIds: item.actionCandidateIds,
       writtenPaths: item.writtenPaths,
       classificationReasons: item.classificationReasons,
     })),
@@ -477,16 +416,10 @@ export async function runRawToWikiIndex(
       }
 
       const plan = buildSourceApplyPlan(repoRoot, draft, now, taxonomy);
-      const actionPlan = await buildRawToWikiActionExtractionPlan(plan, session.id);
       const applyResult = dryRun
-        ? dryRunApplyResult(plan, actionPlan)
-        : await applySourceWikiPlan(repoRoot, plan, {
-            actionPlan,
-            now,
-            sessionId: session.id,
-            store,
-          });
-      const item = rawToWikiIndexItem(plan, applyResult.writtenPaths, applyResult.actionExtraction);
+        ? dryRunApplyResult(plan)
+        : await applySourceWikiPlan(repoRoot, plan);
+      const item = rawToWikiIndexItem(plan, applyResult.writtenPaths);
       indexed.push(item);
       await store.appendEvent(session.id, "raw_to_wiki.index.item", {
         source: item.source,
@@ -499,9 +432,6 @@ export async function runRawToWikiIndex(
         projectPaths: item.projectPaths,
         decisionPaths: item.decisionPaths,
         threadPaths: item.threadPaths,
-        actionCount: item.actionCount,
-        extractionRunIds: item.extractionRunIds,
-        actionCandidateIds: item.actionCandidateIds,
         writtenPaths: item.writtenPaths,
         classificationReasons: item.classificationReasons,
         dryRun,
@@ -575,7 +505,6 @@ export function buildGranolaMeetingDraft(
     "meetings",
     `${date}-${slugify(title, "meeting")}.md`,
   );
-  const actionCandidates = actionCandidateLines(body, 12);
   const decisionCandidates = decisionCandidateLines(body, 12);
   const projectCandidates = projectCandidatesFrom(parsed);
   const peopleCandidates = uniqueStrings([...attendees, ...speakerCandidates(body)]).slice(0, 24);
@@ -590,12 +519,10 @@ export function buildGranolaMeetingDraft(
     proposedMeetingPath,
     peopleCandidates,
     projectCandidates,
-    actionCandidates,
     decisionCandidates,
     uncertainty: uncertaintyFor({
       attendees,
       projectCandidates,
-      actionCandidates,
       decisionCandidates,
       body,
       repoRoot,
@@ -618,8 +545,6 @@ function buildGranolaWikiApplyPlan(
     ...classified.projects.map((item) => item.path),
     ...classified.decisions.map((item) => item.path),
     ...classified.threads.map((item) => item.path),
-    "wiki/actions/mine.md",
-    "wiki/actions/theirs.md",
     "wiki/index.md",
     "wiki/log.md",
   ]);
@@ -629,12 +554,6 @@ function buildGranolaWikiApplyPlan(
 async function applyGranolaWikiPlan(
   repoRoot: string,
   plan: GranolaWikiApplyPlan,
-  options: {
-    actionPlan: RawToWikiActionExtractionPlan;
-    now: Date;
-    sessionId: string;
-    store: SessionStore;
-  },
 ): Promise<RawToWikiPlanApplyResult> {
   const written = new Set<string>();
   await writeWikiFile(repoRoot, plan.draft.proposedMeetingPath, plan.meetingContent);
@@ -660,20 +579,15 @@ async function applyGranolaWikiPlan(
       written.add(thread.path);
     }
   }
-  const actionExtraction = await publishRawToWikiActionExtraction(repoRoot, options);
-  for (const actionPath of actionExtraction.writtenPaths) {
-    written.add(actionPath);
-  }
   if (await updateWikiIndex(repoRoot, plan)) {
     written.add("wiki/index.md");
   }
-  return { writtenPaths: [...written], actionExtraction };
+  return { writtenPaths: [...written] };
 }
 
 function granolaWikiIndexItem(
   plan: GranolaWikiApplyPlan,
   writtenPaths: string[],
-  actionExtraction: RawToWikiActionExtractionResult,
 ): GranolaWikiIndexItem {
   return {
     rawPath: plan.draft.rawPath,
@@ -684,9 +598,6 @@ function granolaWikiIndexItem(
     projectPaths: plan.classified.projects.map((item) => item.path),
     decisionPaths: plan.classified.decisions.map((item) => item.path),
     threadPaths: plan.classified.threads.map((item) => item.path),
-    actionCount: actionExtraction.confirmedCount,
-    extractionRunIds: actionExtraction.extractionRunIds,
-    actionCandidateIds: actionExtraction.actionCandidateIds,
     writtenPaths,
     classificationReasons: plan.classified.classificationReasons,
   };
@@ -777,7 +688,6 @@ function buildNotionSourceDraft(
     primaryPath: path.join("wiki", "projects", `${slugify(primaryLabel, "notion-page")}.md`),
     peopleCandidates: peopleCandidatesForSource(body, parsed).slice(0, 16),
     projectCandidates,
-    actionCandidates: actionCandidateLines(summary, 8),
     decisionCandidates: decisionCandidateLines(summary, 8),
     threadCandidates: threadCandidatesForSource(summary, 8),
     metadata: parsed,
@@ -830,7 +740,6 @@ function buildSlackSourceDraft(
       .filter(looksLikePersonName)
       .slice(0, 16),
     projectCandidates: slackProjectLabelsFromTitleAndBody(title, body, taxonomy).slice(0, 8),
-    actionCandidates: slackActionCandidateLines(body, 8),
     decisionCandidates: decisionCandidateLines(summary, 8),
     threadCandidates: promotedSlackThreadCandidates(summary, 3),
     metadata: parsed,
@@ -875,220 +784,26 @@ function buildSourceApplyPlan(
     ...classified.projects.map((item) => item.path),
     ...classified.decisions.map((item) => item.path),
     ...classified.threads.map((item) => item.path),
-    "wiki/actions/mine.md",
-    "wiki/actions/theirs.md",
     "wiki/index.md",
     "wiki/log.md",
   ]);
   return { draft, classified, primaryContent, writtenPaths };
 }
 
-async function buildRawToWikiActionExtractionPlan(
-  plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
-  sessionId: string,
-): Promise<RawToWikiActionExtractionPlan> {
-  const sourceType = sourceTypeForPlan(plan);
-  const sourcePath = plan.draft.rawPath;
-  const spans = plan.classified.actions.map((action, index) => {
-    const line = action.line ?? 1;
-    return {
-      id: `raw_to_wiki_todo_${hashText(
-        [sourcePath, line, index, action.owner, action.text].join(":"),
-      )}`,
-      sourcePath,
-      sourceKind: "raw" as const,
-      sourceType,
-      date: plan.draft.date,
-      lineStart: line,
-      lineEnd: line,
-      text: action.text,
-      metadata: {
-        title: plan.draft.title,
-        sourceTarget: primaryPathForPlan(plan),
-        sourceLabel: plan.draft.title,
-        rawPath: sourcePath,
-        rawToWikiSource: sourceType,
-        rawToWikiPrimaryKind: "meetingContent" in plan ? "meeting" : plan.draft.primaryKind,
-        rawToWikiPrimaryPath: primaryPathForPlan(plan),
-        rawToWikiOwner: action.owner,
-        rawToWikiActionText: action.text,
-      },
-    } satisfies EvidenceSpan;
-  });
-  const evaluated = await evaluateTodoCandidates(spans, fakeDailyTodoVerifier);
-  const results = evaluated.map(rawToWikiVerifiedTodoResult);
-  return {
-    extractionRunId: rawToWikiExtractionRunId(sessionId, sourcePath),
-    sourceDocuments: [{ sourceType, path: sourcePath }],
-    spans,
-    results,
-    confirmedCount: results.filter((result) => result.status === "confirmed").length,
-  };
-}
-
 function dryRunApplyResult(
   plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
-  actionPlan: RawToWikiActionExtractionPlan,
 ): RawToWikiPlanApplyResult {
-  const actionExtraction = dryRunActionExtraction(actionPlan);
   return {
-    writtenPaths: predictedWrittenPaths(plan, actionPlan),
-    actionExtraction,
+    writtenPaths: plan.writtenPaths,
   };
-}
-
-function dryRunActionExtraction(
-  actionPlan: RawToWikiActionExtractionPlan,
-): RawToWikiActionExtractionResult {
-  return {
-    extractionRunIds: [],
-    actionCandidateIds: [],
-    confirmedCount: actionPlan.confirmedCount,
-    published: [],
-    skipped: [],
-    writtenPaths: [],
-  };
-}
-
-function predictedWrittenPaths(
-  plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
-  actionPlan: RawToWikiActionExtractionPlan,
-): string[] {
-  const paths = new Set(
-    plan.writtenPaths.filter(
-      (candidate) => candidate !== "wiki/actions/mine.md" && candidate !== "wiki/actions/theirs.md",
-    ),
-  );
-  for (const result of actionPlan.results) {
-    if (result.status !== "confirmed") {
-      continue;
-    }
-    const owner = result.verification.owner;
-    if (owner === "mine") {
-      paths.add("wiki/actions/mine.md");
-    } else if (owner === "theirs") {
-      paths.add("wiki/actions/theirs.md");
-    }
-  }
-  return [...paths];
-}
-
-async function publishRawToWikiActionExtraction(
-  repoRoot: string,
-  options: {
-    actionPlan: RawToWikiActionExtractionPlan;
-    now: Date;
-    sessionId: string;
-    store: SessionStore;
-  },
-): Promise<RawToWikiActionExtractionResult> {
-  if (options.actionPlan.results.length === 0) {
-    return emptyActionExtraction();
-  }
-  const publication = await publishDailyTodoCandidateResultsInStore({
-    repoRoot,
-    store: options.store,
-    sessionId: options.sessionId,
-    extractionRunId: options.actionPlan.extractionRunId,
-    day: options.actionPlan.spans[0]?.date ?? options.now.toISOString().slice(0, 10),
-    sourceDocuments: options.actionPlan.sourceDocuments,
-    spans: options.actionPlan.spans,
-    results: options.actionPlan.results,
-    extractorVersion: RAW_TO_WIKI_TODO_EXTRACTOR_VERSION,
-    verifierVersion: RAW_TO_WIKI_TODO_VERIFIER_VERSION,
-    now: options.now,
-    traceSource: "raw_to_wiki",
-  });
-  return {
-    extractionRunIds: [publication.extraction.extractionRunId],
-    actionCandidateIds: publication.candidateIds,
-    confirmedCount: confirmedPublishedOrDuplicateCount(publication),
-    published: publication.published,
-    skipped: publication.skipped,
-    writtenPaths: uniqueStrings(publication.published.map((item) => item.actionPath)),
-  };
-}
-
-function emptyActionExtraction(): RawToWikiActionExtractionResult {
-  return {
-    extractionRunIds: [],
-    actionCandidateIds: [],
-    confirmedCount: 0,
-    published: [],
-    skipped: [],
-    writtenPaths: [],
-  };
-}
-
-function confirmedPublishedOrDuplicateCount(publication: {
-  published: DailyTodoPublishedAction[];
-  skipped: DailyTodoPublicationSkip[];
-}): number {
-  return (
-    publication.published.length +
-    publication.skipped.filter((item) => item.reason === "duplicate").length
-  );
-}
-
-function rawToWikiVerifiedTodoResult(result: TodoCandidateResult): TodoCandidateResult {
-  if (result.status === "rejected") {
-    return result;
-  }
-  const owner =
-    result.evidence.metadata.rawToWikiOwner === "mine" ||
-    result.evidence.metadata.rawToWikiOwner === "theirs"
-      ? result.evidence.metadata.rawToWikiOwner
-      : result.verification.owner;
-  const actionText =
-    typeof result.evidence.metadata.rawToWikiActionText === "string"
-      ? result.evidence.metadata.rawToWikiActionText.trim()
-      : result.verification.actionText;
-  return {
-    ...result,
-    status: "confirmed",
-    verification: {
-      ...result.verification,
-      classification: "action",
-      confidence: Math.max(result.verification.confidence, 0.9),
-      owner,
-      actionText: actionText === "" ? result.candidate.candidateText : actionText,
-      rationale:
-        result.verification.rationale.trim().length > 0
-          ? `${result.verification.rationale}; accepted by raw-to-wiki explicit action extraction.`
-          : "Accepted by raw-to-wiki explicit action extraction.",
-    },
-    reasons: uniqueStrings([...result.reasons, "raw_to_wiki_explicit_action"]),
-  };
-}
-
-function primaryPathForPlan(plan: GranolaWikiApplyPlan | SourceWikiApplyPlan): string {
-  return "meetingContent" in plan ? plan.draft.proposedMeetingPath : plan.draft.primaryPath;
-}
-
-function sourceTypeForPlan(plan: GranolaWikiApplyPlan | SourceWikiApplyPlan): ExtractionSourceType {
-  return "meetingContent" in plan ? "granola" : plan.draft.source;
-}
-
-function rawToWikiExtractionRunId(sessionId: string, sourcePath: string): string {
-  return `extract_${sessionId}_${hashText(sourcePath)}`;
-}
-
-function hashText(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 async function applySourceWikiPlan(
   repoRoot: string,
   plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
-  options: {
-    actionPlan: RawToWikiActionExtractionPlan;
-    now: Date;
-    sessionId: string;
-    store: SessionStore;
-  },
 ): Promise<RawToWikiPlanApplyResult> {
   if ("meetingContent" in plan) {
-    return applyGranolaWikiPlan(repoRoot, plan, options);
+    return applyGranolaWikiPlan(repoRoot, plan);
   }
   const written = new Set<string>();
   if (await upsertSourcePrimaryPage(repoRoot, plan)) {
@@ -1114,23 +829,18 @@ async function applySourceWikiPlan(
       written.add(thread.path);
     }
   }
-  const actionExtraction = await publishRawToWikiActionExtraction(repoRoot, options);
-  for (const actionPath of actionExtraction.writtenPaths) {
-    written.add(actionPath);
-  }
   if (await updateSourceWikiIndex(repoRoot, plan)) {
     written.add("wiki/index.md");
   }
-  return { writtenPaths: [...written], actionExtraction };
+  return { writtenPaths: [...written] };
 }
 
 function rawToWikiIndexItem(
   plan: GranolaWikiApplyPlan | SourceWikiApplyPlan,
   writtenPaths: string[],
-  actionExtraction: RawToWikiActionExtractionResult,
 ): RawToWikiIndexItem {
   if ("meetingContent" in plan) {
-    const item = granolaWikiIndexItem(plan, writtenPaths, actionExtraction);
+    const item = granolaWikiIndexItem(plan, writtenPaths);
     return {
       source: "granola",
       rawPath: item.rawPath,
@@ -1142,9 +852,6 @@ function rawToWikiIndexItem(
       projectPaths: item.projectPaths,
       decisionPaths: item.decisionPaths,
       threadPaths: item.threadPaths,
-      actionCount: item.actionCount,
-      extractionRunIds: item.extractionRunIds,
-      actionCandidateIds: item.actionCandidateIds,
       writtenPaths,
       classificationReasons: item.classificationReasons,
     };
@@ -1163,9 +870,6 @@ function rawToWikiIndexItem(
       plan.draft.primaryKind === "thread" ? plan.draft.primaryPath : "",
       ...plan.classified.threads.map((item) => item.path),
     ]).filter((item) => item !== ""),
-    actionCount: actionExtraction.confirmedCount,
-    extractionRunIds: actionExtraction.extractionRunIds,
-    actionCandidateIds: actionExtraction.actionCandidateIds,
     writtenPaths,
     classificationReasons: plan.classified.classificationReasons,
   };
@@ -1177,7 +881,6 @@ function classifyGranolaMeeting(
 ): ClassifiedMeeting {
   const summary = meetingSummary(draft);
   const aliasMatches = projectLabelsFromTaxonomyText(`${draft.title}\n${draft.body}`, taxonomy);
-  const summaryActionCandidates = actionCandidateLines(summary, 8);
   const summaryDecisionCandidates = decisionCandidateLines(summary, 6);
   const people = draft.peopleCandidates.map((name) => ({
     label: name,
@@ -1205,17 +908,11 @@ function classifyGranolaMeeting(
       line: candidate.line,
     };
   });
-  const actions = summaryActionCandidates.map((candidate) => ({
-    text: candidate.text,
-    owner: actionOwner(candidate.text, taxonomy),
-    line: candidate.line,
-  }));
   return {
     people: dedupeByPath(people),
     projects: dedupeByPath(projects).slice(0, 6),
     decisions: dedupeByPath(decisions),
     threads: dedupeByPath(threads).slice(0, 6),
-    actions,
     classificationReasons: aliasMatches.reasons,
   };
 }
@@ -1250,17 +947,11 @@ function classifySourceDraft(
       line: candidate.line,
     };
   });
-  const actions = draft.actionCandidates.map((candidate) => ({
-    text: candidate.text,
-    owner: actionOwner(candidate.text, taxonomy),
-    line: candidate.line,
-  }));
   return {
     people: dedupeByPath(people),
     projects: dedupeByPath(projects).slice(0, 6),
     decisions: dedupeByPath(decisions).slice(0, 6),
     threads: dedupeByPath(threads).slice(0, 6),
-    actions,
     classificationReasons: draft.classificationReasons,
   };
 }
@@ -1305,10 +996,6 @@ function formatMeetingPage(
     "## Decisions",
     "",
     formatEntityLinks(classified.decisions),
-    "",
-    "## Actions",
-    "",
-    formatActionBullets(classified.actions),
     "",
     "## Threads",
     "",
@@ -2035,7 +1722,6 @@ function projectCandidatesFrom(parsed: RawFrontmatter): string[] {
 function uncertaintyFor(input: {
   attendees: string[];
   projectCandidates: string[];
-  actionCandidates: CandidateLine[];
   decisionCandidates: CandidateLine[];
   body: string;
   repoRoot: string;
@@ -2047,9 +1733,6 @@ function uncertaintyFor(input: {
   }
   if (input.projectCandidates.length === 0) {
     items.push("No explicit project was found; project page updates require manual mapping.");
-  }
-  if (input.actionCandidates.length === 0) {
-    items.push("No action candidates were detected by deterministic heuristics.");
   }
   if (input.decisionCandidates.length === 0) {
     items.push("No decision candidates were detected by deterministic heuristics.");
@@ -2067,9 +1750,6 @@ function proposalEvidence(draft: RawMeetingDraft): string[] {
   return [
     `${draft.rawPath} dated ${draft.date}`,
     draft.sourceUrl ? `Granola source URL: ${draft.sourceUrl}` : "",
-    ...draft.actionCandidates.slice(0, 3).map((candidate) => {
-      return `${draft.rawPath} action candidate: ${candidate.text}`;
-    }),
     ...draft.decisionCandidates.slice(0, 3).map((candidate) => {
       return `${draft.rawPath} decision candidate: ${candidate.text}`;
     }),
@@ -2097,10 +1777,6 @@ function formatProposedChange(draft: RawMeetingDraft): string {
     "",
     formatCandidateBullets(draft.decisionCandidates),
     "",
-    "## Actions",
-    "",
-    formatCandidateBullets(draft.actionCandidates),
-    "",
     "## Threads",
     "",
     "- Review the source for open questions that should become thread pages.",
@@ -2125,9 +1801,6 @@ function formatProposedChange(draft: RawMeetingDraft): string {
     "",
     "Decision candidates:",
     formatCandidateBullets(draft.decisionCandidates),
-    "",
-    "Action candidates:",
-    formatCandidateBullets(draft.actionCandidates),
     "",
     "Uncertainty:",
     formatStringBullets(draft.uncertainty),
@@ -2404,10 +2077,6 @@ function formatSourcePrimaryPage(
       "",
       formatEntityLinks(classified.threads),
       "",
-      "## Actions",
-      "",
-      formatActionBullets(classified.actions),
-      "",
       "## Source Notes",
       "",
       sourceNoteLine(draft),
@@ -2442,10 +2111,6 @@ function formatSourcePrimaryPage(
       "## Decisions",
       "",
       formatEntityLinks(classified.decisions),
-      "",
-      "## Actions",
-      "",
-      formatActionBullets(classified.actions),
       "",
       "## Promoted Threads",
       "",
@@ -2489,10 +2154,6 @@ function formatSourcePrimaryPage(
     "",
     formatEntityLinks(classified.decisions),
     "",
-    "## Actions",
-    "",
-    formatActionBullets(classified.actions),
-    "",
     "## Timeline",
     "",
     sourceTimelineLine(draft),
@@ -2502,19 +2163,6 @@ function formatSourcePrimaryPage(
     ...formatSourceLines(draft),
     "",
   ].join("\n");
-}
-
-function formatActionBullets(actions: ActionCandidate[]): string {
-  if (actions.length === 0) {
-    return "- None indexed.";
-  }
-  return actions
-    .map((action) => {
-      const target = action.owner === "mine" ? "actions/mine" : "actions/theirs";
-      const label = action.owner === "mine" ? "mine" : "theirs";
-      return `- ${action.text} -> [[${target}|${label}]]`;
-    })
-    .join("\n");
 }
 
 function wikiLink(repoRelativePath: string, label: string): string {

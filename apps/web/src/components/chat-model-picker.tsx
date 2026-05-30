@@ -69,15 +69,13 @@ export function ChatModelPicker({
             disabled={disabled}
             aria-label="Choose model"
             title="Choose model"
-            className="h-7 max-w-full justify-start gap-1.5 px-2 font-mono text-[11.5px] text-[var(--fg-dim)] [&>svg]:!size-[13px]"
+            className="h-7 max-w-full justify-start gap-1.5 px-2 font-mono text-xs text-fg-dim [&>svg]:!size-[13px]"
           >
             <span className="truncate">
               {choice === null ? "model" : `${providerShortLabel(choice.provider)}:${choice.model}`}
             </span>
             {choice === null || currentEffort === "off" ? null : (
-              <span className="shrink-0 text-[var(--fg-mute)]">
-                /{REASONING_LABELS[currentEffort]}
-              </span>
+              <span className="shrink-0 text-fg-mute">/{REASONING_LABELS[currentEffort]}</span>
             )}
             <ChevronDown
               size={13}
@@ -88,7 +86,7 @@ export function ChatModelPicker({
         </ModelSelectorTrigger>
         <ModelSelectorContent
           title="Choose model"
-          className="w-[min(680px,calc(100vw-2rem))] overflow-hidden rounded-lg border border-[var(--hairline-strong)] bg-[var(--surface)] text-[var(--fg)] shadow-2xl shadow-black/45"
+          className="w-[min(680px,calc(100vw-2rem))] overflow-hidden rounded-lg border border-hairline-strong bg-surface text-fg shadow-2xl shadow-black/45"
         >
           <ModelSelectorInput placeholder="Search models..." />
           <ModelSelectorList className="max-h-[min(420px,60dvh)]">
@@ -119,7 +117,7 @@ export function ChatModelPicker({
           <button
             type="button"
             onClick={openProviderAuth}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11.5px] text-[var(--fg-dim)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--fg)]"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-fg-dim transition-colors hover:bg-surface-2 hover:text-fg"
           >
             <Plug size={13} strokeWidth={1.75} className="shrink-0" />
             Manage providers…
@@ -161,15 +159,15 @@ function ProviderModelGroup({
                 event.stopPropagation();
                 onManageProviders();
               }}
-              className="ml-auto min-w-0 truncate text-[10.5px] normal-case tracking-normal text-[var(--warn)] underline-offset-2 hover:underline"
+              className="ml-auto min-w-0 truncate text-2xs normal-case tracking-normal text-warn underline-offset-2 hover:underline"
             >
               Connect →
             </button>
           ) : (
             <span
               className={cn(
-                "ml-auto min-w-0 truncate text-[10.5px] normal-case tracking-normal",
-                state.available ? "text-[var(--fg-mute)]" : "text-[var(--warn)]",
+                "ml-auto min-w-0 truncate text-2xs normal-case tracking-normal",
+                state.available ? "text-fg-mute" : "text-warn",
               )}
             >
               {statusText}
@@ -188,7 +186,7 @@ function ProviderModelGroup({
               key={`${state.provider}:${model.id}`}
               value={`${state.label} ${state.provider} ${model.id} ${model.description}`}
               onSelect={() => onSelect(model.id)}
-              className="gap-2 py-2 font-mono text-[11.5px]"
+              className="gap-2 py-2 font-mono text-xs"
             >
               <ModelSelectorName>{model.id}</ModelSelectorName>
               {model.description === "" ? null : (
@@ -197,11 +195,7 @@ function ProviderModelGroup({
                 </ModelSelectorShortcut>
               )}
               {selected ? (
-                <Check
-                  size={13}
-                  strokeWidth={1.75}
-                  className="ml-1 shrink-0 text-[var(--accent)]"
-                />
+                <Check size={13} strokeWidth={1.75} className="ml-1 shrink-0 text-accent" />
               ) : null}
             </ModelSelectorItem>
           );
@@ -220,7 +214,7 @@ function ReasoningEffortSelector({
 }): React.ReactElement {
   return (
     <div className="p-2">
-      <div className="mb-1.5 text-[10.5px] font-medium tracking-[0.14em] text-[var(--fg-mute)] uppercase">
+      <div className="mb-1.5 text-2xs font-medium tracking-[0.14em] text-fg-mute uppercase">
         reasoning
       </div>
       <div className="grid grid-cols-6 gap-1">
@@ -231,10 +225,10 @@ function ReasoningEffortSelector({
               key={effort}
               type="button"
               className={cn(
-                "h-7 rounded border px-1 text-center font-mono text-[10.5px] transition-colors duration-100",
+                "h-7 rounded border px-1 text-center font-mono text-2xs transition-colors duration-100",
                 selected
-                  ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--fg)]"
-                  : "border-[var(--hairline)] text-[var(--fg-dim)] hover:border-[var(--fg-mute)] hover:text-[var(--fg)]",
+                  ? "border-accent bg-accent-soft text-fg"
+                  : "border-hairline text-fg-dim hover:border-fg-mute hover:text-fg",
               )}
               onClick={() => onReasoningEffortChange(effort)}
             >

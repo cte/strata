@@ -17,6 +17,7 @@ import {
   shouldAutoCompact,
 } from "./compaction.js";
 import { ModelAdapterError } from "./model.js";
+import { clampThinkingLevel } from "./modelCapabilities.js";
 import { buildRunContext } from "./runContext.js";
 import type {
   AgentMessage,
@@ -77,6 +78,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
     const continuingSessionId = config.continueSessionId;
     const continuingSession =
       continuingSessionId === undefined ? undefined : store.getSession(continuingSessionId);
+    let appendedContinuationUser = false;
 
     if (continuingSession !== undefined) {
       // Continue an existing session: rebuild the system messages so the agent
@@ -96,33 +98,54 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       });
       setupEvents.push(...preCompactEvents);
       const systemMessages = runContext.messages.filter((m) => m.role === "system");
-      const priorNonSystem = buildCompactedMessageRecords(store, session.id).map(
+      let priorNonSystem = buildCompactedMessageRecords(store, session.id).map(
         messageRecordToAgentMessage,
       );
-      const userMessage = runContext.messages.find((m) => m.role === "user");
-      messages = [
-        ...systemMessages,
-        ...priorNonSystem,
-        ...(userMessage === undefined ? [] : [userMessage]),
-      ];
-      // Persist the new user turn (the system messages are not re-persisted —
-      // they're regenerated each run).
-      if (userMessage !== undefined) {
-        const messageInput: import("@strata/core").MessageInput = {
-          sessionId: session.id,
-          role: "user",
-          content: userMessage.content,
-        };
-        if (userMessage.attachments !== undefined && userMessage.attachments.length > 0) {
-          messageInput.attachments = userMessage.attachments as unknown as JsonValue;
+      const transcriptRepair = repairIncompleteToolTurns(priorNonSystem);
+      priorNonSystem = transcriptRepair.messages;
+      const continuationUserMessage = runContext.messages.find(
+        (message) => message.role === "user",
+      );
+      if (
+        continuationUserMessage !== undefined &&
+        shouldAppendContinuationUser(continuationUserMessage)
+      ) {
+        if (!isDuplicateContinuationUser(priorNonSystem.at(-1), continuationUserMessage)) {
+          await store.recordUserMessage({
+            sessionId: session.id,
+            content: continuationUserMessage.content,
+            ...(continuationUserMessage.attachments === undefined ||
+            continuationUserMessage.attachments.length === 0
+              ? {}
+              : { attachments: continuationUserMessage.attachments as unknown as JsonValue }),
+          });
+          priorNonSystem.push(continuationUserMessage);
+          appendedContinuationUser = true;
         }
-        await store.appendMessage(messageInput);
+      }
+      if (lastMessageRole(priorNonSystem) === "assistant") {
+        throw new Error("Cannot continue from message role: assistant");
+      }
+      messages = [...systemMessages, ...priorNonSystem];
+      if (transcriptRepair.repairedToolCalls.length > 0) {
+        await store.appendEvent(session.id, "agent.loop.transcript_repaired", {
+          reason: "missing_tool_result",
+          repairedToolCalls: transcriptRepair.repairedToolCalls.map((toolCall) => ({
+            id: toolCall.id,
+            name: toolCall.name,
+          })),
+        });
       }
       await store.appendEvent(session.id, "message.system_context", systemContext);
-      await store.appendEvent(session.id, "agent.loop.resumed", {
+      const resumedPayload: JsonObject = {
         tools: tools.list().map((tool) => tool.name),
         priorMessages: priorNonSystem.length,
-      });
+        appendedUserMessage: appendedContinuationUser,
+      };
+      if (transcriptRepair.repairedToolCalls.length > 0) {
+        resumedPayload.repairedToolResults = transcriptRepair.repairedToolCalls.length;
+      }
+      await store.appendEvent(session.id, "agent.loop.resumed", resumedPayload);
     } else {
       messages = runContext.messages;
       session = await store.createSession({
@@ -148,7 +171,9 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
     for (const event of setupEvents) {
       yield event;
     }
-    yield { type: "message.user", content: config.question };
+    if (continuingSession === undefined || appendedContinuationUser) {
+      yield { type: "message.user", content: config.question };
+    }
 
     while (true) {
       if (isAborted()) {
@@ -200,8 +225,10 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         if (signal !== undefined) {
           modelRequest.signal = signal;
         }
-        if (config.reasoningEffort !== undefined && config.reasoningEffort !== "off") {
-          modelRequest.reasoningEffort = config.reasoningEffort;
+        if (config.reasoningEffort !== undefined) {
+          modelRequest.reasoningEffort = config.model.capabilities
+            ? clampThinkingLevel(config.model.capabilities, config.reasoningEffort)
+            : config.reasoningEffort;
         }
         let settled: { ok: true; value: ModelResponse } | { ok: false; error: unknown } | undefined;
         const responsePromise = config.model
@@ -1120,6 +1147,106 @@ function sanitizeTitleText(value: string): string {
       "",
     )
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+function shouldAppendContinuationUser(message: AgentMessage): boolean {
+  return message.content.trim() !== "" || (message.attachments?.length ?? 0) > 0;
+}
+
+function isDuplicateContinuationUser(
+  previous: AgentMessage | undefined,
+  next: AgentMessage,
+): boolean {
+  return (
+    previous?.role === "user" &&
+    previous.content === next.content &&
+    JSON.stringify(previous.attachments ?? null) === JSON.stringify(next.attachments ?? null)
+  );
+}
+
+function lastMessageRole(messages: AgentMessage[]): AgentMessage["role"] | undefined {
+  return messages.at(-1)?.role;
+}
+
+interface TranscriptRepairResult {
+  messages: AgentMessage[];
+  repairedToolCalls: AgentToolCall[];
+}
+
+function repairIncompleteToolTurns(messages: AgentMessage[]): TranscriptRepairResult {
+  const repairedMessages: AgentMessage[] = [];
+  const repairedToolCalls: AgentToolCall[] = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message === undefined) {
+      continue;
+    }
+    const toolCalls = message.role === "assistant" ? (message.toolCalls ?? []) : [];
+    if (toolCalls.length === 0) {
+      repairedMessages.push(message);
+      continue;
+    }
+
+    repairedMessages.push(message);
+    const followingToolMessages: AgentMessage[] = [];
+    let cursor = index + 1;
+    while (messages[cursor]?.role === "tool") {
+      const toolMessage = messages[cursor];
+      if (toolMessage !== undefined) {
+        followingToolMessages.push(toolMessage);
+      }
+      cursor += 1;
+    }
+
+    const expectedToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+    const toolMessagesById = new Map<string, AgentMessage>();
+    const extraToolMessages: AgentMessage[] = [];
+    for (const toolMessage of followingToolMessages) {
+      const toolCallId = toolMessage.toolCallId;
+      if (
+        toolCallId !== undefined &&
+        expectedToolCallIds.has(toolCallId) &&
+        !toolMessagesById.has(toolCallId)
+      ) {
+        toolMessagesById.set(toolCallId, toolMessage);
+      } else {
+        extraToolMessages.push(toolMessage);
+      }
+    }
+
+    for (const toolCall of toolCalls) {
+      const toolMessage = toolMessagesById.get(toolCall.id);
+      if (toolMessage !== undefined) {
+        repairedMessages.push(toolMessage);
+        continue;
+      }
+      repairedMessages.push(missingToolResultMessage(toolCall));
+      repairedToolCalls.push(toolCall);
+    }
+    repairedMessages.push(...extraToolMessages);
+    index = cursor - 1;
+  }
+
+  return { messages: repairedMessages, repairedToolCalls };
+}
+
+function missingToolResultMessage(toolCall: AgentToolCall): AgentMessage {
+  const result: ToolExecutionResult = {
+    ok: false,
+    toolName: toolCall.name,
+    error: {
+      code: "missing_tool_result",
+      message:
+        "The previous run stopped after this tool call was requested, but before a tool result was recorded.",
+    },
+    truncated: false,
+  };
+  return {
+    role: "tool",
+    content: JSON.stringify(result),
+    toolCallId: toolCall.id,
+  };
 }
 
 function messageRecordToAgentMessage(record: import("@strata/core").MessageRecord): AgentMessage {

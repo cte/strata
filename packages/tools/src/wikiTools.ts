@@ -1,6 +1,11 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { type JsonObject, type JsonValue, searchWikiSearchIndex } from "@strata/core";
+import {
+  type JsonObject,
+  type JsonValue,
+  retrieveWikiContext,
+  searchWikiSearchIndex,
+} from "@strata/core";
 import { editTextFile, writeTextFile } from "./fsTools.js";
 import {
   assertReadAllowed,
@@ -31,6 +36,15 @@ interface WikiSearchArgs extends JsonObject {
   includeRaw?: JsonValue;
   limit?: JsonValue;
   maxFileBytes?: JsonValue;
+}
+
+interface WikiRetrieveArgs extends JsonObject {
+  query?: JsonValue;
+  root?: JsonValue;
+  includeRaw?: JsonValue;
+  limit?: JsonValue;
+  tokenBudget?: JsonValue;
+  includeRelated?: JsonValue;
 }
 
 interface WikiWritePageArgs extends JsonObject {
@@ -79,6 +93,8 @@ interface WikiSearchMatch extends JsonObject {
 
 const DEFAULT_LIST_LIMIT = 200;
 const DEFAULT_SEARCH_LIMIT = 50;
+const DEFAULT_RETRIEVE_LIMIT = 12;
+const DEFAULT_RETRIEVE_TOKEN_BUDGET = 4000;
 const DEFAULT_MAX_PAGE_CHARS = 64_000;
 const DEFAULT_MAX_SEARCH_FILE_BYTES = 512_000;
 const DEFAULT_MAX_WRITE_CHARS = 500_000;
@@ -105,6 +121,7 @@ export function createWikiTools(): ToolDefinition[] {
     wikiListPagesTool,
     wikiReadPageTool,
     wikiSearchTool,
+    wikiRetrieveTool,
     wikiWritePageTool,
     wikiPatchPageTool,
     wikiAppendLogTool,
@@ -239,6 +256,77 @@ const wikiSearchTool: ToolDefinition<WikiSearchArgs> = {
     );
     const matches = await searchPages(start.wikiRoot, pages, query, limit, maxFileBytes);
     return { query, matches, count: matches.length, indexed: false };
+  },
+};
+
+const wikiRetrieveTool: ToolDefinition<WikiRetrieveArgs> = {
+  name: "wiki.retrieve",
+  description:
+    "Run broad, chunk-level wiki retrieval for complex evidence gathering. Uses local FTS, lexical-vector scoring, graph expansion, and token-budgeted evidence packing.",
+  mode: "read",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"],
+    properties: {
+      query: { type: "string" },
+      root: { type: "string", description: "Optional wiki-relative directory to retrieve from." },
+      includeRaw: { type: "boolean", description: "Include immutable raw source files." },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
+      tokenBudget: { type: "integer", minimum: 500, maximum: 20000 },
+      includeRelated: {
+        type: "boolean",
+        description:
+          "Include chunks from pages linked to or from direct matches. Defaults to true.",
+      },
+    },
+  },
+  maxResultChars: 120_000,
+  async handler(args, context) {
+    const query = requiredString(args.query, "query").trim();
+    if (query === "") {
+      throw new PolicyViolationError("empty_query", "Retrieval query cannot be empty");
+    }
+
+    const includeRaw = optionalBoolean(args.includeRaw, false, "includeRaw");
+    const limit = optionalPositiveInteger(args.limit, DEFAULT_RETRIEVE_LIMIT, "limit");
+    const tokenBudget = optionalPositiveInteger(
+      args.tokenBudget,
+      DEFAULT_RETRIEVE_TOKEN_BUDGET,
+      "tokenBudget",
+    );
+    const includeRelated = optionalBoolean(args.includeRelated, true, "includeRelated");
+    const root = optionalString(args.root, ".", "root").trim() || ".";
+    resolveWikiPath(context.repoRoot, root, {
+      allowRoot: true,
+      allowRawRead: includeRaw,
+    });
+
+    const result = await retrieveWikiContext({
+      repoRoot: context.repoRoot,
+      query,
+      root,
+      includeRaw,
+      limit,
+      tokenBudget,
+      includeRelated,
+    });
+    if (result !== null) {
+      return result;
+    }
+    return {
+      indexed: false,
+      strategy: "hybrid",
+      query,
+      matches: [],
+      count: 0,
+      tokenBudget,
+      estimatedTokens: 0,
+      diagnostics: {
+        reason: "retrieval_index_missing",
+        nextStep: "Run the wiki.search-index.refresh job to build chunk-level retrieval tables.",
+      },
+    };
   },
 };
 

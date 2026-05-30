@@ -1,3 +1,10 @@
+import {
+  clampThinkingLevel as clampAgentThinkingLevel,
+  getModelCapabilities,
+  getSupportedThinkingLevels,
+  type ModelCapabilities,
+  type ThinkingLevel,
+} from "@strata/agent";
 import type { JsonObject, JsonValue } from "@strata/core";
 
 export interface TokenUsageTotals {
@@ -74,6 +81,21 @@ export function formatTokens(count: number): string {
   return `${Math.round(count / 1_000_000)}M`;
 }
 
+export function capabilitiesForModel(provider: string, model: string): ModelCapabilities {
+  return getModelCapabilities(provider, model);
+}
+
+export function supportedThinkingLevels(provider: string, model: string): ThinkingLevel[] {
+  return getSupportedThinkingLevels(capabilitiesForModel(provider, model));
+}
+
+export function clampThinkingLevel(
+  capabilities: ModelCapabilities,
+  level: ThinkingLevel,
+): ThinkingLevel {
+  return clampAgentThinkingLevel(capabilities, level);
+}
+
 export function contextWindowForModel(provider: string, model: string): number | undefined {
   const override = parsePositiveInteger(
     Bun.env.STRATA_CONTEXT_WINDOW ?? Bun.env.STRATA_MODEL_CONTEXT_WINDOW,
@@ -83,7 +105,14 @@ export function contextWindowForModel(provider: string, model: string): number |
   }
 
   if (provider === "anthropic-claude") {
-    if (model.includes("opus-4-7") || model.includes("sonnet-4-6")) {
+    // Anthropic models that ship a native 1M context window (no beta header
+    // opt-in required), matching Pi's model registry.
+    if (
+      model.includes("opus-4-6") ||
+      model.includes("opus-4-7") ||
+      model.includes("opus-4-8") ||
+      model.includes("sonnet-4-6")
+    ) {
       return 1_000_000;
     }
     return 200_000;

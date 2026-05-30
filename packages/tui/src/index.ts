@@ -1,5 +1,10 @@
 export * from "./ansi.js";
-export { type InitialSessionAction, type RunTuiOptions, runTui } from "./app/run.js";
+export {
+  type InitialSessionAction,
+  type RunTuiOptions,
+  type RunTuiResult,
+  runTui,
+} from "./app/run.js";
 export * from "./commands.js";
 export * from "./component.js";
 export * from "./components.js";

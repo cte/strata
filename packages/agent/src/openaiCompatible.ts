@@ -1,6 +1,11 @@
 import type { JsonObject, JsonValue } from "@strata/core";
 import type { ToolMetadata } from "@strata/tools";
 import { ModelAdapterError } from "./model.js";
+import {
+  getModelCapabilities,
+  type ModelCapabilities,
+  mapThinkingLevel,
+} from "./modelCapabilities.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
 import { parseSseEvents } from "./sse.js";
 import type {
@@ -18,6 +23,7 @@ export interface OpenAICompatibleChatModelOptions {
   baseUrl?: string;
   name?: string;
   fetchImpl?: typeof fetch;
+  capabilities?: ModelCapabilities;
 }
 
 interface OpenAIChatToolCallDelta {
@@ -44,12 +50,16 @@ interface OpenAIChatStreamChunk {
   usage?: JsonObject;
 }
 
+type OpenAICompatibleThinkingFormat = "openai" | "openrouter" | "deepseek" | "together" | "zai";
+
 export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
   readonly name: string;
   private readonly apiKey: string;
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  readonly capabilities: ModelCapabilities;
+  private readonly thinkingFormat: OpenAICompatibleThinkingFormat;
 
   constructor(options: OpenAICompatibleChatModelOptions) {
     this.name = options.name ?? `openai-compatible:${options.model}`;
@@ -57,6 +67,9 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
     this.model = options.model;
     this.baseUrl = (options.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.capabilities =
+      options.capabilities ?? getModelCapabilities("openai-compatible", options.model);
+    this.thinkingFormat = detectThinkingFormat(this.baseUrl);
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
@@ -74,11 +87,12 @@ export class OpenAICompatibleChatModelAdapter implements ModelAdapter {
       stream: true,
       stream_options: { include_usage: true },
     };
-    if (request.reasoningEffort !== undefined && request.reasoningEffort !== "off") {
-      // chat/completions accepts minimal|low|medium|high; map xhigh -> high.
-      body.reasoning_effort =
-        request.reasoningEffort === "xhigh" ? "high" : request.reasoningEffort;
-    }
+    applyOpenAICompatibleThinking(
+      body,
+      this.capabilities,
+      this.thinkingFormat,
+      request.reasoningEffort,
+    );
     const init: RequestInit = {
       method: "POST",
       headers: {
@@ -210,6 +224,62 @@ async function parseChatCompletionsStream(
     normalized.usage = usage;
   }
   return normalized;
+}
+
+function detectThinkingFormat(baseUrl: string): OpenAICompatibleThinkingFormat {
+  const lower = baseUrl.toLowerCase();
+  if (lower.includes("deepseek.com")) return "deepseek";
+  if (lower.includes("openrouter.ai")) return "openrouter";
+  if (lower.includes("api.together.ai") || lower.includes("api.together.xyz")) return "together";
+  if (lower.includes("api.z.ai")) return "zai";
+  return "openai";
+}
+
+function applyOpenAICompatibleThinking(
+  body: JsonObject,
+  capabilities: ModelCapabilities,
+  format: OpenAICompatibleThinkingFormat,
+  level: ModelRequest["reasoningEffort"],
+): void {
+  if (!capabilities.reasoning) {
+    return;
+  }
+  const effort =
+    level === undefined || level === "off"
+      ? undefined
+      : (mapThinkingLevel(capabilities, level) ?? level);
+
+  if (format === "zai") {
+    body.enable_thinking = effort !== undefined;
+    return;
+  }
+  if (format === "deepseek") {
+    body.thinking = { type: effort === undefined ? "disabled" : "enabled" };
+    if (effort !== undefined) {
+      body.reasoning_effort = effort;
+    }
+    return;
+  }
+  if (format === "openrouter") {
+    if (effort !== undefined) {
+      body.reasoning = { effort };
+    } else if (capabilities.thinkingLevelMap?.off !== null) {
+      body.reasoning = { effort: capabilities.thinkingLevelMap?.off ?? "none" };
+    }
+    return;
+  }
+  if (format === "together") {
+    body.reasoning = { enabled: effort !== undefined };
+    return;
+  }
+  if (effort !== undefined) {
+    body.reasoning_effort = effort;
+    return;
+  }
+  const offValue = capabilities.thinkingLevelMap?.off;
+  if (typeof offValue === "string") {
+    body.reasoning_effort = offValue;
+  }
 }
 
 function toProviderMessage(message: AgentMessage, toolNameMap: Map<string, string>): JsonObject {

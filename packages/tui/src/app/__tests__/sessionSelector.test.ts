@@ -112,6 +112,17 @@ describe("SessionSelector", () => {
     expect(manyLines).toMatch(/\(1\/50\)/);
   });
 
+  test("renders session start date and time", () => {
+    const selector = new SessionSelector();
+    selector.open(
+      [makeSession("s1", "first")],
+      () => {},
+      () => {},
+    );
+
+    expect(renderSelector(selector, 100, 24).join("\n")).toContain("2026-05-05 12:00");
+  });
+
   test("sanitizes terminal controls from session titles before rendering", () => {
     const selector = new SessionSelector();
     selector.open(

@@ -12,14 +12,7 @@ import {
 } from "@strata/agent";
 import { writeLearningProposal } from "@strata/core/proposal-store";
 import { SessionStore } from "@strata/core/session-store";
-import {
-  DAILY_TODO_EXTRACTION,
-  type DailyTodoExtractionResult,
-  extractionCandidateStorageIdForResult,
-  extractionRunIdForSession,
-  persistDailyTodoExtractionResult,
-  type TodoCandidateResult,
-} from "@strata/ingest/extraction";
+import { RoutineStore } from "@strata/routines";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createWebApiHandler } from "../server.js";
 import type { AppRouter } from "../trpc.js";
@@ -186,7 +179,6 @@ describe("web api", () => {
           projectPaths: ["wiki/projects/support.md"],
           decisionPaths: [],
           threadPaths: [],
-          actionCount: 0,
           writtenPaths: ["wiki/sources/slack/c123/2026-05-27-thread.md"],
           dryRun: false,
         });
@@ -275,89 +267,6 @@ describe("web api", () => {
         const mine = await readFile(path.join(repoRoot, "wiki/actions/mine.md"), "utf8");
         expect(mine).toContain("- [x] Follow up on the launch plan");
         expect(mine).toContain("strata:action-context");
-      } finally {
-        close();
-      }
-    } finally {
-      await rm(repoRoot, { force: true, recursive: true });
-    }
-  });
-
-  test("reviews daily TODO extraction candidates through tRPC", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
-    try {
-      const candidateIds = await writeDailyTodoReviewFixture(repoRoot);
-      const handler = createWebApiHandler({
-        repoRoot,
-        env: {},
-        now: new Date("2026-05-29T10:00:00.000Z"),
-      });
-      const { client, close } = createTestClient(handler);
-      try {
-        const runs = await client.extraction.dailyTodos.runs.list.query({
-          day: "2026-05-29",
-        });
-        expect(runs.runs[0]).toMatchObject({
-          name: DAILY_TODO_EXTRACTION.name,
-          day: "2026-05-29",
-          candidateCount: 2,
-        });
-
-        const pending = await client.extraction.dailyTodos.candidates.list.query({
-          day: "2026-05-29",
-          publication: "pending",
-          status: "all",
-        });
-        expect(pending.candidates.map((candidate) => candidate.id)).toEqual(candidateIds);
-        expect(pending.candidates[0]).toMatchObject({
-          sourceLabel: "Launch thread",
-          owner: "unknown",
-        });
-
-        const accepted = await client.extraction.dailyTodos.candidates.accept.mutate({
-          id: candidateIds[0] ?? "",
-          owner: "mine",
-          actionText: "Send launch notes.",
-          context: "Accepted from extraction review.",
-        });
-        expect(accepted.publication).toMatchObject({
-          status: "published",
-        });
-        expect(accepted.publication?.publishedTarget).toContain("wiki/actions/mine.md:");
-        expect(accepted.candidate).toMatchObject({
-          status: "confirmed",
-        });
-        expect(accepted.candidate.publishedTarget).toContain("wiki/actions/mine.md:");
-
-        const rejected = await client.extraction.dailyTodos.candidates.reject.mutate({
-          id: candidateIds[1] ?? "",
-          reason: "Already handled.",
-        });
-        expect(rejected.candidate).toMatchObject({
-          status: "rejected",
-          owner: "unknown",
-        });
-
-        const remaining = await client.extraction.dailyTodos.candidates.list.query({
-          day: "2026-05-29",
-          publication: "pending",
-          status: "all",
-        });
-        expect(remaining.candidates).toEqual([]);
-
-        const actions = await client.wiki.actions.list.query({ owner: "mine", status: "open" });
-        expect(actions.actions[0]).toMatchObject({
-          title: "Send launch notes.",
-          source: {
-            target: "raw/slack/2026-05-29-launch",
-            label: "Launch thread",
-          },
-          context: "Accepted from extraction review.",
-        });
-
-        const mine = await readFile(path.join(repoRoot, "wiki/actions/mine.md"), "utf8");
-        expect(mine).toContain('"extractionCandidateId"');
-        expect(mine).toContain('"reviewed":true');
       } finally {
         close();
       }
@@ -485,7 +394,7 @@ describe("web api", () => {
     }
   });
 
-  test("summarizes and controls connector schedules through tRPC", async () => {
+  test("creates, lists, toggles, and deletes routine triggers through tRPC", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     try {
       const handler = createWebApiHandler({
@@ -495,62 +404,221 @@ describe("web api", () => {
       });
       const { client, close } = createTestClient(handler);
       try {
-        const before = await client.connectors.schedules.status.query({ connector: "granola" });
-        expect(before.schedule).toBeNull();
-        expect(before.defaultProfile).toBeNull();
-        expect(before.presets.map((preset) => preset.id)).toContain("granola-near-real-time");
-
-        await client.connectors.config.save.mutate({
-          connector: "granola",
-          id: "default",
-          label: "Granola schedule defaults",
-          config: {
-            pageSize: "20",
-            maxPages: "4",
-          },
-          makeDefault: true,
+        const { routine } = await client.routines.templates.create.mutate({
+          key: "index-refresh",
         });
 
-        const withDefault = await client.connectors.schedules.status.query({
-          connector: "granola",
+        const created = await client.routines.triggers.create.mutate({
+          routineId: routine.id,
+          name: "Nightly",
+          trigger: { type: "interval", seconds: 300 },
         });
-        expect(withDefault.defaultProfile).toMatchObject({
-          id: "default",
-          label: "Granola schedule defaults",
-        });
-        expect(withDefault.presets[0]?.usesDefaultProfile).toBe(true);
-
-        const created = await client.connectors.schedules.applyPreset.mutate({
-          connector: "granola",
-          presetId: "granola-near-real-time",
-        });
-        expect(created.schedule).toMatchObject({
-          name: "Granola near-real-time sync",
-          jobName: "connector.pull",
+        expect(created.trigger).toMatchObject({
+          routineId: routine.id,
+          name: "Nightly",
           enabled: true,
-          trigger: { type: "interval", seconds: 120 },
-          input: {
-            connector: "granola",
-            configProfileId: "default",
-            index: true,
-            refreshSearchIndex: true,
-          },
+          trigger: { type: "interval", seconds: 300 },
         });
-        expect(created.scheduleProfile).toMatchObject({
-          id: "default",
-          label: "Granola schedule defaults",
-        });
-        expect(created.scheduleProfileMissing).toBeNull();
+        expect(created.trigger.nextRunAt).toBeTruthy();
 
-        const disabled = await client.connectors.schedules.setEnabled.mutate({
-          connector: "granola",
+        const listed = await client.routines.triggers.list.query({ routineId: routine.id });
+        expect(listed.triggers).toHaveLength(1);
+
+        const updated = await client.routines.triggers.update.mutate({
+          id: created.trigger.id,
           enabled: false,
         });
-        expect(disabled.schedule?.enabled).toBe(false);
+        expect(updated.trigger.enabled).toBe(false);
+        expect(updated.trigger.nextRunAt).toBeNull();
 
-        const listed = await client.schedules.list.query();
-        expect(listed.schedules).toHaveLength(1);
-        expect(listed.schedules[0]?.input.connector).toBe("granola");
+        const removed = await client.routines.triggers.delete.mutate({ id: created.trigger.id });
+        expect(removed.deleted).toBe(true);
+        const after = await client.routines.triggers.list.query({ routineId: routine.id });
+        expect(after.triggers).toHaveLength(0);
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("lists, runs, and inspects routines through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    const model: ModelAdapter = {
+      name: "routine-web-test-model",
+      async complete() {
+        return {
+          content: "Routine complete.",
+          finishReason: "stop",
+          toolCalls: [],
+        };
+      },
+    };
+    try {
+      const store = await RoutineStore.open({ repoRoot });
+      try {
+        store.createRoutine({
+          id: "routine_web_smoke",
+          name: "Web smoke routine",
+          description: "Exercise routine tRPC procedures.",
+          prompt: "Summarize input.",
+          inputSchema: { type: "object" },
+          outputMode: "none",
+          outputSchema: null,
+        });
+      } finally {
+        store.close();
+      }
+
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: {},
+        createModelAdapter: async () => model,
+      });
+      const { client, close } = createTestClient(handler);
+      try {
+        const listed = await client.routines.list.query({ status: "all", limit: 10 });
+        expect(listed.routines).toContainEqual(
+          expect.objectContaining({
+            id: "routine_web_smoke",
+            name: "Web smoke routine",
+          }),
+        );
+
+        const detail = await client.routines.get.query({ id: "routine_web_smoke" });
+        expect(detail.routine).toMatchObject({
+          id: "routine_web_smoke",
+          outputMode: "none",
+        });
+
+        const run = await client.routines.run.mutate({
+          id: "routine_web_smoke",
+          input: { date: "2026-05-29" },
+        });
+        expect(run.status).toBe("completed");
+        expect(run.output?.metrics).toMatchObject({
+          routineId: "routine_web_smoke",
+          taskStatus: "no_op",
+        });
+
+        const runs = await client.routines.runs.list.query({
+          routineId: "routine_web_smoke",
+          limit: 10,
+        });
+        expect(runs.runs[0]).toMatchObject({
+          routineId: "routine_web_smoke",
+          status: "completed",
+          taskStatus: "no_op",
+        });
+        const routineRunId = runs.runs[0]?.id;
+        if (routineRunId === undefined) {
+          throw new Error("Expected routine run id.");
+        }
+
+        const artifactStore = await RoutineStore.open({ repoRoot });
+        try {
+          artifactStore.createRoutineArtifact({
+            routineRunId,
+            routineId: "routine_web_smoke",
+            schemaName: "routine_web_smoke.output",
+            schemaVersion: "1",
+            payload: { ok: true },
+            taskStatus: "succeeded",
+            sessionId: run.sessionId,
+          });
+        } finally {
+          artifactStore.close();
+        }
+
+        const artifacts = await client.routines.artifacts.list.query({
+          routineId: "routine_web_smoke",
+          limit: 10,
+        });
+        expect(artifacts.artifacts).toContainEqual(
+          expect.objectContaining({
+            routineId: "routine_web_smoke",
+            payload: { ok: true },
+          }),
+        );
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("creates, edits, toggles, and deletes routines through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        const created = await client.routines.create.mutate({
+          id: "routine_web_crud",
+          name: "CRUD routine",
+          description: "Created through the web layer.",
+          prompt: "Do the thing.",
+          inputSchema: { type: "object" },
+          outputMode: "none",
+          requiredSkills: ["sample-skill"],
+          preRunSteps: [{ jobName: "wiki.search-index.refresh", input: { source: "all" } }],
+          publicationPolicy: { mode: "artifact_only" },
+        });
+        expect(created.routine).toMatchObject({
+          id: "routine_web_crud",
+          name: "CRUD routine",
+          version: 1,
+          status: "enabled",
+          requiredSkills: ["sample-skill"],
+        });
+
+        const updated = await client.routines.update.mutate({
+          id: "routine_web_crud",
+          description: "Edited description.",
+          toolProfile: "read-only",
+        });
+        expect(updated.routine).toMatchObject({
+          description: "Edited description.",
+          toolProfile: "read-only",
+          version: 2,
+        });
+
+        const disabled = await client.routines.setStatus.mutate({
+          id: "routine_web_crud",
+          status: "disabled",
+        });
+        expect(disabled.routine.status).toBe("disabled");
+
+        const deleted = await client.routines.delete.mutate({ id: "routine_web_crud" });
+        expect(deleted.deleted).toBe(true);
+
+        const afterDelete = await client.routines.get.query({ id: "routine_web_crud" });
+        expect(afterDelete.routine).toBeNull();
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("rejects invalid routine definitions through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        await expect(
+          client.routines.create.mutate({
+            name: "Bad routine",
+            description: "Required output without schema.",
+            prompt: "Do it.",
+            inputSchema: { type: "object" },
+            outputMode: "required",
+          }),
+        ).rejects.toThrow();
       } finally {
         close();
       }
@@ -880,6 +948,51 @@ describe("web api", () => {
     }
   });
 
+  test("manages the retrieval index through system tRPC procedures", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      await mkdir(path.join(repoRoot, "wiki/projects"), { recursive: true });
+      await mkdir(path.join(repoRoot, "wiki/raw/granola"), { recursive: true });
+      await writeFile(
+        path.join(repoRoot, "wiki/projects/alpha.md"),
+        "# Alpha\n\nRetrieval index status should include curated project context.\n",
+      );
+      await writeFile(
+        path.join(repoRoot, "wiki/raw/granola/source.md"),
+        "# Raw Granola\n\nRetrieval index status can include raw evidence when requested.\n",
+      );
+
+      const handler = createWebApiHandler({ repoRoot, env: {} });
+      const { client, close } = createTestClient(handler);
+      try {
+        const before = await client.system.retrievalIndex.status.query();
+        expect(before.indexed).toBe(false);
+
+        const refresh = await client.system.retrievalIndex.refresh.mutate({
+          source: "all",
+          includeRaw: true,
+        });
+        expect(refresh.run).toMatchObject({
+          jobName: "wiki.search-index.refresh",
+          status: "completed",
+        });
+        expect(refresh.status).toMatchObject({
+          indexed: true,
+          schema: "current",
+          documents: { total: 2, curated: 1, sources: 0, raw: 1 },
+        });
+        expect(refresh.status.chunks).toBeGreaterThanOrEqual(2);
+
+        const after = await client.system.retrievalIndex.status.query();
+        expect(after.documents.total).toBe(2);
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("lists OpenAI-compatible models for chat composer model controls", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     const originalFetch = globalThis.fetch;
@@ -915,8 +1028,18 @@ describe("web api", () => {
       try {
         const body = await client.chat.models.list.query({ provider: "openai-compatible" });
         expect(body.models).toEqual([
-          { id: "gpt-4o-mini", description: "openai" },
-          { id: "gpt-5.5", description: "openai" },
+          {
+            id: "gpt-4o-mini",
+            provider: "openai-compatible",
+            description: "openai",
+            capabilities: { reasoning: false },
+          },
+          {
+            id: "gpt-5.5",
+            provider: "openai-compatible",
+            description: "openai",
+            capabilities: { reasoning: true, thinkingLevelMap: { off: null, xhigh: "xhigh" } },
+          },
         ]);
         expect(seenRequests).toHaveLength(1);
         expect(seenRequests[0]?.url).toBe("https://models.example/v1/models");
@@ -1349,117 +1472,6 @@ function fakeNotionFetch(): typeof fetch {
     },
     { preconnect: fetch.preconnect },
   ) satisfies typeof fetch;
-}
-
-async function writeDailyTodoReviewFixture(repoRoot: string): Promise<string[]> {
-  const store = await SessionStore.open(repoRoot);
-  try {
-    const session = await store.createSession({
-      kind: "ingest",
-      title: "Dry-run daily.todo extraction for 2026-05-29",
-    });
-    const results: TodoCandidateResult[] = [
-      todoCandidateResult({
-        evidenceSpanId: "span_review_1",
-        candidateHash: "candidate_hash_review_1",
-        candidateText: "Can you send launch notes?",
-        status: "needs_review",
-        classification: "needs_review",
-        confidence: 0.62,
-        owner: "unknown",
-        actionText: "Can you send launch notes?",
-        rationale: "Direct ask needs owner review.",
-        lineStart: 12,
-      }),
-      todoCandidateResult({
-        evidenceSpanId: "span_review_2",
-        candidateHash: "candidate_hash_review_2",
-        candidateText: "Ada will update the billing copy.",
-        status: "confirmed",
-        classification: "action",
-        confidence: 0.91,
-        owner: "theirs",
-        actionText: "Ada will update the billing copy.",
-        rationale: "Explicit assigned commitment.",
-        lineStart: 18,
-      }),
-    ];
-    const result: DailyTodoExtractionResult = {
-      sessionId: session.id,
-      extractionRunId: extractionRunIdForSession(session.id),
-      dryRun: true,
-      extractionName: "daily.todo",
-      extractorVersion: DAILY_TODO_EXTRACTION.extractorVersion,
-      verifierVersion: "fake.todo-verifier-v1",
-      day: "2026-05-29",
-      sourcesScanned: 1,
-      spanCount: 2,
-      candidateCount: results.length,
-      rejectedCount: 0,
-      countsBySource: {
-        slack: { documents: 1, spans: 2, candidates: 2, rejected: 0 },
-        granola: { documents: 0, spans: 0, candidates: 0, rejected: 0 },
-        notion: { documents: 0, spans: 0, candidates: 0, rejected: 0 },
-        wiki: { documents: 0, spans: 0, candidates: 0, rejected: 0 },
-      },
-      results,
-      candidates: results,
-      rejected: [],
-    };
-    persistDailyTodoExtractionResult(store, result);
-    await store.endSession(session.id, "completed");
-    return results.map((item) => extractionCandidateStorageIdForResult(result, item));
-  } finally {
-    store.close();
-  }
-}
-
-function todoCandidateResult(options: {
-  evidenceSpanId: string;
-  candidateHash: string;
-  candidateText: string;
-  status: TodoCandidateResult["status"];
-  classification: "action" | "not_action" | "needs_review";
-  confidence: number;
-  owner: "mine" | "theirs" | "unknown";
-  actionText: string;
-  rationale: string;
-  lineStart: number;
-}): TodoCandidateResult {
-  return {
-    status: options.status,
-    candidate: {
-      id: options.evidenceSpanId.replace("span", "candidate"),
-      extractionName: DAILY_TODO_EXTRACTION.name,
-      candidateKind: "direct_request",
-      evidenceSpanId: options.evidenceSpanId,
-      candidateText: options.candidateText,
-      candidateHash: options.candidateHash,
-      deterministicReasons: ["direct_request"],
-      metadata: {},
-    },
-    evidence: {
-      id: options.evidenceSpanId,
-      sourcePath: path.join("wiki", "raw", "slack", "2026-05-29-launch.md"),
-      sourceKind: "raw",
-      sourceType: "slack",
-      date: "2026-05-29",
-      lineStart: options.lineStart,
-      lineEnd: options.lineStart,
-      text: options.candidateText,
-      metadata: {
-        title: "Launch thread",
-      },
-    },
-    verification: {
-      classification: options.classification,
-      confidence: options.confidence,
-      owner: options.owner,
-      actionText: options.actionText,
-      rationale: options.rationale,
-    },
-    reasons: ["direct_request"],
-  };
 }
 
 const fakeModel: ModelAdapter = {

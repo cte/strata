@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { JsonValue, MessageRole, SessionStatus, TokenUsage } from "./types.js";
 
 export const sessions = sqliteTable(
@@ -49,12 +49,18 @@ export const messages = sqliteTable(
   (table) => [index("idx_messages_session").on(table.sessionId, table.ts)],
 );
 
-export const jobSchedules = sqliteTable(
-  "job_schedules",
+// A Routine's recurring triggers. Always fire `routine.run` for `routine_id`
+// (the reshaped successor to `job_schedules`; see docs/adr/0002). Cadence and
+// run-state columns are carried over verbatim so the scheduler's lease/next-run
+// logic is unchanged — only the keying (routine_id, not job_name) differs.
+export const routineTriggers = sqliteTable(
+  "routine_triggers",
   {
     id: text("id").primaryKey(),
-    name: text("name").notNull(),
-    jobName: text("job_name").notNull(),
+    routineId: text("routine_id")
+      .notNull()
+      .references(() => routines.id, { onDelete: "cascade" }),
+    name: text("name"),
     inputJson: text("input_json").notNull(),
     triggerJson: text("trigger_json").notNull(),
     enabled: integer("enabled").notNull(),
@@ -68,8 +74,8 @@ export const jobSchedules = sqliteTable(
     lockedAt: text("locked_at"),
   },
   (table) => [
-    index("idx_job_schedules_due").on(table.enabled, table.nextRunAt),
-    index("idx_job_schedules_job").on(table.jobName),
+    index("idx_routine_triggers_due").on(table.enabled, table.nextRunAt),
+    index("idx_routine_triggers_routine").on(table.routineId),
   ],
 );
 
@@ -118,76 +124,114 @@ export const ingestActivityRuns = sqliteTable(
   ],
 );
 
-export const extractionRuns = sqliteTable(
-  "extraction_runs",
+export const routines = sqliteTable(
+  "routines",
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
-    scopeJson: text("scope_json").notNull(),
-    day: text("day"),
+    description: text("description").notNull(),
     status: text("status").notNull(),
-    startedAt: text("started_at").notNull(),
-    endedAt: text("ended_at"),
-    extractorVersion: text("extractor_version").notNull(),
-    verifierVersion: text("verifier_version").notNull(),
-    model: text("model"),
-    sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
-    dryRun: integer("dry_run").notNull(),
-    candidateCount: integer("candidate_count").notNull(),
-    rejectedCount: integer("rejected_count").notNull(),
+    prompt: text("prompt").notNull(),
+    inputSchemaJson: text("input_schema_json").notNull(),
+    defaultInputJson: text("default_input_json"),
+    outputSchemaJson: text("output_schema_json"),
+    outputMode: text("output_mode").notNull(),
+    toolProfile: text("tool_profile").notNull(),
+    requiredSkillsJson: text("required_skills_json").notNull(),
+    preRunStepsJson: text("pre_run_steps_json").notNull(),
+    publicationPolicyJson: text("publication_policy_json").notNull(),
+    version: integer("version").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    index("idx_extraction_runs_name_day").on(
-      table.name,
-      table.day,
-      table.extractorVersion,
-      table.verifierVersion,
-      table.status,
-    ),
-    index("idx_extraction_runs_session").on(table.sessionId),
+    index("idx_routines_status").on(table.status, sql`${table.updatedAt} desc`),
+    index("idx_routines_updated").on(sql`${table.updatedAt} desc`),
   ],
 );
 
-export const extractionCandidates = sqliteTable(
-  "extraction_candidates",
+export const routineRuns = sqliteTable(
+  "routine_runs",
   {
     id: text("id").primaryKey(),
-    runId: text("run_id")
+    routineId: text("routine_id")
       .notNull()
-      .references(() => extractionRuns.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    day: text("day").notNull(),
-    sourcePath: text("source_path").notNull(),
-    sourceKind: text("source_kind").notNull(),
-    sourceType: text("source_type").notNull(),
-    lineStart: integer("line_start").notNull(),
-    lineEnd: integer("line_end").notNull(),
-    evidenceSpanId: text("evidence_span_id").notNull(),
-    evidenceText: text("evidence_text").notNull(),
-    candidateHash: text("candidate_hash").notNull(),
-    candidateKind: text("candidate_kind").notNull(),
-    candidateText: text("candidate_text").notNull(),
+      .references(() => routines.id, { onDelete: "cascade" }),
+    routineVersion: integer("routine_version").notNull(),
+    inputJson: text("input_json").notNull(),
     status: text("status").notNull(),
-    verificationJson: text("verification_json").notNull(),
-    deterministicReasonsJson: text("deterministic_reasons_json").notNull(),
-    metadataJson: text("metadata_json").notNull(),
-    publishedTarget: text("published_target"),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    taskStatus: text("task_status"),
+    jobSessionId: text("job_session_id").references(() => sessions.id, { onDelete: "set null" }),
+    agentSessionId: text("agent_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    childSessionIdsJson: text("child_session_ids_json").notNull(),
+    outputArtifactIdsJson: text("output_artifact_ids_json").notNull(),
+    error: text("error"),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
   },
   (table) => [
-    index("idx_extraction_candidates_day_status").on(table.name, table.day, table.status),
-    index("idx_extraction_candidates_run").on(table.runId),
-    uniqueIndex("idx_extraction_candidates_dedupe").on(
-      table.name,
-      table.day,
-      table.sourcePath,
-      table.lineStart,
-      table.lineEnd,
-      table.candidateHash,
-    ),
+    index("idx_routine_runs_routine").on(table.routineId, sql`${table.startedAt} desc`),
+    index("idx_routine_runs_started").on(sql`${table.startedAt} desc`),
+    index("idx_routine_runs_status").on(table.status, sql`${table.startedAt} desc`),
+  ],
+);
+
+export const routineArtifacts = sqliteTable(
+  "routine_artifacts",
+  {
+    id: text("id").primaryKey(),
+    routineRunId: text("routine_run_id")
+      .notNull()
+      .references(() => routineRuns.id, { onDelete: "cascade" }),
+    routineId: text("routine_id")
+      .notNull()
+      .references(() => routines.id, { onDelete: "cascade" }),
+    schemaName: text("schema_name").notNull(),
+    schemaVersion: text("schema_version").notNull(),
+    payloadJson: text("payload_json").notNull(),
+    validationStatus: text("validation_status").notNull(),
+    taskStatus: text("task_status").notNull(),
+    dedupeKey: text("dedupe_key"),
+    sourceRefsJson: text("source_refs_json").notNull(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_routine_artifacts_run").on(table.routineRunId, sql`${table.createdAt} desc`),
+    index("idx_routine_artifacts_routine").on(table.routineId, sql`${table.createdAt} desc`),
+    index("idx_routine_artifacts_dedupe").on(table.routineId, table.dedupeKey),
+  ],
+);
+
+// Durable reviewer feedback on raw-to-wiki classification outcomes (the
+// "Classification correction" feedback unit of the taxonomy-suggestion loop).
+// Decoupled from session lifecycle on purpose: corrections persist as eval
+// ground truth even if the originating ingest session/trace is cleaned up, so
+// target_session_id is a plain reference, not a foreign key.
+export const classificationCorrections = sqliteTable(
+  "classification_corrections",
+  {
+    id: text("id").primaryKey(),
+    createdAt: text("created_at").notNull(),
+    source: text("source").notNull(),
+    targetSessionId: text("target_session_id").notNull(),
+    targetEventId: integer("target_event_id").notNull(),
+    rawPath: text("raw_path").notNull(),
+    observedJson: text("observed_json").notNull(),
+    verdict: text("verdict").notNull(),
+    correctionJson: text("correction_json"),
+    derivedProposalPath: text("derived_proposal_path"),
+    status: text("status").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+  },
+  (table) => [
+    index("idx_classification_corrections_dedupe").on(table.dedupeKey),
+    index("idx_classification_corrections_created").on(sql`${table.createdAt} desc`),
+    index("idx_classification_corrections_status").on(table.status, sql`${table.createdAt} desc`),
   ],
 );
 
@@ -196,8 +240,11 @@ export type SessionInsert = typeof sessions.$inferInsert;
 export type EventInsert = typeof events.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
-export type JobScheduleRow = typeof jobSchedules.$inferSelect;
-export type JobScheduleInsert = typeof jobSchedules.$inferInsert;
+export type RoutineTriggerRow = typeof routineTriggers.$inferSelect;
+export type RoutineTriggerInsert = typeof routineTriggers.$inferInsert;
 export type IngestActivityRunRow = typeof ingestActivityRuns.$inferSelect;
-export type ExtractionRunRow = typeof extractionRuns.$inferSelect;
-export type ExtractionCandidateRow = typeof extractionCandidates.$inferSelect;
+export type RoutineRow = typeof routines.$inferSelect;
+export type RoutineRunRow = typeof routineRuns.$inferSelect;
+export type RoutineArtifactRow = typeof routineArtifacts.$inferSelect;
+export type ClassificationCorrectionRow = typeof classificationCorrections.$inferSelect;
+export type ClassificationCorrectionInsertRow = typeof classificationCorrections.$inferInsert;

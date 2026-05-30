@@ -3,7 +3,6 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import { frontmatter } from "../common.js";
-import { listExtractionCandidates } from "../extraction/store.js";
 import type { IngestTaxonomy } from "../ingestTaxonomy.js";
 import {
   buildGranolaMeetingDraft,
@@ -97,9 +96,6 @@ describe("Granola raw-to-wiki proposals", () => {
       proposedMeetingPath: "wiki/meetings/2026-05-04-roadmap-sync.md",
       peopleCandidates: ["Ada Lovelace", "Grace Hopper"],
     });
-    expect(draft?.actionCandidates.map((candidate) => candidate.text)).toContain(
-      "Grace Hopper will prepare the migration checklist.",
-    );
     expect(draft?.decisionCandidates.map((candidate) => candidate.text)).toContain(
       "We agreed to stage raw-to-wiki proposals before editing the wiki.",
     );
@@ -132,7 +128,7 @@ describe("Granola raw-to-wiki proposals", () => {
         "Proposed meeting page: `wiki/meetings/2026-05-04-roadmap-sync.md`",
       );
       expect(proposal).toContain("Decision candidates:");
-      expect(proposal).toContain("Action candidates:");
+      expect(proposal).not.toContain("Action candidates:");
       expect(proposal).toContain("Uncertainty:");
 
       const trace = await readFile(
@@ -183,28 +179,7 @@ describe("Granola raw-to-wiki proposals", () => {
       expect(project).toContain("Source Meetings");
       expect(project).toContain("[[meetings/2026-05-04-roadmap-sync|Roadmap Sync]]");
 
-      const actions = await readFile(path.join(repoRoot, "wiki/actions/theirs.md"), "utf8");
-      expect(actions).toContain("Grace Hopper will prepare the migration checklist.");
-      expect(actions).toContain("strata:action-context");
-      expect(actions).toContain("extractionCandidateId");
-      expect(result.indexed[0]?.extractionRunIds).toHaveLength(1);
-      expect(result.indexed[0]?.actionCandidateIds).toHaveLength(1);
-
-      const candidates = await listExtractionCandidates({
-        repoRoot,
-        name: "daily.todo",
-        day: "2026-05-04",
-      });
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]).toMatchObject({
-        sourcePath: "wiki/raw/granola/2026-05-04-roadmap-sync.md",
-        sourceType: "granola",
-        status: "confirmed",
-      });
-      expect(candidates[0]?.publishedTarget).toContain("wiki/actions/theirs.md");
-      expect(candidates[0]?.metadata.evidenceMetadata).toMatchObject({
-        sourceTarget: "wiki/meetings/2026-05-04-roadmap-sync.md",
-      });
+      await expect(access(path.join(repoRoot, "wiki/actions/theirs.md"))).rejects.toThrow();
 
       const index = await readFile(path.join(repoRoot, "wiki/index.md"), "utf8");
       expect(index).toContain("[[meetings/2026-05-04-roadmap-sync|Roadmap Sync]]");
@@ -219,7 +194,7 @@ describe("Granola raw-to-wiki proposals", () => {
       );
       expect(trace).toContain("raw_to_wiki.index.item");
       expect(trace).toContain("wiki/projects/document-classifier.md");
-      expect(trace).toContain('"actionCount"');
+      expect(trace).not.toContain("actionCandidateIds");
     });
   });
 
@@ -239,11 +214,10 @@ describe("Granola raw-to-wiki proposals", () => {
       expect(result.indexed[0]?.projectPaths).toContain("wiki/projects/pricing.md");
       expect(result.indexed[0]?.projectPaths).not.toContain("wiki/projects/pricing-strategy.md");
       expect(result.indexed[0]?.decisionPaths).toEqual([]);
-      expect(result.indexed[0]?.actionCount).toBe(0);
     });
   });
 
-  test("extracts only explicit meeting decisions and actions", async () => {
+  test("extracts explicit meeting decisions without publishing actions", async () => {
     await withTempRepo(async (repoRoot) => {
       const rawPath = path.join(repoRoot, "wiki/raw/granola/2026-05-10-connector-sync.md");
       await writeFile(rawPath, rawGranolaExplicitDecisionActionSnapshot(), "utf8");
@@ -258,7 +232,6 @@ describe("Granola raw-to-wiki proposals", () => {
       expect(result.scanned).toBe(1);
       expect(result.indexed).toHaveLength(1);
       expect(result.indexed[0]?.decisionPaths).toHaveLength(1);
-      expect(result.indexed[0]?.actionCount).toBe(1);
 
       const decision = await readFile(
         path.join(repoRoot, result.indexed[0]?.decisionPaths[0] ?? ""),
@@ -268,69 +241,11 @@ describe("Granola raw-to-wiki proposals", () => {
         "We will keep Granola polling behind the shared connector workflow.",
       );
 
-      const mine = await readFile(path.join(repoRoot, "wiki/actions/mine.md"), "utf8");
-      expect(mine).toContain("Sam will draft the connector runbook.");
-      expect(mine).not.toContain("We should revisit queue retries later.");
-      expect(mine).toContain("strata:action-context");
-      expect(mine).toContain("extractionRunId");
-      expect(mine).toContain("extractionCandidateId");
-      expect(result.indexed[0]?.extractionRunIds).toHaveLength(1);
-      expect(result.indexed[0]?.actionCandidateIds).toHaveLength(1);
-
-      const candidates = await listExtractionCandidates({
-        repoRoot,
-        name: "daily.todo",
-        day: "2026-05-10",
-      });
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]?.verification.owner).toBe("mine");
-      expect(candidates[0]?.publishedTarget).toContain("wiki/actions/mine.md");
+      await expect(access(path.join(repoRoot, "wiki/actions/mine.md"))).rejects.toThrow();
 
       const index = await readFile(path.join(repoRoot, "wiki/index.md"), "utf8");
       expect(index).toContain("We will keep Granola polling behind the shared connector workflow");
       expect(index).not.toContain("We should revisit queue retries later");
-    });
-  });
-
-  test("routes raw-to-wiki action-like tool output through daily.todo rejection", async () => {
-    await withTempRepo(async (repoRoot) => {
-      const rawPath = path.join(repoRoot, "wiki/raw/granola/2026-05-12-tool-output.md");
-      await writeFile(rawPath, rawGranolaToolOutputActionSnapshot(), "utf8");
-
-      const result = await runRawToWikiIndex({
-        repoRoot,
-        source: "granola",
-        rawPaths: [rawPath],
-        now: new Date("2026-05-12T12:00:00.000Z"),
-      });
-
-      expect(result.scanned).toBe(1);
-      expect(result.indexed).toHaveLength(1);
-      expect(result.indexed[0]?.decisionPaths).toHaveLength(1);
-      expect(result.indexed[0]?.actionCount).toBe(0);
-      expect(result.indexed[0]?.extractionRunIds).toHaveLength(1);
-      expect(result.indexed[0]?.actionCandidateIds).toHaveLength(1);
-
-      await expect(access(path.join(repoRoot, "wiki/actions/mine.md"))).rejects.toThrow();
-      await expect(access(path.join(repoRoot, "wiki/actions/theirs.md"))).rejects.toThrow();
-
-      const candidates = await listExtractionCandidates({
-        repoRoot,
-        name: "daily.todo",
-        day: "2026-05-12",
-      });
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]?.status).toBe("rejected");
-      expect(candidates[0]?.deterministicReasons).toContain("tool_search_count_output");
-      expect(candidates[0]?.publishedTarget).toBeNull();
-
-      const trace = await readFile(
-        path.join(repoRoot, ".strata/traces", `${result.sessionId}.jsonl`),
-        "utf8",
-      );
-      expect(trace).toContain("extraction.daily_todo.candidate");
-      expect(trace).toContain("raw_to_wiki.index.item");
-      expect(trace).toContain("actionCandidateIds");
     });
   });
 
@@ -377,11 +292,7 @@ describe("Granola raw-to-wiki proposals", () => {
       expect(project).toContain("type: project");
       expect(project).toContain("source: raw/notion/2026-05-06-launch-plan.md");
       expect(project).toContain("We agreed to ship the onboarding checklist.");
-
-      const actions = await readFile(path.join(repoRoot, "wiki/actions/mine.md"), "utf8");
-      expect(actions).toContain("Sam will draft the launch checklist.");
-      expect(actions).toContain("extractionCandidateId");
-      expect(result.indexed[0]?.actionCandidateIds).toHaveLength(1);
+      await expect(access(path.join(repoRoot, "wiki/actions/mine.md"))).rejects.toThrow();
     });
   });
 
@@ -426,7 +337,7 @@ describe("Granola raw-to-wiki proposals", () => {
     });
   });
 
-  test("attributes Slack first-person commitments to the message speaker", async () => {
+  test("indexes Slack decisions without publishing first-person commitments", async () => {
     await withTempRepo(async (repoRoot) => {
       await mkdir(path.join(repoRoot, "wiki/raw/slack"), { recursive: true });
       const rawPath = path.join(repoRoot, "wiki/raw/slack/2026-05-11-billing-rollout.md");
@@ -442,7 +353,6 @@ describe("Granola raw-to-wiki proposals", () => {
       expect(result.scanned).toBe(1);
       expect(result.indexed).toHaveLength(1);
       expect(result.indexed[0]?.decisionPaths).toHaveLength(1);
-      expect(result.indexed[0]?.actionCount).toBe(1);
 
       const decision = await readFile(
         path.join(repoRoot, result.indexed[0]?.decisionPaths[0] ?? ""),
@@ -450,26 +360,7 @@ describe("Granola raw-to-wiki proposals", () => {
       );
       expect(decision).toContain("We approved the self serve pricing rollout.");
 
-      const theirs = await readFile(path.join(repoRoot, "wiki/actions/theirs.md"), "utf8");
-      expect(theirs).toContain("Ada Lovelace will update the billing copy by Friday.");
-      expect(theirs).not.toContain("Should we revisit coupons next quarter?");
-      expect(theirs).toContain("extractionCandidateId");
-      expect(result.indexed[0]?.actionCandidateIds).toHaveLength(1);
-
-      const candidates = await listExtractionCandidates({
-        repoRoot,
-        name: "daily.todo",
-        day: "2026-05-11",
-      });
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]).toMatchObject({
-        sourceType: "slack",
-        status: "confirmed",
-      });
-      expect(candidates[0]?.metadata.evidenceMetadata).toMatchObject({
-        sourceTarget:
-          "wiki/sources/slack/c789/2026-05-11-1778561000123456-billing-rollout-decision.md",
-      });
+      await expect(access(path.join(repoRoot, "wiki/actions/theirs.md"))).rejects.toThrow();
     });
   });
 
@@ -689,25 +580,6 @@ describe("Granola raw-to-wiki proposals", () => {
       );
       expect(trace).toContain("raw_to_wiki.index.skipped");
       expect(trace).toContain("Slack thread appears to be an automation/log notification.");
-    });
-  });
-
-  test("does not promote Slack first-person actions from user-id speakers", async () => {
-    await withTempRepo(async (repoRoot) => {
-      await mkdir(path.join(repoRoot, "wiki/raw/slack"), { recursive: true });
-      const rawPath = path.join(repoRoot, "wiki/raw/slack/2026-05-09-user-id-action.md");
-      await writeFile(rawPath, rawSlackUserIdMaterialFirstPersonActionSnapshot(), "utf8");
-
-      const result = await runRawToWikiIndex({
-        repoRoot,
-        source: "slack",
-        rawPaths: [rawPath],
-        dryRun: true,
-      });
-
-      expect(result.scanned).toBe(1);
-      expect(result.indexed).toHaveLength(1);
-      expect(result.indexed[0]?.actionCount).toBe(0);
     });
   });
 });

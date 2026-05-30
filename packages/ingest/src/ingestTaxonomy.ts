@@ -60,7 +60,7 @@ export interface ResolvedIngestProjectRule {
 export interface ResolvedIngestTaxonomy {
   path: string | null;
   found: boolean;
-  source: "taxonomy" | "legacy-profile" | "override";
+  source: "taxonomy" | "override";
   selfNames: string[];
   projects: ResolvedIngestProjectRule[];
   slack: {
@@ -124,15 +124,11 @@ export function getIngestTaxonomyPath(repoRoot?: string): string {
   return path.join(getStrataPaths(repoRoot).runtimeDir, "ingest", "taxonomy.json");
 }
 
-export function getLegacyIngestProfilePath(repoRoot?: string): string {
-  return path.join(getStrataPaths(repoRoot).runtimeDir, "ingest", "profile.json");
-}
-
 export async function readIngestTaxonomy(repoRoot?: string): Promise<{
   taxonomy: IngestTaxonomy;
   path: string;
   found: boolean;
-  source: "taxonomy" | "legacy-profile" | "empty";
+  source: "taxonomy" | "empty";
 }> {
   const taxonomyPath = getIngestTaxonomyPath(repoRoot);
   const parsed = await readJsonFileOrUndefined<unknown>(taxonomyPath);
@@ -142,17 +138,6 @@ export async function readIngestTaxonomy(repoRoot?: string): Promise<{
       path: taxonomyPath,
       found: true,
       source: "taxonomy",
-    };
-  }
-
-  const legacyPath = getLegacyIngestProfilePath(repoRoot);
-  const legacy = await readJsonFileOrUndefined<unknown>(legacyPath);
-  if (legacy !== undefined) {
-    return {
-      taxonomy: normalizeIngestTaxonomy(legacy, legacyPath),
-      path: legacyPath,
-      found: true,
-      source: "legacy-profile",
     };
   }
 
@@ -282,6 +267,53 @@ export async function addIngestTaxonomySlackPattern(
   return updateIngestTaxonomy(repoRoot, (taxonomy) =>
     addSlackPattern(taxonomy, input.field, input.rule),
   );
+}
+
+export async function removeIngestTaxonomyProject(
+  repoRoot: string,
+  input: { label: string },
+): Promise<IngestTaxonomyApplyResult> {
+  return updateIngestTaxonomy(repoRoot, (taxonomy) => {
+    const existing = taxonomy.projects ?? [];
+    const projects = existing.filter((project) => !sameText(project.label, input.label));
+    return {
+      taxonomy: normalizeIngestTaxonomy({ ...taxonomy, projects }),
+      changed: projects.length !== existing.length,
+    };
+  });
+}
+
+export async function removeIngestTaxonomySelfName(
+  repoRoot: string,
+  input: { name: string },
+): Promise<IngestTaxonomyApplyResult> {
+  return updateIngestTaxonomy(repoRoot, (taxonomy) => {
+    const existing = taxonomy.selfNames ?? [];
+    const selfNames = existing.filter((name) => !sameText(name, input.name));
+    return {
+      taxonomy: normalizeIngestTaxonomy({ ...taxonomy, selfNames }),
+      changed: selfNames.length !== existing.length,
+    };
+  });
+}
+
+export async function removeIngestTaxonomySlackPattern(
+  repoRoot: string,
+  input: { field: IngestSlackPatternField; value: string; match?: IngestPatternMatch },
+): Promise<IngestTaxonomyApplyResult> {
+  return updateIngestTaxonomy(repoRoot, (taxonomy) => {
+    assertSlackPatternField(input.field);
+    const slack = taxonomy.slack ?? {};
+    const existing = slack[input.field] ?? [];
+    const matchKind = input.match ?? "literal";
+    const next = existing.filter(
+      (rule) => !(rule.value === input.value && (rule.match ?? "literal") === matchKind),
+    );
+    return {
+      taxonomy: normalizeIngestTaxonomy({ ...taxonomy, slack: { ...slack, [input.field]: next } }),
+      changed: next.length !== existing.length,
+    };
+  });
 }
 
 export async function applyIngestTaxonomyOperation(
@@ -724,11 +756,3 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-// Compatibility names for callers from the previous implementation pass.
-export type IngestProfile = IngestTaxonomy;
-export type ResolvedIngestProfile = ResolvedIngestTaxonomy;
-export type IngestSlackProfile = IngestSlackTaxonomy;
-export const getIngestProfilePath = getLegacyIngestProfilePath;
-export const loadIngestProfile = loadIngestTaxonomy;
-export const resolveIngestProfile = resolveIngestTaxonomy;

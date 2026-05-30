@@ -16,7 +16,11 @@ export interface RunTuiOptions {
   initialSession?: InitialSessionAction;
 }
 
-export async function runTui(options: RunTuiOptions = {}): Promise<void> {
+export interface RunTuiResult {
+  exitMessage: string;
+}
+
+export async function runTui(options: RunTuiOptions = {}): Promise<RunTuiResult> {
   const paths = getStrataPaths(options.repoRoot);
   const repoRoot = paths.repoRoot;
   await ensureRuntimeDirs(paths);
@@ -50,4 +54,5 @@ export async function runTui(options: RunTuiOptions = {}): Promise<void> {
   if (fatal !== undefined) {
     throw fatal instanceof Error ? fatal : new Error(String(fatal));
   }
+  return { exitMessage: app.exitMessage() };
 }

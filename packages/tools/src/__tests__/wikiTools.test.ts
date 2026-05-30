@@ -240,6 +240,59 @@ describe("wiki tools", () => {
     }
   });
 
+  test("retrieve exposes hybrid chunk retrieval to the agent tool registry", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      const wikiRoot = path.join(repoRoot, "wiki");
+      await mkdir(path.join(wikiRoot, "projects"), { recursive: true });
+      await mkdir(path.join(wikiRoot, "decisions"), { recursive: true });
+      await writeFile(
+        path.join(wikiRoot, "projects", "alpha.md"),
+        [
+          "---",
+          "type: project",
+          "title: Alpha",
+          "---",
+          "",
+          "# Alpha",
+          "",
+          "## Retrieval",
+          "",
+          "Alpha needs complex retrieval over curated project evidence.",
+          "",
+          "See [[decisions/2026-05-29-alpha-retrieval]].",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(wikiRoot, "decisions", "2026-05-29-alpha-retrieval.md"),
+        "# Alpha Retrieval Decision\n\nGraph expansion should include linked decisions.\n",
+        "utf8",
+      );
+      await refreshWikiSearchIndex({ repoRoot, includeRaw: false });
+
+      const registry = createDefaultToolRegistry();
+      const context = { repoRoot };
+      const result = await registry.execute(
+        "wiki.retrieve",
+        { query: "complex retrieval project evidence", limit: 4, tokenBudget: 900 },
+        context,
+      );
+      expect(result).toMatchObject({
+        indexed: true,
+        strategy: "hybrid",
+      });
+      const retrieval = result as unknown as { matches: Array<{ path: string; heading: string }> };
+      expect(retrieval.matches[0]).toMatchObject({
+        path: "projects/alpha.md",
+        heading: "Retrieval",
+      });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("writes, patches, logs, and updates the wiki index", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {

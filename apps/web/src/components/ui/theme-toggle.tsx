@@ -12,12 +12,12 @@ export function ThemeToggle(): React.ReactElement {
       onClick={toggle}
       aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
       aria-pressed={isDark}
-      className="group inline-flex h-7 items-center gap-2 rounded-full border border-[var(--hairline)] bg-[var(--bg-elev)] px-2 text-[var(--fg-mute)] transition-colors duration-150 hover:border-[var(--hairline-strong)] hover:text-[var(--fg-dim)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
+      className="group inline-flex h-7 items-center gap-2 rounded-full border border-hairline bg-bg-elev px-2 text-fg-mute transition-colors duration-150 hover:border-hairline-strong hover:text-fg-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
     >
       <span
         aria-hidden="true"
         className={`flex h-5 w-5 items-center justify-center rounded-full transition-colors duration-150 ${
-          isDark ? "bg-transparent" : "bg-[var(--surface-2)] text-[var(--fg)]"
+          isDark ? "bg-transparent" : "bg-surface-2 text-fg"
         }`}
       >
         <Sun size={11} strokeWidth={1.75} />
@@ -25,7 +25,7 @@ export function ThemeToggle(): React.ReactElement {
       <span
         aria-hidden="true"
         className={`flex h-5 w-5 items-center justify-center rounded-full transition-colors duration-150 ${
-          isDark ? "bg-[var(--surface-2)] text-[var(--fg)]" : "bg-transparent"
+          isDark ? "bg-surface-2 text-fg" : "bg-transparent"
         }`}
       >
         <Moon size={11} strokeWidth={1.75} />

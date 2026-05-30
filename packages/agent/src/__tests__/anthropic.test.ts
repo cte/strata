@@ -3,8 +3,85 @@ import type { JsonObject } from "@strata/core";
 import { createDefaultToolRegistry } from "@strata/tools";
 import { AnthropicModelAdapter } from "../anthropic.js";
 import type { AnthropicCredentials } from "../authStore.js";
+import type { ThinkingLevel } from "../types.js";
 
 describe("AnthropicModelAdapter", () => {
+  test("uses adaptive thinking and output effort for Claude Opus 4.8", async () => {
+    const body = await captureAnthropicRequestBody("claude-opus-4-8", "high");
+
+    expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(body.output_config).toEqual({ effort: "high" });
+  });
+
+  test("maps xhigh to Anthropic xhigh effort for Claude Opus 4.8", async () => {
+    const body = await captureAnthropicRequestBody("claude-opus-4-8", "xhigh");
+
+    expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(body.output_config).toEqual({ effort: "xhigh" });
+  });
+
+  test("maps xhigh to Anthropic max effort for Claude Opus 4.6", async () => {
+    const body = await captureAnthropicRequestBody("claude-opus-4-6", "xhigh");
+
+    expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(body.output_config).toEqual({ effort: "max" });
+  });
+
+  test("sends explicit disabled thinking for Claude reasoning models when thinking is off", async () => {
+    const body = await captureAnthropicRequestBody("claude-opus-4-8", "off");
+
+    expect(body.thinking).toEqual({ type: "disabled" });
+    expect(body.output_config).toBeUndefined();
+  });
+
+  test("uses budget-based thinking for non-adaptive Claude 4 reasoning models", async () => {
+    const body = await captureAnthropicRequestBody("claude-opus-4-5", "medium");
+
+    expect(body.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 8192,
+      display: "summarized",
+    });
+    expect(body.output_config).toBeUndefined();
+  });
+
+  test("parses streamed tool input deltas without prefixing Anthropic's initial empty object", async () => {
+    const response = await completeFromAnthropicEvents([
+      sse({ type: "message_start", message: { id: "msg_1" } }),
+      sse({
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_1",
+          name: "shell_run",
+          input: {},
+        },
+      }),
+      sse({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"command":' },
+      }),
+      sse({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '"ls ../pi-mono 2>&1 | head -50"}' },
+      }),
+      sse({ type: "message_delta", delta: { stop_reason: "tool_use" } }),
+      sse({ type: "message_stop" }),
+    ]);
+
+    expect(response.toolCalls).toEqual([
+      {
+        id: "toolu_1",
+        name: "shell.run",
+        argumentsText: JSON.stringify({ command: "ls ../pi-mono 2>&1 | head -50" }),
+      },
+    ]);
+    expect(response.finishReason).toBe("tool_calls");
+  });
+
   test("normalizes replayed tool call ids to Anthropic's allowed id pattern", async () => {
     let capturedBody: JsonObject | undefined;
     const fetchImpl = Object.assign(
@@ -60,6 +137,62 @@ describe("AnthropicModelAdapter", () => {
     expect(JSON.stringify(capturedBody)).not.toContain("call_1|fc_1");
   });
 });
+
+async function completeFromAnthropicEvents(events: string[]) {
+  const fetchImpl = Object.assign(async () => new Response(events.join(""), { status: 200 }), {
+    preconnect: fetch.preconnect,
+  }) satisfies typeof fetch;
+
+  const adapter = new AnthropicModelAdapter({
+    credentials: fakeCredentials(),
+    model: "claude-opus-4-8",
+    fetchImpl,
+  });
+
+  return adapter.complete({
+    messages: [{ role: "user", content: "List files." }],
+    tools: createDefaultToolRegistry().list(),
+    reasoningEffort: "xhigh",
+  });
+}
+
+async function captureAnthropicRequestBody(
+  model: string,
+  reasoningEffort?: ThinkingLevel,
+): Promise<JsonObject> {
+  let capturedBody: JsonObject | undefined;
+  const fetchImpl = Object.assign(
+    async (...args: Parameters<typeof fetch>) => {
+      capturedBody = JSON.parse(String(args[1]?.body)) as JsonObject;
+      return new Response(
+        [
+          sse({ type: "message_start", message: { id: "msg_1" } }),
+          sse({ type: "message_delta", delta: { stop_reason: "end_turn" } }),
+          sse({ type: "message_stop" }),
+        ].join(""),
+        { status: 200 },
+      );
+    },
+    { preconnect: fetch.preconnect },
+  ) satisfies typeof fetch;
+
+  const adapter = new AnthropicModelAdapter({
+    credentials: fakeCredentials(),
+    model,
+    fetchImpl,
+  });
+
+  await adapter.complete({
+    messages: [{ role: "user", content: "Hello" }],
+    tools: [],
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+  });
+
+  if (capturedBody === undefined) {
+    throw new Error("Expected Anthropic request body to be captured");
+  }
+  return capturedBody;
+}
 
 function sse(value: JsonObject): string {
   return `data: ${JSON.stringify(value)}\n\n`;

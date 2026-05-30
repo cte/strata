@@ -10,10 +10,7 @@ export function TabsList({
 }: React.ComponentProps<typeof BaseTabs.List>): React.ReactElement {
   return (
     <BaseTabs.List
-      className={cn(
-        "relative inline-flex items-end gap-6 border-b border-[var(--hairline)]",
-        className,
-      )}
+      className={cn("relative inline-flex items-end gap-6 border-b border-hairline", className)}
       {...props}
     />
   );
@@ -26,7 +23,7 @@ export function TabsTab({
   return (
     <BaseTabs.Tab
       className={cn(
-        "label-eyebrow relative cursor-pointer select-none px-0.5 py-3 text-[var(--fg-mute)] transition-colors duration-150 hover:text-[var(--fg-dim)] data-[selected]:text-[var(--fg)]",
+        "label-eyebrow relative cursor-pointer select-none px-0.5 py-3 text-fg-mute transition-colors duration-150 hover:text-fg-dim data-[selected]:text-fg",
         className,
       )}
       {...props}
@@ -41,7 +38,7 @@ export function TabsIndicator({
   return (
     <BaseTabs.Indicator
       className={cn(
-        "absolute bottom-[-1px] h-[1px] bg-[var(--accent)] transition-all duration-200 ease-out",
+        "absolute bottom-[-1px] h-[1px] bg-accent transition-all duration-200 ease-out",
         className,
       )}
       style={{

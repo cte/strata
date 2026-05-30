@@ -92,13 +92,13 @@ export function ModelAuthDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg border-[var(--hairline-strong)] bg-[var(--bg-elev)] text-[var(--fg)]">
+      <DialogContent className="max-w-lg border-hairline-strong bg-bg-elev text-fg">
         <DialogHeader>
-          <DialogTitle className="text-[14px]">Model providers</DialogTitle>
-          <DialogDescription className="text-[12px] text-[var(--fg-dim)]">
+          <DialogTitle className="text-base">Model providers</DialogTitle>
+          <DialogDescription className="text-xs text-fg-dim">
             Connect each provider with OAuth or an API key — the two are mutually exclusive.
             Credentials are stored locally in{" "}
-            <span className="font-mono text-[var(--fg)]">.strata/auth.json</span>.
+            <span className="font-mono text-fg">.strata/auth.json</span>.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
@@ -120,7 +120,7 @@ export function ModelAuthDialog({
               );
             })
           ) : (
-            <div className="flex items-center gap-2 px-1 py-3 text-[12px] text-[var(--fg-mute)]">
+            <div className="flex items-center gap-2 px-1 py-3 text-xs text-fg-mute">
               <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin" />
               Loading providers…
             </div>
@@ -167,15 +167,15 @@ function ProviderCard({
         : { tone: "muted" as const, label: "not connected" };
 
   return (
-    <div className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-3">
+    <div className="rounded-md border border-hairline bg-surface p-3">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[13px] font-medium tracking-tight text-[var(--fg)]">{name}</p>
+        <p className="text-sm font-medium tracking-tight text-fg">{name}</p>
         <Badge tone={badge.tone} pulse={badge.tone === "ready"}>
           {badge.label}
         </Badge>
       </div>
 
-      <div className="mt-2.5 inline-flex rounded-md border border-[var(--hairline)] bg-[var(--surface-2)] p-0.5">
+      <div className="mt-2.5 inline-flex rounded-md border border-hairline bg-surface-2 p-0.5">
         <MethodTab
           active={method === "oauth"}
           configured={activeMethod === "oauth"}
@@ -218,10 +218,8 @@ function MethodTab({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors ${
-        active
-          ? "bg-[var(--bg-elev)] text-[var(--fg)] shadow-sm"
-          : "text-[var(--fg-mute)] hover:text-[var(--fg-dim)]"
+      className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+        active ? "bg-bg-elev text-fg shadow-sm" : "text-fg-mute hover:text-fg-dim"
       }`}
     >
       {children}
@@ -305,11 +303,11 @@ function OAuthPanel({
 
   return (
     <div>
-      <p className="text-[12px] text-[var(--fg-dim)]">
+      <p className="text-xs text-fg-dim">
         {pending && !provider.authenticated ? "Waiting for authorization…" : provider.message}
       </p>
       {provider.expiresAt ? (
-        <p className="mt-0.5 font-mono text-[10.5px] text-[var(--fg-mute)]">
+        <p className="mt-0.5 font-mono text-2xs text-fg-mute">
           expires {new Date(provider.expiresAt).toISOString()}
         </p>
       ) : null}
@@ -343,19 +341,19 @@ function OAuthPanel({
 
       {pasteOpen ? (
         <form
-          className="mt-2.5 space-y-2 rounded-md border border-[var(--hairline)] bg-[var(--surface-2)] p-2.5"
+          className="mt-2.5 space-y-2 rounded-md border border-hairline bg-surface-2 p-2.5"
           onSubmit={(event) => {
             event.preventDefault();
             void complete();
           }}
         >
-          <p className="text-[11.5px] text-[var(--fg-dim)]">
+          <p className="text-xs text-fg-dim">
             After authorizing, paste the full callback URL or authorization code here.
           </p>
           <textarea
             value={pasteValue}
             onChange={(event) => setPasteValue(event.currentTarget.value)}
-            className="min-h-16 w-full rounded-md border border-[var(--hairline)] bg-[var(--bg)] p-2 font-mono text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+            className="min-h-16 w-full rounded-md border border-hairline bg-bg p-2 font-mono text-xs text-fg outline-none focus:border-accent"
             placeholder="https://…/callback?code=…&state=…"
           />
           <Button
@@ -369,7 +367,7 @@ function OAuthPanel({
         </form>
       ) : null}
 
-      {error ? <p className="mt-2 font-mono text-[11px] text-[var(--bad)]">{error}</p> : null}
+      {error ? <p className="mt-2 font-mono text-2xs text-bad">{error}</p> : null}
     </div>
   );
 }
@@ -426,7 +424,7 @@ function ApiKeyPanel({
 
   return (
     <div>
-      <p className="font-mono text-[11.5px] text-[var(--fg-dim)]">
+      <p className="font-mono text-xs text-fg-dim">
         {apiKey.configured ? `key ${apiKey.hint}` : "not set"}
         {apiKey.configured && apiKey.baseUrl ? ` · ${apiKey.baseUrl}` : ""}
       </p>
@@ -445,7 +443,7 @@ function ApiKeyPanel({
             onChange={(event) => setValue(event.currentTarget.value)}
             autoComplete="off"
             spellCheck={false}
-            className="w-full rounded-md border border-[var(--hairline)] bg-[var(--bg)] p-2 font-mono text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+            className="w-full rounded-md border border-hairline bg-bg p-2 font-mono text-xs text-fg outline-none focus:border-accent"
             placeholder={apiKey.target === "openai" ? "sk-…" : "sk-ant-…"}
           />
           {apiKey.supportsBaseUrl ? (
@@ -455,7 +453,7 @@ function ApiKeyPanel({
               onChange={(event) => setBaseUrl(event.currentTarget.value)}
               autoComplete="off"
               spellCheck={false}
-              className="w-full rounded-md border border-[var(--hairline)] bg-[var(--bg)] p-2 font-mono text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+              className="w-full rounded-md border border-hairline bg-bg p-2 font-mono text-xs text-fg outline-none focus:border-accent"
               placeholder="Base URL (optional, e.g. https://api.openai.com/v1)"
             />
           ) : null}
@@ -495,7 +493,7 @@ function ApiKeyPanel({
         </div>
       )}
 
-      {error ? <p className="mt-2 font-mono text-[11px] text-[var(--bad)]">{error}</p> : null}
+      {error ? <p className="mt-2 font-mono text-2xs text-bad">{error}</p> : null}
     </div>
   );
 }

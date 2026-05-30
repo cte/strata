@@ -1,7 +1,8 @@
 import {
+  type CreateModelAdapterOptions,
   createModelAdapter,
+  type ModelAdapter,
   type ModelProviderName,
-  runAgentLoop,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "@strata/agent";
@@ -9,18 +10,20 @@ import { runMaintenanceJob } from "@strata/agent/maintenance";
 import { type JsonObject, type JsonValue, refreshWikiSearchIndex } from "@strata/core";
 import type { ConnectorConfig, ConnectorName } from "@strata/ingest/connector-types";
 import { runConnectorWorkflow } from "@strata/ingest/connectors";
+import { stageIngestTaxonomyProposal } from "@strata/ingest/ingest-taxonomy";
 import { type RawToWikiSourceFilter, runRawToWikiIndex } from "@strata/ingest/raw-to-wiki";
-import { createDefaultToolRegistry, type ToolProfile } from "@strata/tools";
+import { buildTaxonomyEvidenceFromStore } from "@strata/ingest/taxonomy-evidence";
+import { suggestionsToProposalInputs } from "@strata/ingest/taxonomy-suggestions";
+import { RoutineStore, runRoutine } from "@strata/routines";
+import {
+  ensureTaxonomySuggestionsRoutine,
+  TAXONOMY_SUGGESTIONS_ROUTINE_ID,
+} from "./taxonomySuggestionRoutine.js";
 import type { JobDefinition } from "./types.js";
 
-type AgentPromptJobInput = JsonObject & {
-  prompt?: JsonValue;
-  title?: JsonValue;
-  provider?: JsonValue;
-  model?: JsonValue;
-  reasoningEffort?: JsonValue;
-  toolProfile?: JsonValue;
-};
+export interface DefaultJobDefinitionsOptions {
+  createModelAdapter?: (options: CreateModelAdapterOptions) => Promise<ModelAdapter>;
+}
 
 type ConnectorPullJobInput = JsonObject & {
   connector?: JsonValue;
@@ -54,39 +57,62 @@ type WikiHygieneJobInput = JsonObject & {
   includeRaw?: JsonValue;
 };
 
+type RoutineRunJobInput = JsonObject & {
+  routineId?: JsonValue;
+  input?: JsonValue;
+  provider?: JsonValue;
+  model?: JsonValue;
+  reasoningEffort?: JsonValue;
+};
+
+type TaxonomyEvidenceJobInput = JsonObject & {
+  structuredCap?: JsonValue;
+  slackCap?: JsonValue;
+  scanLimit?: JsonValue;
+};
+
+type TaxonomySuggestJobInput = JsonObject & {
+  provider?: JsonValue;
+  model?: JsonValue;
+  reasoningEffort?: JsonValue;
+  minConfidence?: JsonValue;
+};
+
 const CONNECTOR_NAMES = new Set(["granola", "notion", "slack"]);
 const RAW_INDEX_SOURCES = new Set(["all", "granola", "notion", "slack"]);
 const MODEL_PROVIDERS = new Set(["openai-codex", "openai-compatible", "anthropic-claude"]);
-const TOOL_PROFILES = new Set(["read-only", "maintenance", "learning", "dangerous"]);
 
-export function defaultJobDefinitions(): JobDefinition[] {
+export function defaultJobDefinitions(options: DefaultJobDefinitionsOptions = {}): JobDefinition[] {
   return [
-    agentPromptJob(),
+    routineRunJob(options),
     maintenanceRunJob(),
     connectorPullJob(),
     rawIndexJob(),
     wikiSearchIndexRefreshJob(),
     wikiHygieneJob(),
+    taxonomyEvidenceJob(),
+    taxonomySuggestJob(),
   ];
 }
 
-function agentPromptJob(): JobDefinition<AgentPromptJobInput> {
+function routineRunJob(options: DefaultJobDefinitionsOptions): JobDefinition<RoutineRunJobInput> {
   return {
-    name: "agent.prompt",
-    description: "Start an agent session from a scheduled prompt.",
+    name: "routine.run",
+    description: "Run a saved Routine with structured input and trace-backed child sessions.",
     mode: "write",
     defaultConcurrency: "skip",
     inputSchema: {
       type: "object",
-      required: ["prompt"],
+      required: ["routineId"],
       properties: {
-        prompt: {
+        routineId: {
           type: "string",
-          description: "Prompt to send as the scheduled agent user message.",
+          description: "Routine id to execute.",
         },
-        title: {
-          type: "string",
-          description: "Optional session and schedule title.",
+        input: {
+          type: "object",
+          description: "Structured routine input merged over the routine default input.",
+          default: {},
         },
         provider: {
           type: "string",
@@ -97,53 +123,187 @@ function agentPromptJob(): JobDefinition<AgentPromptJobInput> {
           type: "string",
           enum: [...THINKING_LEVELS],
         },
-        toolProfile: {
+      },
+    },
+    async run(input, context) {
+      const routineId = stringField(input.routineId, "routineId");
+      const routineInput = jsonObjectField(input.input, "input");
+      const provider = optionalModelProvider(input.provider);
+      const modelName = optionalString(input.model, "model");
+      const reasoningEffort = optionalThinkingLevel(input.reasoningEffort);
+      const result = await runRoutine({
+        routineId,
+        input: routineInput,
+        repoRoot: context.repoRoot,
+        env: context.env,
+        now: context.now,
+        jobSessionId: context.sessionId,
+        createModelAdapter: options.createModelAdapter ?? createModelAdapter,
+        runPreRunJob: async (childInput) =>
+          context.runJob({
+            jobName: childInput.jobName,
+            input: childInput.input,
+            ...(childInput.title === undefined ? {} : { title: childInput.title }),
+          }),
+        ...(provider === undefined ? {} : { provider }),
+        ...(modelName === undefined ? {} : { model: modelName }),
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      });
+      return {
+        status: result.status,
+        summary: result.summary,
+        metrics: {
+          routineId: result.routineId,
+          routineRunId: result.routineRunId,
+          routineVersion: result.routineVersion,
+          taskStatus: result.taskStatus,
+          agentSessionId: result.agentSessionId,
+          childSessionIds: result.childSessionIds,
+          outputArtifactIds: result.outputArtifactIds,
+          agentStatus: result.agentStatus,
+          stoppedReason: result.stoppedReason,
+          iterations: result.iterations,
+          toolCalls: result.toolCalls,
+        },
+        details: result,
+      };
+    },
+  };
+}
+
+function taxonomyEvidenceJob(): JobDefinition<TaxonomyEvidenceJobInput> {
+  return {
+    name: "ingest.taxonomy.evidence",
+    description:
+      "Build the source-weighted, Slack-bounded taxonomy evidence bundle from the review queue.",
+    mode: "read",
+    defaultConcurrency: "skip",
+    inputSchema: {
+      type: "object",
+      properties: {
+        structuredCap: { type: "number", description: "Max Granola/Notion candidates." },
+        slackCap: { type: "number", description: "Max Slack candidates (noise floor)." },
+        scanLimit: { type: "number", description: "Review-queue candidates to consider." },
+      },
+    },
+    async run(input, context) {
+      const structuredCap = optionalPositiveNumber(input.structuredCap, "structuredCap");
+      const slackCap = optionalPositiveNumber(input.slackCap, "slackCap");
+      const scanLimit = optionalPositiveNumber(input.scanLimit, "scanLimit");
+      const bundle = await buildTaxonomyEvidenceFromStore({
+        repoRoot: context.repoRoot,
+        ...(structuredCap === undefined ? {} : { structuredCap }),
+        ...(slackCap === undefined ? {} : { slackCap }),
+        ...(scanLimit === undefined ? {} : { scanLimit }),
+      });
+      return {
+        status: "ok",
+        summary: `${bundle.counts.candidates} candidate${bundle.counts.candidates === 1 ? "" : "s"} (${bundle.counts.structured} structured, ${bundle.counts.slack} slack; ${bundle.counts.droppedSlack} slack dropped).`,
+        metrics: {
+          candidates: bundle.counts.candidates,
+          structured: bundle.counts.structured,
+          slack: bundle.counts.slack,
+          droppedSlack: bundle.counts.droppedSlack,
+        },
+        details: asJsonValue(bundle),
+      };
+    },
+  };
+}
+
+function taxonomySuggestJob(): JobDefinition<TaxonomySuggestJobInput> {
+  return {
+    name: "ingest.taxonomy.suggest",
+    description:
+      "Run the taxonomy-suggestion Routine and stage its proposals as reviewable schema proposals.",
+    mode: "write",
+    defaultConcurrency: "skip",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: {
           type: "string",
-          enum: ["read-only", "maintenance", "learning", "dangerous"],
-          default: "maintenance",
+          enum: ["openai-codex", "openai-compatible", "anthropic-claude"],
+        },
+        model: { type: "string" },
+        reasoningEffort: { type: "string", enum: [...THINKING_LEVELS] },
+        minConfidence: {
+          type: "number",
+          description: "Drop suggestions below this confidence before staging (default 0).",
         },
       },
     },
     async run(input, context) {
-      const prompt = stringField(input.prompt, "prompt");
-      const title = optionalString(input.title, "title") ?? scheduledAgentTitle(prompt);
+      const minConfidence = optionalPositiveNumber(input.minConfidence, "minConfidence") ?? 0;
+
+      // Seed the Routine on first run so the suggester is self-installing.
+      const seedStore = await RoutineStore.open({ repoRoot: context.repoRoot });
+      try {
+        ensureTaxonomySuggestionsRoutine(seedStore);
+      } finally {
+        seedStore.close();
+      }
+
+      // Run the Routine through the shared routine.run job so pre-run evidence,
+      // model wiring, and trace lineage stay consistent with every other Routine.
       const provider = optionalModelProvider(input.provider);
       const modelName = optionalString(input.model, "model");
       const reasoningEffort = optionalThinkingLevel(input.reasoningEffort);
-      const toolProfile = optionalToolProfile(input.toolProfile) ?? "maintenance";
-      const model = await createModelAdapter({
+      const routineInput: JsonObject = {
+        routineId: TAXONOMY_SUGGESTIONS_ROUTINE_ID,
         ...(provider === undefined ? {} : { provider }),
         ...(modelName === undefined ? {} : { model: modelName }),
-        repoRoot: context.repoRoot,
-        env: context.env,
-      });
-      const result = await runAgentLoop({
-        question: prompt,
-        model,
-        repoRoot: context.repoRoot,
-        sessionTitle: title,
-        tools: createDefaultToolRegistry({ profile: toolProfile }),
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      };
+      const child = await context.runJob({
+        jobName: "routine.run",
+        input: routineInput,
+        title: "Taxonomy suggestions",
       });
-      const ok = result.status !== "failed";
+      if (child.status === "failed") {
+        return {
+          status: "needs_attention",
+          summary: `Taxonomy suggestion routine failed: ${child.errorMessage ?? child.summary}`,
+          metrics: { routineSessionId: child.sessionId, staged: 0, rejected: 0 },
+        };
+      }
+
+      const routineRunId = stringFromMetrics(child.output, "routineRunId");
+      let staged = 0;
+      let rejected = 0;
+      const stagedProposalPaths: string[] = [];
+      if (routineRunId !== null) {
+        const store = await RoutineStore.open({ repoRoot: context.repoRoot });
+        let artifacts;
+        try {
+          artifacts = store
+            .listRoutineArtifacts({ routineRunId })
+            .filter((artifact) => artifact.validationStatus === "valid");
+        } finally {
+          store.close();
+        }
+        for (const artifact of artifacts) {
+          const mapping = suggestionsToProposalInputs(artifact.payload, { minConfidence });
+          rejected += mapping.rejected.length;
+          for (const proposalInput of mapping.inputs) {
+            const proposal = await stageIngestTaxonomyProposal(context.repoRoot, proposalInput);
+            staged += 1;
+            stagedProposalPaths.push(proposal.id);
+          }
+        }
+      }
+
       return {
-        status: ok ? "ok" : "needs_attention",
-        summary: ok
-          ? `Agent session completed: ${title}`
-          : `Agent session failed: ${result.stoppedReason}`,
+        status: "ok",
+        summary: `Staged ${staged} taxonomy proposal${staged === 1 ? "" : "s"}${rejected > 0 ? ` (${rejected} suggestion${rejected === 1 ? "" : "s"} rejected)` : ""}.`,
         metrics: {
-          agentSessionId: result.sessionId,
-          agentStatus: result.status,
-          stoppedReason: result.stoppedReason,
-          iterations: result.iterations,
-          toolCalls: result.toolCalls,
-          model: model.name,
-          toolProfile,
+          routineSessionId: child.sessionId,
+          routineRunId,
+          staged,
+          rejected,
+          stagedProposalIds: stagedProposalPaths,
         },
-        details: {
-          agentSessionId: result.sessionId,
-          finalAnswerPreview: truncateForDetails(result.finalAnswer, 2000),
-        },
+        details: asJsonValue({ routine: child.output, stagedProposalIds: stagedProposalPaths }),
       };
     },
   };
@@ -411,6 +571,16 @@ function connectorConfig(value: JsonValue | undefined): ConnectorConfig {
   return { ...(value as JsonObject) };
 }
 
+function jsonObjectField(value: JsonValue | undefined, label: string): JsonObject {
+  if (value === undefined) {
+    return {};
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return { ...(value as JsonObject) };
+}
+
 function connectorLookbackMinutes(value: JsonValue | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -458,14 +628,31 @@ function optionalThinkingLevel(value: JsonValue | undefined): ThinkingLevel | un
   throw new Error("reasoningEffort must be one of: off, minimal, low, medium, high, xhigh");
 }
 
-function optionalToolProfile(value: JsonValue | undefined): ToolProfile | undefined {
+function optionalPositiveNumber(value: JsonValue | undefined, label: string): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value === "string" && TOOL_PROFILES.has(value)) {
-    return value as ToolProfile;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative number`);
   }
-  throw new Error("toolProfile must be one of: read-only, maintenance, learning, dangerous");
+  return value;
+}
+
+function stringFromMetrics(output: JsonValue | null | undefined, key: string): string | null {
+  if (
+    output === null ||
+    output === undefined ||
+    typeof output !== "object" ||
+    Array.isArray(output)
+  ) {
+    return null;
+  }
+  const metrics = output.metrics;
+  if (typeof metrics !== "object" || metrics === null || Array.isArray(metrics)) {
+    return null;
+  }
+  const value = metrics[key];
+  return typeof value === "string" ? value : null;
 }
 
 function stringArray(value: JsonValue | undefined): string[] | undefined {
@@ -480,18 +667,6 @@ function stringArray(value: JsonValue | undefined): string[] | undefined {
 
 function connectorPullSummary(connector: ConnectorName, itemCount: number, writtenCount: number) {
   return `${connector} pull processed ${itemCount} item${itemCount === 1 ? "" : "s"} (${writtenCount} written).`;
-}
-
-function scheduledAgentTitle(prompt: string): string {
-  return `Scheduled agent: ${truncateForDetails(prompt.replace(/\s+/g, " "), 72)}`;
-}
-
-function truncateForDetails(value: string, limit: number): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= limit) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
 }
 
 function asJsonValue(value: unknown): JsonValue {

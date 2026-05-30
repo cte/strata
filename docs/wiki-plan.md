@@ -149,7 +149,7 @@ Implement each ingest workflow as documented in §10. The pattern is the same fo
 2. Identify which entities it touches (people, projects, teams), using generic extraction plus the local ingest taxonomy for canonical aliases and local ignore/materiality patterns.
 3. Write or update the relevant pages (meeting summary, project, person).
 4. Extract decisions → `decisions/`.
-5. Extract action items → `actions/mine.md` or `actions/theirs.md`. This should migrate from raw-to-wiki-specific promotion into the generalized extraction framework in [extraction-framework-plan.md](./extraction-framework-plan.md), starting with the `daily.todo` extractor.
+5. Do not extract action items automatically yet. Action intelligence is being redesigned around Routine artifacts after the previous daily TODO extractor was removed.
 6. Surface only durable unresolved questions → `threads/`. For high-volume sources such as Slack, keep material source context under `sources/<source>/` unless the item clearly deserves a curated open-thread page.
 7. Update `index.md` as human navigation, refresh the local search index for machine retrieval, append a compact run-level summary to `log.md`, and record structured session events that explain each source item's organization.
 8. Commit. Discuss with the user what changed and what they should attend to.
@@ -161,9 +161,9 @@ Implement each ingest workflow as documented in §10. The pattern is the same fo
   <!-- strata:action-context {"context":"Sent a draft; waiting on finance.","updatedAt":"2026-05-28T12:00:00.000Z"} -->
 ```
 
-Raw-to-wiki ingestion should continue appending ordinary task rows with source links. Browser action management must preserve those source links and must not move action state into a separate database.
+Browser action management must preserve source links and must not move action state into a separate database.
 
-Action extraction should become evidence-backed and re-runnable day by day. The planned `daily.todo` extractor reads a day-scoped wiki corpus, records the source spans it considered, stores rejected/review/published candidates with extractor/verifier versions, and only publishes reviewed or high-confidence items back to the Markdown ledgers. Historical re-indexing should be resumable and idempotent: a backfill over `--from YYYY-MM-DD --to YYYY-MM-DD` must skip already-processed candidates unless explicitly forced, avoid republishing rejected candidates, and leave raw snapshots untouched.
+Automated action extraction is currently disabled. The next design starts with the action-item schema, write-back behavior, evidence model, Routine artifacts, and review lifecycle before any producer can write into `wiki/actions/`.
 
 A single Granola or Notion ingest typically touches 8–15 files. A single Slack ingest may touch 0 files (most threads add nothing). That's correct behavior. Detailed ingest auditability should come from the structured activity feed in [ingest-activity-log-plan.md](./ingest-activity-log-plan.md), while `wiki/log.md` stays a compact human chronology. Raw-to-wiki item events should include classification reasons for taxonomy aliases, material signals, and low-signal skips. When false positives/false negatives reveal workspace-specific vocabulary, update `.strata/ingest/taxonomy.json` directly with `strata ingest taxonomy ...` or stage a reviewed schema proposal instead of adding hard-coded terms to TypeScript.
 
@@ -203,7 +203,7 @@ When the user asks a question:
 4. Synthesize an answer with citations to the wiki pages used.
 5. **If the answer is reusable**, offer to file it back as a new wiki page (e.g., `projects/foo/comparison.md`, `decisions/YYYY-MM-DD-bar.md`). Don't let useful synthesis disappear into chat history.
 
-For larger queries (more than ~5 candidate pages), use the local wiki search index instead of reading `index.md` linearly. Refresh it with `strata wiki search-index refresh`; it indexes curated pages, generated source pages, and raw snapshots while ranking curated pages first and raw evidence last.
+For larger queries (more than ~5 candidate pages), use `wiki.retrieve` over the local SQLite retrieval index instead of reading `index.md` linearly. Refresh it with `strata wiki search-index refresh`; the index covers curated pages, generated source pages, raw snapshots, chunk-level FTS rows, and extracted wiki links while ranking curated pages first and raw evidence last. Use `wiki.search` for quick exact candidate lookup.
 
 ### Phase 5 — Lint workflow
 
@@ -365,13 +365,13 @@ All pages have YAML frontmatter (see project plan §6).
 
 ### Ingest — Granola meeting
 
-Current harness automation can run this workflow directly with `strata ingest raw index --source granola` or the compatibility shortcut `strata ingest granola index`. The indexer creates meeting pages and lightweight people/project/decision/thread/action pages from structured Granola summaries, updates `wiki/index.md`, appends `wiki/log.md`, and leaves `wiki/raw/` untouched. `strata ingest granola propose` remains available for review-first experiments.
+Current harness automation can run this workflow directly with `strata ingest raw index --source granola` or the compatibility shortcut `strata ingest granola index`. The indexer creates meeting pages and lightweight people/project/decision/thread pages from structured Granola summaries, updates `wiki/index.md`, appends `wiki/log.md`, and leaves `wiki/raw/` untouched. `strata ingest granola propose` remains available for review-first experiments.
 
 1. Read `raw/granola/<file>`.
 2. Write `meetings/<date>-<slug>.md` with summary.
 3. Update affected `projects/` and `people/` pages.
 4. Extract decisions → `decisions/`.
-5. Extract action items → `actions/mine.md` or `actions/theirs.md`, eventually through the shared `daily.todo` extraction path.
+5. Do not extract action items automatically; action intelligence is being redesigned from the manual action schema.
 6. Open or close threads → `threads/`.
 7. Update `index.md`. Append `log.md`.
 8. Commit. Tell the user: what changed, what they should know about, anything that contradicts prior wiki claims.

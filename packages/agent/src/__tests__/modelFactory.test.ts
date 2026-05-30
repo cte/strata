@@ -6,10 +6,12 @@ import type { AnthropicCredentials, ChatGptCredentials } from "../authStore.js";
 import { setAnthropicCredentials, setChatGptCredentials, setModelApiKey } from "../authStore.js";
 
 import {
+  contextWindowForModel,
   createModelAdapter,
   defaultModel,
   inferDefaultProvider,
   listModels,
+  modelCapabilitiesForModel,
   parseModelProvider,
 } from "../modelFactory.js";
 
@@ -21,7 +23,7 @@ describe("model factory", () => {
     expect(parseModelProvider("openai-compatible")).toBe("openai-compatible");
     expect(parseModelProvider("anthropic-claude")).toBe("anthropic-claude");
     expect(() => parseModelProvider("other")).toThrow(
-      "STRATA_PROVIDER must be openai-codex, openai-compatible, or anthropic-claude",
+      "STRATA_PROVIDER must be openai-codex, openai-compatible, anthropic-claude",
     );
   });
 
@@ -53,6 +55,48 @@ describe("model factory", () => {
     expect(defaultModel("openai-codex", { env: { STRATA_MODEL: "gpt-codex-test" } })).toBe(
       "gpt-codex-test",
     );
+  });
+
+  test("reports Pi-style model thinking capabilities", () => {
+    expect(modelCapabilitiesForModel("openai-compatible", "gpt-4o-mini")).toEqual({
+      reasoning: false,
+    });
+    expect(modelCapabilitiesForModel("openai-compatible", "gpt-5.5")).toEqual({
+      reasoning: true,
+      thinkingLevelMap: { off: null, xhigh: "xhigh" },
+    });
+    expect(modelCapabilitiesForModel("openai-codex", "gpt-5.5")).toEqual({
+      reasoning: true,
+      thinkingLevelMap: { xhigh: "xhigh", minimal: "low" },
+    });
+    expect(modelCapabilitiesForModel("anthropic-claude", "claude-opus-4-6")).toEqual({
+      reasoning: true,
+      thinkingLevelMap: { xhigh: "max" },
+    });
+  });
+
+  test("reports native 1M context window for Anthropic models that ship it", () => {
+    const env = {};
+    for (const model of [
+      "claude-opus-4-6",
+      "claude-opus-4-7",
+      "claude-opus-4-8",
+      "claude-sonnet-4-6",
+    ]) {
+      expect(contextWindowForModel("anthropic-claude", model, { env })).toBe(1_000_000);
+    }
+
+    // Models without a native 1M window stay at 200K (Pi does not opt into the
+    // beta-gated 1M context for these).
+    for (const model of ["claude-opus-4-5", "claude-sonnet-4-5", "claude-sonnet-4"]) {
+      expect(contextWindowForModel("anthropic-claude", model, { env })).toBe(200_000);
+    }
+
+    expect(
+      contextWindowForModel("anthropic-claude", "claude-opus-4-5", {
+        env: { STRATA_CONTEXT_WINDOW: "500000" },
+      }),
+    ).toBe(500_000);
   });
 
   test("creates codex adapters from repo-local ChatGPT auth", async () => {
@@ -190,8 +234,18 @@ describe("model factory", () => {
           },
         }),
       ).resolves.toEqual([
-        { id: "gpt-alpha", description: "owner-a" },
-        { id: "gpt-zeta", description: "owner-z" },
+        {
+          id: "gpt-alpha",
+          description: "owner-a",
+          provider: "openai-compatible",
+          capabilities: { reasoning: false },
+        },
+        {
+          id: "gpt-zeta",
+          description: "owner-z",
+          provider: "openai-compatible",
+          capabilities: { reasoning: false },
+        },
       ]);
       expect(seen).toEqual([
         {
@@ -243,8 +297,18 @@ describe("model factory", () => {
           env: { STRATA_ANTHROPIC_BASE_URL: "https://anthropic.example/v1/" },
         }),
       ).resolves.toEqual([
-        { id: "claude-alpha", description: "Alpha" },
-        { id: "claude-zeta", description: "Zeta" },
+        {
+          id: "claude-alpha",
+          description: "Alpha",
+          provider: "anthropic-claude",
+          capabilities: { reasoning: false },
+        },
+        {
+          id: "claude-zeta",
+          description: "Zeta",
+          provider: "anthropic-claude",
+          capabilities: { reasoning: false },
+        },
       ]);
       expect(seen).toEqual([
         {
@@ -293,8 +357,18 @@ describe("model factory", () => {
           env: { STRATA_CODEX_BASE_URL: "https://codex.example/backend/" },
         }),
       ).resolves.toEqual([
-        { id: "gpt-alpha", description: "Alpha" },
-        { id: "gpt-zeta", description: "Zeta" },
+        {
+          id: "gpt-alpha",
+          description: "Alpha",
+          provider: "openai-codex",
+          capabilities: { reasoning: false },
+        },
+        {
+          id: "gpt-zeta",
+          description: "Zeta",
+          provider: "openai-codex",
+          capabilities: { reasoning: false },
+        },
       ]);
       expect(seen).toEqual([
         {

@@ -1,6 +1,8 @@
+import { useForm } from "@tanstack/react-form";
 import { Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import type * as React from "react";
 import { useEffect, useMemo, useState, useTransition } from "react";
+import { FormField, fieldError, hasError } from "@/components/form";
 import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,60 +15,46 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import type { McpServerStatus, McpSettingsUpdateInput, McpToolSummary } from "@/lib/api";
+import { requiredText, urlText } from "@/lib/forms/zod";
 import {
-  deleteMcpSettings,
-  getMcpSettingsStatus,
-  listMcpTools,
-  type McpServerStatus,
-  type McpSettingsStatus,
-  type McpToolSummary,
-  updateMcpSettings,
-} from "@/lib/api";
+  useDeleteMcpSettings,
+  useListMcpTools,
+  useMcpSettings,
+  useUpdateMcpSettings,
+} from "@/lib/queries/mcps";
 
 export function SettingsMcpsPage(): React.ReactElement {
-  const [status, setStatus] = useState<McpSettingsStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const statusQuery = useMcpSettings();
+  const updateMutation = useUpdateMcpSettings();
+  const deleteMutation = useDeleteMcpSettings();
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    getMcpSettingsStatus().then(
-      (next) => {
-        if (!cancelled) {
-          setStatus(next);
-        }
-      },
-      (cause: unknown) => {
-        if (!cancelled) {
-          setError(cause instanceof Error ? cause.message : String(cause));
-        }
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const status = statusQuery.data ?? null;
+  const error = statusQuery.error ? messageOf(statusQuery.error) : mutationError;
 
-  async function applyUpdate(input: Parameters<typeof updateMcpSettings>[0]): Promise<void> {
-    setError(null);
+  async function applyUpdate(input: McpSettingsUpdateInput): Promise<void> {
+    setMutationError(null);
     setNotice(null);
     try {
-      setStatus(await updateMcpSettings(input));
+      await updateMutation.mutateAsync(input);
       setNotice("MCP settings saved.");
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setMutationError(messageOf(cause));
     }
   }
 
   async function applyDelete(slug: string): Promise<void> {
-    setError(null);
+    setMutationError(null);
     setNotice(null);
     try {
-      setStatus(await deleteMcpSettings(slug));
+      await deleteMutation.mutateAsync(slug);
       setNotice("MCP server removed.");
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setMutationError(messageOf(cause));
     }
   }
 
@@ -77,14 +65,14 @@ export function SettingsMcpsPage(): React.ReactElement {
         description={
           <>
             Manage local Model Context Protocol tool servers. Secrets are stored locally in
-            <span className="font-mono text-[var(--fg)]"> .strata/secrets/mcp-servers.json</span>
+            <span className="font-mono text-fg"> .strata/secrets/mcp-servers.json</span>
             and are never returned to the browser.
           </>
         }
       />
 
       {notice ? (
-        <div className="rounded-md border border-[var(--good)]/30 bg-[var(--accent-soft)] p-3 text-[13px] text-[var(--fg-dim)]">
+        <div className="rounded-md border border-good/30 bg-accent-soft p-3 text-sm text-fg-dim">
           {notice}
         </div>
       ) : null}
@@ -103,9 +91,9 @@ export function SettingsMcpsPage(): React.ReactElement {
       </div>
 
       {error ? (
-        <div className="rounded-md border border-[var(--bad)]/40 bg-[var(--bad)]/[0.06] p-3">
-          <p className="font-mono text-[12px] text-[var(--bad)]">Operation failed</p>
-          <p className="mt-1 text-[13px] text-[var(--fg-dim)]">{error}</p>
+        <div className="rounded-md border border-bad/40 bg-bad/[0.06] p-3">
+          <p className="font-mono text-xs text-bad">Operation failed</p>
+          <p className="mt-1 text-sm text-fg-dim">{error}</p>
         </div>
       ) : null}
     </PageContainer>
@@ -115,82 +103,133 @@ export function SettingsMcpsPage(): React.ReactElement {
 function NewMcpServerCard({
   onCreate,
 }: {
-  onCreate(input: Parameters<typeof updateMcpSettings>[0]): Promise<void>;
+  onCreate(input: McpSettingsUpdateInput): Promise<void>;
 }): React.ReactElement {
   const [open, setOpen] = useState(false);
-  const [displayName, setDisplayName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [serverUrl, setServerUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [isPending, startTransition] = useTransition();
 
-  function create(): void {
-    startTransition(async () => {
+  const form = useForm({
+    defaultValues: { displayName: "", slug: "", serverUrl: "", apiKey: "" },
+    onSubmit: async ({ value, formApi }) => {
       await onCreate({
-        slug,
-        displayName,
-        serverUrl,
-        ...(apiKey.trim() === "" ? {} : { apiKey }),
+        slug: value.slug.trim(),
+        displayName: value.displayName.trim(),
+        serverUrl: value.serverUrl.trim(),
+        ...(value.apiKey.trim() === "" ? {} : { apiKey: value.apiKey }),
         enabled: false,
       });
       setOpen(false);
-      setDisplayName("");
-      setSlug("");
-      setServerUrl("");
-      setApiKey("");
-    });
-  }
+      formApi.reset();
+    },
+  });
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          form.reset();
+        }
+      }}
+    >
       <DialogTrigger asChild>
         <Button size="sm" variant="secondary">
           <Plus size={13} strokeWidth={2} />
           Add MCP server
         </Button>
       </DialogTrigger>
-      <DialogContent className="border-[var(--hairline)] bg-[var(--bg-elev)] text-[var(--fg)]">
+      <DialogContent className="border-hairline bg-bg-elev text-fg">
         <DialogHeader>
           <DialogTitle>Add MCP server</DialogTitle>
           <DialogDescription>
             Add a Streamable HTTP MCP server. Tools can be refreshed after saving.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3">
-          <LabeledInput label="Display name" value={displayName} onChange={setDisplayName} />
-          <LabeledInput label="Slug" value={slug} onChange={setSlug} placeholder="linear" />
-          <LabeledInput
-            label="Server URL"
-            value={serverUrl}
-            onChange={setServerUrl}
-            placeholder="https://example.com/mcp"
-          />
-          <LabeledInput
-            label="API key (optional)"
-            value={apiKey}
-            onChange={setApiKey}
-            placeholder="Optional API key sent as x-api-key"
-            type="password"
-          />
-        </div>
-        <DialogFooter>
-          <Button disabled={isPending} onClick={() => setOpen(false)} size="sm" variant="ghost">
-            Cancel
-          </Button>
-          <Button
-            disabled={
-              isPending ||
-              slug.trim() === "" ||
-              displayName.trim() === "" ||
-              serverUrl.trim() === ""
-            }
-            onClick={create}
-            size="sm"
-            variant="secondary"
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void form.handleSubmit();
+          }}
+          className="grid gap-3"
+        >
+          <form.Field
+            name="displayName"
+            validators={{
+              onBlur: requiredText("Display name"),
+              onChange: requiredText("Display name"),
+            }}
           >
-            Create
-          </Button>
-        </DialogFooter>
+            {(field) => (
+              <FormField label="Display name" error={fieldError(field.state.meta)}>
+                <Input
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  aria-invalid={hasError(field.state.meta)}
+                />
+              </FormField>
+            )}
+          </form.Field>
+          <form.Field
+            name="slug"
+            validators={{ onBlur: requiredText("Slug"), onChange: requiredText("Slug") }}
+          >
+            {(field) => (
+              <FormField label="Slug" error={fieldError(field.state.meta)}>
+                <Input
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  aria-invalid={hasError(field.state.meta)}
+                  placeholder="linear"
+                />
+              </FormField>
+            )}
+          </form.Field>
+          <form.Field
+            name="serverUrl"
+            validators={{ onBlur: urlText("Server URL"), onChange: urlText("Server URL") }}
+          >
+            {(field) => (
+              <FormField label="Server URL" error={fieldError(field.state.meta)}>
+                <Input
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  aria-invalid={hasError(field.state.meta)}
+                  placeholder="https://example.com/mcp"
+                />
+              </FormField>
+            )}
+          </form.Field>
+          <form.Field name="apiKey">
+            {(field) => (
+              <FormField label="API key (optional)">
+                <Input
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  placeholder="Optional API key sent as x-api-key"
+                  type="password"
+                />
+              </FormField>
+            )}
+          </form.Field>
+
+          <DialogFooter>
+            <Button type="button" onClick={() => setOpen(false)} size="sm" variant="ghost">
+              Cancel
+            </Button>
+            <form.Subscribe selector={(state) => state.canSubmit}>
+              {(canSubmit) => (
+                <Button type="submit" disabled={!canSubmit} size="sm" variant="secondary">
+                  Create
+                </Button>
+              )}
+            </form.Subscribe>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -202,7 +241,7 @@ function McpServerCard({
   onDelete,
 }: {
   server: McpServerStatus;
-  onUpdate(input: Parameters<typeof updateMcpSettings>[0]): Promise<void>;
+  onUpdate(input: McpSettingsUpdateInput): Promise<void>;
   onDelete(slug: string): Promise<void>;
 }): React.ReactElement {
   const [displayName, setDisplayName] = useState(server.displayName);
@@ -212,7 +251,9 @@ function McpServerCard({
   const [selectedTools, setSelectedTools] = useState<string[]>(server.selectedTools);
   const [tools, setTools] = useState<McpToolSummary[] | null>(null);
   const [toolError, setToolError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isSaving, startSave] = useTransition();
+  const toolsMutation = useListMcpTools();
+  const isPending = isSaving || toolsMutation.isPending;
   const canDelete = server.slug !== "exa";
 
   useEffect(() => {
@@ -230,21 +271,22 @@ function McpServerCard({
 
   function loadTools(): void {
     setToolError(null);
-    startTransition(async () => {
-      try {
-        const next = await listMcpTools(server.slug, serverUrl);
-        setTools(next);
-        if (selectedTools.length === 0) {
-          setSelectedTools(next.map((tool) => tool.name));
-        }
-      } catch (cause: unknown) {
-        setToolError(cause instanceof Error ? cause.message : String(cause));
-      }
-    });
+    toolsMutation.mutate(
+      { slug: server.slug, serverUrl },
+      {
+        onSuccess: (next) => {
+          setTools(next);
+          if (selectedTools.length === 0) {
+            setSelectedTools(next.map((tool) => tool.name));
+          }
+        },
+        onError: (cause) => setToolError(messageOf(cause)),
+      },
+    );
   }
 
   function save(partial: { enabled?: boolean } = {}): void {
-    startTransition(async () => {
+    startSave(async () => {
       await onUpdate({
         slug: server.slug,
         displayName,
@@ -261,22 +303,20 @@ function McpServerCard({
     if (!canDelete) {
       return;
     }
-    startTransition(async () => {
+    startSave(async () => {
       await onDelete(server.slug);
     });
   }
 
   return (
-    <div className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-4">
+    <div className="rounded-md border border-hairline bg-surface p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[13px] font-medium tracking-tight text-[var(--fg)]">
-            {server.displayName}
-          </p>
-          <p className="mt-1 text-[12px] text-[var(--fg-dim)]">{server.message}</p>
-          <p className="mt-1 font-mono text-[11px] text-[var(--fg-mute)]">mcp.{server.slug}.*</p>
+          <p className="text-sm font-medium tracking-tight text-fg">{server.displayName}</p>
+          <p className="mt-1 text-xs text-fg-dim">{server.message}</p>
+          <p className="mt-1 font-mono text-2xs text-fg-mute">mcp.{server.slug}.*</p>
           {server.updatedAt ? (
-            <p className="mt-1 font-mono text-[11px] text-[var(--fg-mute)]">
+            <p className="mt-1 font-mono text-2xs text-fg-mute">
               updated {new Date(server.updatedAt).toISOString()}
             </p>
           ) : null}
@@ -299,7 +339,7 @@ function McpServerCard({
           type="password"
         />
         {server.apiKeyConfigured ? (
-          <label className="flex items-center gap-2 text-[12px] text-[var(--fg-dim)]">
+          <label className="flex items-center gap-2 text-xs text-fg-dim">
             <input
               checked={clearApiKey}
               onChange={(event) => setClearApiKey(event.currentTarget.checked)}
@@ -310,11 +350,11 @@ function McpServerCard({
         ) : null}
       </div>
 
-      <div className="mt-4 rounded-md border border-[var(--hairline)] bg-[var(--surface-2)] p-3">
+      <div className="mt-4 rounded-md border border-hairline bg-surface-2 p-3">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[12px] font-medium text-[var(--fg)]">Tools</p>
-            <p className="mt-1 text-[12px] text-[var(--fg-dim)]">
+            <p className="text-xs font-medium text-fg">Tools</p>
+            <p className="mt-1 text-xs text-fg-dim">
               Select which remote MCP tools Strata exposes as read-only agent tools.
             </p>
           </div>
@@ -326,17 +366,12 @@ function McpServerCard({
 
         <div className="mt-3 space-y-2">
           {knownToolNames.length === 0 ? (
-            <p className="text-[12px] text-[var(--fg-mute)]">
-              Refresh tools to populate this list.
-            </p>
+            <p className="text-xs text-fg-mute">Refresh tools to populate this list.</p>
           ) : (
             knownToolNames.map((name) => {
               const summary = tools?.find((tool) => tool.name === name);
               return (
-                <label
-                  key={name}
-                  className="flex items-start gap-2 text-[12px] text-[var(--fg-dim)]"
-                >
+                <label key={name} className="flex items-start gap-2 text-xs text-fg-dim">
                   <input
                     checked={selectedTools.includes(name)}
                     onChange={(event) => {
@@ -349,7 +384,7 @@ function McpServerCard({
                     type="checkbox"
                   />
                   <span>
-                    <span className="font-mono text-[var(--fg)]">{name}</span>
+                    <span className="font-mono text-fg">{name}</span>
                     {summary?.description ? <span> — {summary.description}</span> : null}
                   </span>
                 </label>
@@ -358,11 +393,11 @@ function McpServerCard({
           )}
         </div>
 
-        {toolError ? <p className="mt-3 text-[12px] text-[var(--bad)]">{toolError}</p> : null}
+        {toolError ? <p className="mt-3 text-xs text-bad">{toolError}</p> : null}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-2 text-[12px] text-[var(--fg-dim)]">
+        <label className="flex items-center gap-2 text-xs text-fg-dim">
           <Switch
             checked={server.enabled}
             disabled={isPending}
@@ -401,17 +436,21 @@ function LabeledInput({
   type?: "password" | "text";
 }): React.ReactElement {
   return (
-    <label className="grid gap-1.5 text-[12px] text-[var(--fg-dim)]">
+    <label className="grid gap-1.5 text-xs text-fg-dim">
       {label}
       <input
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         placeholder={placeholder}
         type={type}
-        className="h-9 rounded-md border border-[var(--hairline)] bg-[var(--bg)] px-3 font-mono text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+        className="h-9 rounded-md border border-hairline bg-bg px-3 font-mono text-xs text-fg outline-none focus:border-accent"
       />
     </label>
   );
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function fallbackServers(): McpServerStatus[] {

@@ -1,18 +1,18 @@
 import type * as React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { ConnectorOperationPanel } from "@/components/connector-operation-panel";
-import { ConnectorSchedulePanel } from "@/components/connector-schedule-panel";
 import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { type ConnectorSummary, getConnectors } from "@/lib/api";
+import { useConnectors } from "@/lib/queries/connectors";
 import {
   type ConnectorConfigDraft,
   useConnectorDefaultConfig,
 } from "@/lib/useConnectorDefaultConfig";
 
 export function ConnectorsSlackPage(): React.ReactElement {
-  const [connector, setConnector] = useState<ConnectorSummary | null>(null);
+  const connectorsQuery = useConnectors();
+  const connector = connectorsQuery.data?.find((c) => c.name === "slack") ?? null;
   const [since, setSince] = useState("");
   const [allHistory, setAllHistory] = useState(false);
   const [channels, setChannels] = useState("");
@@ -39,21 +39,6 @@ export function ConnectorsSlackPage(): React.ReactElement {
   }, []);
   const defaults = useConnectorDefaultConfig("slack", applyDefaultConfig);
 
-  useEffect(() => {
-    let cancelled = false;
-    getConnectors().then(
-      (items) => {
-        if (!cancelled) {
-          setConnector(items.find((c) => c.name === "slack") ?? null);
-        }
-      },
-      () => undefined,
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const syncConfig = compactSlackConfig({
     allHistory,
     channelRegex,
@@ -76,7 +61,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
         description={
           <>
             Capture Slack channels and threads into{" "}
-            <span className="font-mono text-[var(--fg)]">wiki/raw/slack/</span> through the shared
+            <span className="font-mono text-fg">wiki/raw/slack/</span> through the shared
             checkpointed connector runner.
           </>
         }
@@ -87,11 +72,11 @@ export function ConnectorsSlackPage(): React.ReactElement {
         }
       />
 
-      <div className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-4">
+      <div className="rounded-md border border-hairline bg-surface p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[13px] font-medium tracking-tight text-[var(--fg)]">Token state</p>
-            <p className="mt-1 text-[12px] text-[var(--fg-dim)]">
+            <p className="text-sm font-medium tracking-tight text-fg">Token state</p>
+            <p className="mt-1 text-xs text-fg-dim">
               {connector?.message ?? "Loading Slack connector status."}
             </p>
           </div>
@@ -104,16 +89,14 @@ export function ConnectorsSlackPage(): React.ReactElement {
         </div>
       </div>
 
-      <ConnectorSchedulePanel connector="slack" />
-
       <ConnectorOperationPanel
         connector="slack"
         title="One-off sync"
         description={
           <>
             Run the checkpointed Slack connector now, capture material threads into{" "}
-            <span className="font-mono text-[var(--fg)]">wiki/raw/slack/</span>, then optionally
-            index them into source-backed wiki pages.
+            <span className="font-mono text-fg">wiki/raw/slack/</span>, then optionally index them
+            into source-backed wiki pages.
           </>
         }
         runTitle="Sync Slack conversations"
@@ -143,7 +126,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Since</span>
+            <span className="text-xs text-fg-dim">Since</span>
             <Input
               value={since}
               onChange={(event) => setSince(event.target.value)}
@@ -152,7 +135,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Channels</span>
+            <span className="text-xs text-fg-dim">Channels</span>
             <Input
               value={channels}
               onChange={(event) => setChannels(event.target.value)}
@@ -161,7 +144,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Channel regex</span>
+            <span className="text-xs text-fg-dim">Channel regex</span>
             <Input
               value={channelRegex}
               onChange={(event) => setChannelRegex(event.target.value)}
@@ -170,7 +153,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Lookback minutes</span>
+            <span className="text-xs text-fg-dim">Lookback minutes</span>
             <Input
               inputMode="numeric"
               value={lookbackMinutes}
@@ -181,7 +164,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
 
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Max channels</span>
+            <span className="text-xs text-fg-dim">Max channels</span>
             <Input
               inputMode="numeric"
               value={maxChannels}
@@ -189,7 +172,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Max messages/channel</span>
+            <span className="text-xs text-fg-dim">Max messages/channel</span>
             <Input
               inputMode="numeric"
               value={maxMessagesPerChannel}
@@ -197,7 +180,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Max threads</span>
+            <span className="text-xs text-fg-dim">Max threads</span>
             <Input
               inputMode="numeric"
               value={maxThreads}
@@ -206,7 +189,7 @@ export function ConnectorsSlackPage(): React.ReactElement {
           </label>
         </div>
 
-        <div className="grid gap-2 border-t border-[var(--hairline)] pt-3 sm:grid-cols-2">
+        <div className="grid gap-2 border-t border-hairline pt-3 sm:grid-cols-2">
           <Toggle
             checked={allHistory}
             label="Allow all-history backfill"
@@ -239,7 +222,7 @@ function Toggle({
   onChange(value: boolean): void;
 }): React.ReactElement {
   return (
-    <label className="flex items-center gap-2 text-[12px] text-[var(--fg-dim)]">
+    <label className="flex items-center gap-2 text-xs text-fg-dim">
       <input
         checked={checked}
         onChange={(event) => onChange(event.currentTarget.checked)}

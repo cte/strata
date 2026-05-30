@@ -4,6 +4,8 @@ import type { JsonObject } from "@strata/core";
 import type { ToolExecutionResult } from "@strata/tools";
 import {
   addModelUsage,
+  capabilitiesForModel,
+  clampThinkingLevel,
   contextWindowForModel,
   createTokenUsageTotals,
   resetTokenUsage,
@@ -95,6 +97,10 @@ export function setModelSelection(state: AppState, provider: ProviderName, model
   state.provider = provider;
   state.model = model;
   state.contextWindow = contextWindowForModel(provider, model);
+  state.reasoningEffort = clampThinkingLevel(
+    capabilitiesForModel(provider, model),
+    state.reasoningEffort,
+  );
   resetTokenUsage(state.usage);
 }
 
@@ -104,10 +110,14 @@ export function startSession(state: AppState, sessionId: string): void {
   resetTokenUsage(state.usage);
 }
 
-export function nextThinkingLevel(level: ThinkingLevel): ThinkingLevel {
-  const idx = THINKING_LEVELS.indexOf(level);
-  const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
-  return next ?? "off";
+export function nextThinkingLevel(
+  level: ThinkingLevel,
+  availableLevels: readonly ThinkingLevel[] = THINKING_LEVELS,
+): ThinkingLevel {
+  if (availableLevels.length === 0) return "off";
+  const idx = availableLevels.indexOf(level);
+  const next = availableLevels[(idx + 1) % availableLevels.length];
+  return next ?? availableLevels[0] ?? "off";
 }
 
 export function appendTranscript(state: AppState, item: TranscriptItem): void {

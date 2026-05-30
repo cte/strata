@@ -5,19 +5,21 @@
   "type": "module",
   "exports": {
     "./activity": "./src/activity.ts",
+    "./classification-correction": "./src/classificationCorrection.ts",
     "./connector-types": "./src/connectors/types.ts",
     "./common": "./src/common.ts",
     "./connectors": "./src/connectors.ts",
-    "./extraction": "./src/extraction/index.ts",
     "./granola-connector": "./src/granolaConnector.ts",
     "./ingest-taxonomy": "./src/ingestTaxonomy.ts",
-    "./ingest-profile": "./src/ingestProfile.ts",
     "./notion": "./src/notion.ts",
     "./notion-connector": "./src/notionConnector.ts",
     "./raw-to-wiki": "./src/rawToWiki.ts",
+    "./review-queue": "./src/reviewQueue.ts",
     "./slack-client": "./src/slackClient.ts",
     "./slack-connector": "./src/slackConnector.ts",
     "./slack-socket-mode": "./src/slackSocketMode.ts",
+    "./taxonomy-evidence": "./src/taxonomyEvidence.ts",
+    "./taxonomy-suggestions": "./src/taxonomySuggestions.ts",
     "./wiki-index": "./src/wikiIndex.ts"
   },
   "dependencies": {

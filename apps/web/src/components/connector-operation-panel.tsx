@@ -109,14 +109,14 @@ export function ConnectorOperationPanel({
   const defaultsBusy = isDefaultsPending || defaults?.isLoading === true;
 
   return (
-    <section className="rounded-md border border-[var(--hairline)] bg-[var(--surface)]">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--hairline)] p-4">
+    <section className="rounded-md border border-hairline bg-surface">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-hairline p-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <FileDown size={14} strokeWidth={1.75} className="text-[var(--fg-mute)]" />
-            <h2 className="text-[13px] font-medium tracking-tight text-[var(--fg)]">{title}</h2>
+            <FileDown size={14} strokeWidth={1.75} className="text-fg-mute" />
+            <h2 className="text-sm font-medium tracking-tight text-fg">{title}</h2>
           </div>
-          <p className="mt-1 text-[12px] text-[var(--fg-dim)]">{description}</p>
+          <p className="mt-1 text-xs text-fg-dim">{description}</p>
         </div>
         {result ? (
           <Badge tone={result.connectorResult.dryRun ? "muted" : "ready"}>
@@ -129,24 +129,24 @@ export function ConnectorOperationPanel({
         {children}
 
         {defaults ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--hairline)] bg-[var(--surface-2)] px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-hairline bg-surface-2 px-3 py-2">
             <div className="flex min-w-0 items-start gap-2">
               <SlidersHorizontal
                 size={13}
                 strokeWidth={1.75}
-                className="mt-0.5 shrink-0 text-[var(--fg-mute)]"
+                className="mt-0.5 shrink-0 text-fg-mute"
               />
               <div className="min-w-0">
-                <p className="text-[12px] font-medium text-[var(--fg)]">{defaults.label}</p>
-                <p className="truncate text-[11px] text-[var(--fg-mute)]">
+                <p className="text-xs font-medium text-fg">{defaults.label}</p>
+                <p className="truncate text-2xs text-fg-mute">
                   {defaults.profileLabel ?? "No saved defaults"}
                   {defaults.updatedAt ? ` · ${formatTimestamp(defaults.updatedAt)}` : ""}
                 </p>
                 {defaultsNotice ? (
-                  <p className="mt-1 text-[11px] text-[var(--good)]">{defaultsNotice}</p>
+                  <p className="mt-1 text-2xs text-good">{defaultsNotice}</p>
                 ) : null}
                 {(defaultsError ?? defaults.error) ? (
-                  <p className="mt-1 font-mono text-[11px] text-[var(--bad)]">
+                  <p className="mt-1 font-mono text-2xs text-bad">
                     {defaultsError ?? defaults.error}
                   </p>
                 ) : null}
@@ -177,7 +177,7 @@ export function ConnectorOperationPanel({
           </div>
         ) : null}
 
-        <div className="grid gap-2 border-t border-[var(--hairline)] pt-3 sm:grid-cols-2">
+        <div className="grid gap-2 border-t border-hairline pt-3 sm:grid-cols-2">
           <Toggle
             checked={indexRaw}
             disabled={isPending}
@@ -193,7 +193,7 @@ export function ConnectorOperationPanel({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="min-w-0 text-[12px] text-[var(--fg-mute)]">{disabledReason ?? ""}</p>
+          <p className="min-w-0 text-xs text-fg-mute">{disabledReason ?? ""}</p>
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -215,9 +215,7 @@ export function ConnectorOperationPanel({
         {result ? <ConnectorRunResultBlock result={result} /> : null}
 
         {error ? (
-          <p className="rounded-sm bg-[var(--bad)]/10 px-2 py-1.5 font-mono text-[11px] text-[var(--bad)]">
-            {error}
-          </p>
+          <p className="rounded-sm bg-bad/10 px-2 py-1.5 font-mono text-2xs text-bad">{error}</p>
         ) : null}
       </div>
     </section>
@@ -240,7 +238,7 @@ function Toggle({
   onChange(value: boolean): void;
 }): React.ReactElement {
   return (
-    <label className="flex items-center gap-2 text-[12px] text-[var(--fg-dim)]">
+    <label className="flex items-center gap-2 text-xs text-fg-dim">
       <input
         checked={checked}
         disabled={disabled}
@@ -254,15 +252,15 @@ function Toggle({
 
 function ConnectorRunResultBlock({ result }: { result: ConnectorRunResult }): React.ReactElement {
   return (
-    <div className="rounded-md border border-[var(--hairline)] bg-[var(--bg)] p-3">
+    <div className="rounded-md border border-hairline bg-bg p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <SearchCheck size={13} strokeWidth={1.75} className="text-[var(--fg-mute)]" />
-        <p className="text-[12px] font-medium text-[var(--fg)]">{result.connectorResult.title}</p>
+        <SearchCheck size={13} strokeWidth={1.75} className="text-fg-mute" />
+        <p className="text-xs font-medium text-fg">{result.connectorResult.title}</p>
         <Badge tone={result.connectorResult.dryRun ? "muted" : "ready"}>
           {result.connectorResult.dryRun ? "preview" : "completed"}
         </Badge>
       </div>
-      <dl className="mt-3 grid gap-2 text-[12px] sm:grid-cols-3">
+      <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
         <Metric label="Items" value={String(result.metrics.itemCount)} />
         <Metric label="Written" value={String(result.metrics.writtenCount)} />
         <Metric label="Skipped" value={String(result.metrics.skippedCount)} />
@@ -270,12 +268,12 @@ function ConnectorRunResultBlock({ result }: { result: ConnectorRunResult }): Re
         <Metric label="Index skipped" value={String(result.metrics.indexSkippedCount)} />
         <Metric label="Search docs" value={String(result.metrics.searchIndexed)} />
       </dl>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-[var(--hairline)] pt-3 font-mono text-[11px] text-[var(--fg-mute)]">
-        <Link to="/activity" className="text-[var(--accent)] hover:underline">
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-hairline pt-3 font-mono text-2xs text-fg-mute">
+        <Link to="/activity" className="text-accent hover:underline">
           {result.metrics.connectorSessionId}
         </Link>
         {result.metrics.rawToWikiSessionId ? (
-          <Link to="/activity" className="text-[var(--accent)] hover:underline">
+          <Link to="/activity" className="text-accent hover:underline">
             {result.metrics.rawToWikiSessionId}
           </Link>
         ) : null}
@@ -288,8 +286,8 @@ function ConnectorRunResultBlock({ result }: { result: ConnectorRunResult }): Re
 function Metric({ label, value }: { label: string; value: string }): React.ReactElement {
   return (
     <div>
-      <dt className="text-[11px] text-[var(--fg-mute)]">{label}</dt>
-      <dd className="font-mono text-[11px] text-[var(--fg-dim)]">{value}</dd>
+      <dt className="text-2xs text-fg-mute">{label}</dt>
+      <dd className="font-mono text-2xs text-fg-dim">{value}</dd>
     </div>
   );
 }
