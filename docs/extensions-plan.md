@@ -235,13 +235,14 @@ interface ExtensionCommand {
 
 ## UI API
 
-Use Pi as the target but phase it in after headless hooks are stable.
+Use Pi as the target but phase it in after headless hooks are stable. The native [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md) should land first and provide the shared adapter that extension `ctx.ui.confirm()`, `ctx.ui.select()`, and `ctx.ui.input()` can reuse later.
 
 Initial UI context:
 
 - `ctx.ui.notify(message, level)`
-- `ctx.ui.confirm(title, message, options?)`
-- `ctx.ui.select(title, options, config?)`
+- `ctx.ui.confirm(title, message, options?)` backed by the native interaction adapter when available
+- `ctx.ui.select(title, options, config?)` backed by the native interaction adapter when available
+- `ctx.ui.input(title, placeholder?, options?)` backed by the native interaction adapter when available
 - `ctx.ui.setStatus(id, text | null)`
 - `ctx.ui.setWidget(id, content | null, placement?)`
 - `ctx.ui.setEditorText(text)` where a surface supports it

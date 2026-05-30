@@ -1,4 +1,5 @@
 export * from "./agentInstructions.js";
+export * from "./classificationCorrectionStore.js";
 export * from "./events.js";
 export * from "./fileStore.js";
 export * from "./memoryStore.js";

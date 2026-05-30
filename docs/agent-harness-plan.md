@@ -216,6 +216,8 @@ Current execution constraints:
 - A called `ToolDefinition` with `executionMode: "sequential"` forces the whole batch sequential.
 - In parallel mode, `tool.call.started` events emit in assistant source order, `tool.call.completed` events emit as tools finish, and persisted tool messages remain in assistant source order.
 - Tools may stream incremental output while running: `ToolContext.onOutput(chunk)` (e.g. `shell.run` stdout/stderr) is surfaced as interleaved `tool.output` run events. The batch generators merge these callback-driven events into the yield sequence via an async channel, so live output reaches UIs without disturbing the started/completed/result ordering above. `tool.output` is an ephemeral event, not a persisted tool message; the full output still lands in the final `tool.call.completed` result.
+- Continued sessions repair incomplete prior tool turns before the next model request. If a previous run recorded an assistant tool call but stopped before recording the matching tool result, the rebuilt model transcript inserts a synthetic failed `tool` message immediately after that assistant call and records an `agent.loop.transcript_repaired` trace event. This keeps OpenAI/Anthropic-style provider transcripts valid while preserving the fact that the tool did not complete.
+- Tools may request bounded human input only through the planned shared interaction adapter in [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md). The native `user.ask` tool should force sequential execution, persist bounded request/response trace events, respect cancellation, and return explicit unavailable/cancelled results when no TUI/web adapter is present.
 - Auto-compaction is owned by the shared loop, not by individual surfaces: a continued session is compacted before the next user turn is seeded when trusted post-compaction usage crosses the threshold, and a successful final-answer turn is compacted before the run is marked complete. Compaction appends durable checkpoint events rather than deleting history, rebuilds future model context from the latest summary plus kept recent messages, uses keep-recent cut points, summarizes split-turn prefixes, and retries once after detected context-overflow errors.
 - Tool results above a size threshold are summarized or persisted to trace files and replaced with a preview.
 - Model adapters request provider-side parallel tool calls when supported.
@@ -254,6 +256,7 @@ Each tool has:
 - `maxResultChars`
 - optional `executionMode`: `parallel` or `sequential`
 - optional `available()`
+- optional access to `ToolContext.ui` for bounded human interaction
 
 The registry must:
 
@@ -265,7 +268,7 @@ The registry must:
 
 External third-party tools should use the same registry rather than adding protocol-specific branches to the agent loop. Optional integrations, including MCP servers, should live in integration/tool-pack packages that register ordinary `ToolDefinition`s into a registry constructed by CLI/TUI/web callers. The detailed plan is [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md).
 
-Trusted local extensions should also register ordinary `ToolDefinition`s rather than bypassing the registry. Extension loading, lifecycle hooks, slash commands, provider registration, UI hooks, and Pi-style examples are planned separately in [extensions-plan.md](./extensions-plan.md). The agent loop should expose lifecycle seams for extension runtimes to compose around it, but it should not import arbitrary extension modules directly.
+Trusted local extensions should also register ordinary `ToolDefinition`s rather than bypassing the registry. Extension loading, lifecycle hooks, slash commands, provider registration, UI hooks, and Pi-style examples are planned separately in [extensions-plan.md](./extensions-plan.md). The native [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md) should land before full extensions and provide the small adapter that extension `ctx.ui.select/confirm/input` can reuse later. The agent loop should expose lifecycle seams for extension runtimes to compose around it, but it should not import arbitrary extension modules directly.
 
 ### 6.5 Policy Layer
 
@@ -308,6 +311,12 @@ type PolicyDecision =
 - Uses SQLite FTS if available.
 - Falls back to `rg`-style text search if the index is missing.
 - Returns ranked file snippets.
+
+`wiki.retrieve`
+
+- Uses the local SQLite retrieval index for broad evidence gathering.
+- Retrieves chunk-level candidates with FTS and lexical-vector scoring, fuses ranks, expands through extracted wiki links, and packs evidence to a token budget.
+- Returns match metadata the agent can use before calling `wiki.readPage` for full-page inspection.
 
 `wiki.backlinks`
 
@@ -659,7 +668,7 @@ description: How to ingest a Granola transcript into the Strata wiki.
 triggers:
   - ingest wiki/raw/granola files
   - summarize meetings
-  - extract actions and decisions from transcripts
+  - extract decisions and durable threads from transcripts
 status: active
 disable-model-invocation: false
 ---
@@ -678,7 +687,8 @@ Skill body sections:
 Initial seed skills:
 
 - `query-wiki`: answer questions using `priorities.md`, `me.md`, `index.md`, candidate pages, and citations.
-- `ingest-granola-meeting`: turn transcript into meeting/project/person/decision/thread/action updates.
+- `ingest-granola-meeting`: turn transcript into meeting/project/person/decision/thread updates.
+- `granola-todo-extraction`: planned Routine skill for producing evidence-backed TODO artifacts from Granola notes without directly editing action ledgers.
 - `ingest-slack-thread`: decide if a Slack thread is material; update only if it is.
 - `ingest-notion-doc`: snapshot and extract durable decisions/commitments.
 - `wiki-lint`: weekly health check workflow.
@@ -738,7 +748,7 @@ Purpose: let the wiki become more useful over time without turning into noise.
 
 Triggers:
 
-- Ingest finds new entities, decisions, actions, or contradictions.
+- Ingest finds new entities, decisions, open threads, or contradictions.
 - Query produces reusable synthesis.
 - Lint finds stale or missing structure.
 - Reflection identifies schema mismatch.
@@ -814,7 +824,8 @@ Purpose: prevent learning from making the harness worse.
 Add golden tasks:
 
 - Query a known small wiki fixture and require citations.
-- Ingest a fixture meeting transcript and check expected pages/actions/decisions.
+- Ingest a fixture meeting transcript and check expected pages/decisions/threads.
+- Run a future Granola TODO Routine fixture and check expected Routine artifacts without direct `wiki/actions/` writes.
 - Reflect on a fixture trace and check expected memory/skill/schema proposal classification.
 - Ensure `wiki/raw/` writes are blocked.
 - Ensure secrets are redacted from traces and proposals.
@@ -845,7 +856,6 @@ Acceptance criteria:
    - meeting summary
    - touched entities
    - decisions
-   - actions
    - open questions
    - contradictions
 8. Apply wiki updates through narrow tools.
@@ -856,9 +866,11 @@ Acceptance criteria:
 13. Stage learning proposals.
 14. Final response summarizes:
    - wiki pages changed
-   - decisions/actions opened
+   - decisions/threads opened
    - contradictions
    - learning proposals created
+
+Action-item discovery should not be part of this ingest flow. Future TODO discovery should run as a Routine over local Granola raw/indexed evidence, emit Routine artifacts, and rely on reviewed publication into `wiki/actions/`.
 
 Validation before commit:
 
@@ -953,7 +965,7 @@ Deliverables:
 
 Acceptance:
 
-- A model can call `wiki.search` and `wiki.readPage`.
+- A model can call `wiki.search`, `wiki.retrieve`, and `wiki.readPage`.
 - The loop stops cleanly on final answer or max iterations.
 - Tool errors are returned to the model and stored in traces.
 

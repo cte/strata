@@ -115,12 +115,18 @@ describe("compactSession", () => {
         "<previous-summary>",
       );
 
-      // Add another turn after compaction.
+      // Add another user-initiated turn after compaction, then continue from it.
+      const store = await SessionStore.open(repoRoot);
+      try {
+        await store.recordUserMessage({ sessionId: first.sessionId, content: "q2" });
+      } finally {
+        store.close();
+      }
       const m2 = new SequenceModelAdapter([
         { content: "ok2", finishReason: "stop", toolCalls: [] },
       ]);
       await runAgentLoop({
-        question: "q2",
+        question: "",
         model: m2,
         repoRoot,
         continueSessionId: first.sessionId,
@@ -196,8 +202,14 @@ describe("compactSession", () => {
       const continuation = new SequenceModelAdapter([
         { content: "Reply 2", finishReason: "stop", toolCalls: [] },
       ]);
+      const store = await SessionStore.open(repoRoot);
+      try {
+        await store.recordUserMessage({ sessionId: first.sessionId, content: "follow-up" });
+      } finally {
+        store.close();
+      }
       await runAgentLoop({
-        question: "follow-up",
+        question: "",
         model: continuation,
         repoRoot,
         continueSessionId: first.sessionId,

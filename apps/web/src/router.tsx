@@ -12,13 +12,14 @@ import {
   Activity,
   BookOpen,
   CalendarClock,
-  FileCheck2,
+  Database,
   GitPullRequest,
+  Inbox,
   ListTodo,
   MessageSquare,
   Network,
   Search,
-  Tags,
+  Workflow,
 } from "lucide-react";
 
 import type * as React from "react";
@@ -30,6 +31,7 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
@@ -41,6 +43,7 @@ import {
 } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { readLastChatSessionId } from "@/lib/chatLastSession";
 import { chatRunsStore } from "@/lib/chatRunsStore";
 import { useChatSessions } from "@/lib/useChatSessions";
 import { ActionsPage } from "@/routes/actions";
@@ -50,9 +53,9 @@ import { ConnectorsPage } from "@/routes/connectors";
 import { ConnectorsGranolaPage } from "@/routes/connectors-granola";
 import { ConnectorsNotionPage } from "@/routes/connectors-notion";
 import { ConnectorsSlackPage } from "@/routes/connectors-slack";
-import { IngestTaxonomyPage } from "@/routes/ingest-taxonomy";
-import { ProposalsPage } from "@/routes/proposals";
-import { SchedulesPage } from "@/routes/schedules";
+import { RetrievalIndexPage } from "@/routes/retrieval-index";
+import { ReviewPage } from "@/routes/review";
+import { RoutinesPage } from "@/routes/routines";
 import { SettingsMcpsPage } from "@/routes/settings-mcps";
 
 import { WikiPage } from "@/routes/wiki";
@@ -110,20 +113,45 @@ function RootLayout(): React.ReactElement {
 
 function AppSidebar(): React.ReactElement {
   return (
-    <Sidebar collapsible="icon" className="border-r border-[var(--hairline)]">
+    <Sidebar collapsible="icon" className="border-r border-hairline">
       <SidebarContent className="gap-0 pt-2">
         <SidebarGroup>
+          <SidebarGroupLabel>Work</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <ChatNavItem />
-              <NavItem to="/activity" label="Activity" icon={Activity} />
-              <NavItem to="/actions" label="Actions" icon={ListTodo} />
+              <NavItem to="/actions" label="Action Items" icon={ListTodo} />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Knowledge Base</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
               <NavItem to="/wiki" label="Wiki" icon={BookOpen} />
-              <NavItem to="/proposals" label="Proposals" icon={FileCheck2} />
-              <NavItem to="/ingest-taxonomy" label="Taxonomy" icon={Tags} />
-              <NavItem to="/schedules" label="Schedules" icon={CalendarClock} />
+              <NavItem to="/index" label="Index" icon={Database} />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Operations</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <NavItem to="/activity" label="Activity" icon={Activity} />
+              <NavItem to="/routines" label="Routines" icon={Workflow} />
+              <NavItem to="/review" label="Review" icon={Inbox} />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Connections</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
               <NavItem to="/connectors" label="Connectors" icon={GitPullRequest} />
-              <NavItem to="/mcps" label="MCP servers" icon={Network} />
+              <NavItem to="/mcps" label="MCP" icon={Network} />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -143,10 +171,10 @@ function NavItem({
     | "/activity"
     | "/actions"
     | "/connectors"
-    | "/ingest-taxonomy"
+    | "/index"
     | "/mcps"
-    | "/proposals"
-    | "/schedules"
+    | "/review"
+    | "/routines"
     | "/wiki";
 
   label: string;
@@ -163,7 +191,7 @@ function NavItem({
         asChild
         isActive={isActive}
         tooltip={label}
-        className="group/nav rounded-md text-[13px] font-medium tracking-tight text-[var(--fg-dim)] data-[active=true]:bg-[var(--surface-2)] data-[active=true]:text-[var(--fg)] hover:bg-[var(--surface-2)] hover:text-[var(--fg)]"
+        className="group/nav rounded-md text-sm font-medium tracking-tight text-fg-dim data-[active=true]:bg-surface-2 data-[active=true]:text-fg hover:bg-surface-2 hover:text-fg"
       >
         <Link to={to}>
           <Icon size={14} strokeWidth={1.75} />
@@ -171,7 +199,7 @@ function NavItem({
           {isActive ? (
             <span
               aria-hidden="true"
-              className="ml-auto h-1.5 w-1.5 rounded-full bg-[var(--accent)] group-data-[collapsible=icon]:hidden"
+              className="ml-auto h-1.5 w-1.5 rounded-full bg-accent group-data-[collapsible=icon]:hidden"
             />
           ) : null}
         </Link>
@@ -181,6 +209,7 @@ function NavItem({
 }
 
 function ChatNavItem(): React.ReactElement {
+  const navigate = useNavigate();
   const matchRoute = useMatchRoute();
   const isActive = !!matchRoute({ to: "/" }) || !!matchRoute({ to: "/chat", fuzzy: true });
   const { isMobile, setOpenMobile } = useSidebar();
@@ -197,6 +226,29 @@ function ChatNavItem(): React.ReactElement {
     openCommandPalette();
   }, [closeMobileSidebar, openCommandPalette]);
 
+  const handleOpenChat = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      closeMobileSidebar();
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const lastSessionId = readLastChatSessionId();
+      if (lastSessionId === null) {
+        return;
+      }
+      event.preventDefault();
+      void navigate({ to: "/chat/$sessionId", params: { sessionId: lastSessionId } });
+    },
+    [closeMobileSidebar, navigate],
+  );
+
   return (
     <SidebarMenuItem>
       <div className="relative">
@@ -204,9 +256,9 @@ function ChatNavItem(): React.ReactElement {
           asChild
           isActive={isActive}
           tooltip="Chat"
-          className="group/nav rounded-md text-[13px] font-medium tracking-tight text-[var(--fg-dim)] data-[active=true]:bg-[var(--surface-2)] data-[active=true]:text-[var(--fg)] hover:bg-[var(--surface-2)] hover:text-[var(--fg)]"
+          className="group/nav rounded-md text-sm font-medium tracking-tight text-fg-dim data-[active=true]:bg-surface-2 data-[active=true]:text-fg hover:bg-surface-2 hover:text-fg"
         >
-          <Link to="/chat" onClick={closeMobileSidebar}>
+          <Link to="/chat" onClick={handleOpenChat}>
             <MessageSquare size={14} strokeWidth={1.75} />
             <span>Chat</span>
           </Link>
@@ -217,15 +269,15 @@ function ChatNavItem(): React.ReactElement {
             onClick={handleOpenSearch}
             aria-label="Search sessions"
             title="Search sessions (⌘K)"
-            className="pointer-events-auto flex h-6 items-center gap-1 rounded px-1.5 text-[var(--fg-mute)] transition-[color,background-color] duration-150 hover:bg-[var(--bg-elev)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+            className="pointer-events-auto flex h-6 items-center gap-1 rounded px-1.5 text-fg-mute transition-[color,background-color] duration-150 hover:bg-bg-elev hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <kbd className="pointer-events-none rounded border border-[var(--hairline)] px-1 py-px font-mono text-[9px] leading-none tracking-tight text-[var(--fg-mute)]">
+            <kbd className="pointer-events-none rounded border border-hairline px-1 py-px font-mono text-2xs leading-none tracking-tight text-fg-mute">
               ⌘K
             </kbd>
             <Search size={13} strokeWidth={1.75} />
           </button>
           {isActive ? (
-            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent" />
           ) : null}
         </div>
       </div>
@@ -299,9 +351,9 @@ function ChatSessionCommandPalette({
 
 function TopRail(): React.ReactElement {
   return (
-    <header className="sticky top-0 z-30 flex h-11 items-center justify-between border-b border-[var(--hairline)] bg-[color-mix(in_oklab,var(--bg)_88%,transparent)] px-4 backdrop-blur-md md:px-6">
+    <header className="sticky top-0 z-30 flex h-11 items-center justify-between border-b border-hairline bg-[color-mix(in_oklab,var(--bg)_88%,transparent)] px-4 backdrop-blur-md md:px-6">
       <div className="flex items-center gap-3">
-        <SidebarTrigger className="!h-6 !w-6 text-[var(--fg-dim)] hover:bg-[var(--surface-2)] hover:text-[var(--fg)] [&>svg]:!size-3.5" />
+        <SidebarTrigger className="!h-6 !w-6 text-fg-dim hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5" />
       </div>
       <div className="flex items-center gap-4">
         <ThemeToggle />
@@ -355,22 +407,22 @@ const actionsRoute = createRoute({
   component: ActionsPage,
 });
 
-const proposalsRoute = createRoute({
+const reviewRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/proposals",
-  component: ProposalsPage,
+  path: "/review",
+  component: ReviewPage,
 });
 
-const ingestTaxonomyRoute = createRoute({
+const routinesRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/ingest-taxonomy",
-  component: IngestTaxonomyPage,
+  path: "/routines",
+  component: RoutinesPage,
 });
 
-const schedulesRoute = createRoute({
+const retrievalIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/schedules",
-  component: SchedulesPage,
+  path: "/index",
+  component: RetrievalIndexPage,
 });
 
 const connectorsRoute = createRoute({
@@ -410,9 +462,9 @@ const routeTree = rootRoute.addChildren([
   activityRoute,
   actionsRoute,
   wikiRoute,
-  proposalsRoute,
-  ingestTaxonomyRoute,
-  schedulesRoute,
+  reviewRoute,
+  routinesRoute,
+  retrievalIndexRoute,
   connectorsRoute,
   connectorsNotionRoute,
   connectorsGranolaRoute,

@@ -1,75 +1,28 @@
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import type * as React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getWikiPage, getWikiTree, type WikiPageDetail, type WikiTreeEntry } from "@/lib/api";
+import type { WikiPageDetail, WikiTreeEntry } from "@/lib/api";
+import { useWikiPage, useWikiTree } from "@/lib/queries/wiki";
 import { cn } from "@/lib/utils";
 
 export function WikiPage(): React.ReactElement {
-  const [tree, setTree] = useState<WikiTreeEntry[]>([]);
-  const [treeLoaded, setTreeLoaded] = useState(false);
-  const [treeError, setTreeError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [page, setPage] = useState<WikiPageDetail | null>(null);
-  const [pageLoading, setPageLoading] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    getWikiTree().then(
-      (items) => {
-        if (!cancelled) {
-          setTree(items);
-          setTreeLoaded(true);
-        }
-      },
-      (cause: unknown) => {
-        if (!cancelled) {
-          setTreeError(cause instanceof Error ? cause.message : String(cause));
-          setTreeLoaded(true);
-        }
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const treeQuery = useWikiTree();
+  const pageQuery = useWikiPage(selectedPath);
 
-  useEffect(() => {
-    if (selectedPath === null) {
-      setPage(null);
-      setPageError(null);
-      setPageLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setPageLoading(true);
-    setPageError(null);
-    getWikiPage(selectedPath).then(
-      (nextPage) => {
-        if (!cancelled) {
-          setPage(nextPage);
-          setPageLoading(false);
-        }
-      },
-      (cause: unknown) => {
-        if (!cancelled) {
-          setPage(null);
-          setPageError(cause instanceof Error ? cause.message : String(cause));
-          setPageLoading(false);
-        }
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedPath]);
+  const tree = useMemo<WikiTreeEntry[]>(() => treeQuery.data ?? [], [treeQuery.data]);
+  const treeLoaded = !treeQuery.isPending;
+  const treeError = treeQuery.error ? messageOf(treeQuery.error) : null;
+  const page = pageQuery.data ?? null;
+  const pageLoading = selectedPath !== null && pageQuery.isFetching;
+  const pageError = pageQuery.error ? messageOf(pageQuery.error) : null;
 
   const initialOpenPaths = useMemo(() => defaultOpenPaths(tree), [tree]);
 
@@ -84,21 +37,19 @@ export function WikiPage(): React.ReactElement {
         description="Browse the local Markdown tree and preview pages without leaving the web app."
       />
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-[var(--hairline)] bg-[var(--surface)] lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
-        <aside className="min-h-0 border-b border-[var(--hairline)] bg-[var(--bg)] lg:border-r lg:border-b-0">
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-hairline bg-surface lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
+        <aside className="min-h-0 border-b border-hairline bg-bg lg:border-r lg:border-b-0">
           <ScrollArea className="h-full">
             <div className="flex flex-col gap-2 p-3">
-              <div className="label-eyebrow px-2 text-[var(--fg-mute)]">wiki tree</div>
+              <div className="label-eyebrow px-2 text-fg-mute">wiki tree</div>
               {treeError ? (
-                <p className="rounded-md border border-[var(--bad)]/40 bg-[var(--bad)]/[0.06] p-3 font-mono text-[11.5px] text-[var(--bad)]">
+                <p className="rounded-md border border-bad/40 bg-bad/[0.06] p-3 font-mono text-xs text-bad">
                   {treeError}
                 </p>
               ) : !treeLoaded ? (
                 <WikiTreeSkeleton />
               ) : tree.length === 0 ? (
-                <p className="px-2 py-3 text-[12.5px] text-[var(--fg-dim)]">
-                  No Markdown pages found.
-                </p>
+                <p className="px-2 py-3 text-sm text-fg-dim">No Markdown pages found.</p>
               ) : (
                 <WikiTree
                   entries={tree}
@@ -111,7 +62,7 @@ export function WikiPage(): React.ReactElement {
           </ScrollArea>
         </aside>
 
-        <section className="min-h-0 min-w-0 bg-[var(--bg)]">
+        <section className="min-h-0 min-w-0 bg-bg">
           <ScrollArea className="h-full">
             <div className="mx-auto max-w-4xl p-4 md:p-8">
               <WikiMarkdownViewer
@@ -126,6 +77,10 @@ export function WikiPage(): React.ReactElement {
       </div>
     </PageContainer>
   );
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function WikiTree({
@@ -196,8 +151,8 @@ function WikiTreeRow({
         type="button"
         onClick={() => (isDirectory ? onTogglePath(entry.path) : onSelectPage(entry.path))}
         className={cn(
-          "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors duration-150 hover:bg-[var(--surface-2)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
-          isSelected ? "bg-[var(--accent-soft)] text-[var(--fg)]" : "text-[var(--fg-dim)]",
+          "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150 hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          isSelected ? "bg-accent-soft text-fg" : "text-fg-dim",
         )}
         style={{ paddingLeft: `${8 + depth * 14}px` }}
       >
@@ -285,13 +240,11 @@ function WikiMarkdownViewer({
 
   return (
     <Message from="assistant" className="block">
-      <MessageContent className="max-w-none rounded-xl border border-[var(--hairline)] bg-[var(--surface)] px-5 py-5 shadow-sm md:px-7 md:py-6">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--hairline)] pb-3">
+      <MessageContent className="max-w-none rounded-xl border border-hairline bg-surface px-5 py-5 shadow-sm md:px-7 md:py-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-hairline pb-3">
           <div className="min-w-0">
-            <p className="label-eyebrow text-[var(--fg-mute)]">{page.path}</p>
-            <p className="mt-1 text-[12.5px] text-[var(--fg-dim)]">
-              {page.chars.toLocaleString()} chars
-            </p>
+            <p className="label-eyebrow text-fg-mute">{page.path}</p>
+            <p className="mt-1 text-sm text-fg-dim">{page.chars.toLocaleString()} chars</p>
           </div>
           <Button
             type="button"

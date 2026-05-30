@@ -79,6 +79,9 @@ Run state:
 - Web chat run metadata remains durable too: final status, cancellation, stopped reason, error message, associated session ID, and last event ID are persisted independently of the original HTTP stream.
 - Server startup marks abandoned running web chat rows and their linked Strata sessions as failed with `stoppedReason: "server_restarted"` so stale active runs are visible instead of silently hanging forever.
 - Web chat run lifecycle diagnostics are appended to the persisted session trace, including run start, browser stream close reason, explicit cancel requests, and run finish.
+- Planned native human-interaction requests from `user.ask` should also be server-owned: `packages/web-api/src/chat.ts` should provide the `AgentUserInteraction` adapter, persist/replay pending request events, and expose an explicit response/cancel path from the browser without making the browser own the agent loop.
+- The experimental terminal side panel is separate from the chat run lifecycle: `@strata/terminal-web` renders the browser terminal, `packages/web-api` owns the local shell WebSocket bridge, and terminal scrollback is not automatically written into chat sessions, traces, wiki pages, memory, or proposals. See [web-terminal-plan.md](./web-terminal-plan.md).
+
 
 Concurrency rules:
 
@@ -305,6 +308,7 @@ The current web route adds specialized renderers for high-value tools:
 - `memory.write` / `memory.append`: target, path, size, and changed content preview.
 - `todo.add` / `todo.update` / `todo.remove`: action, status, priority, due date, title, id, tags, and notes.
 - `skills.list` / `skills.read`: count/source/path metadata and compact skill rows or content preview.
+- Planned `user.ask`: pending question card for select/confirm/text prompts, submitted answer/cancel state, and replay-safe rendering from durable run events.
 - Slack/Notion/Granola ingest tools once agent-facing connector tools exist.
 
 Pi's generic tool-display pattern is a good reference, but the implementation should use AI Elements `Tool` components in React.
@@ -320,6 +324,7 @@ Initial behavior:
 - Follow-up messages in the same browser conversation pass `continueSessionId`.
 - Reloading a prior session uses `chat.sessions.get` to reconstruct the transcript.
 - While a run is active, additional prompt submissions enqueue client-side and drain FIFO after the current run returns to idle. Stop clears queued follow-ups before cancelling the active run.
+- When a planned `user.ask` request is pending, the question card owns its own answer controls; normal prompt submissions should continue to mean queued follow-up chat messages, not implicit answers to the question.
 
 Later behavior:
 

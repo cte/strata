@@ -1,0 +1,1302 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "562de020-9acc-4b96-8c27-05d67cf42e18",
+  "prevId": "10c36a33-ef12-4209-b720-1e9d7bb7e509",
+  "tables": {
+    "classification_corrections": {
+      "name": "classification_corrections",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "target_session_id": {
+          "name": "target_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "target_event_id": {
+          "name": "target_event_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_path": {
+          "name": "raw_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observed_json": {
+          "name": "observed_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "verdict": {
+          "name": "verdict",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "correction_json": {
+          "name": "correction_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "derived_proposal_path": {
+          "name": "derived_proposal_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_classification_corrections_dedupe": {
+          "name": "idx_classification_corrections_dedupe",
+          "columns": [
+            "dedupe_key"
+          ],
+          "isUnique": false
+        },
+        "idx_classification_corrections_created": {
+          "name": "idx_classification_corrections_created",
+          "columns": [
+            "\"created_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_classification_corrections_status": {
+          "name": "idx_classification_corrections_status",
+          "columns": [
+            "status",
+            "\"created_at\" desc"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "events": {
+      "name": "events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ts": {
+          "name": "ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload_json": {
+          "name": "payload_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_events_session": {
+          "name": "idx_events_session",
+          "columns": [
+            "session_id",
+            "ts"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "events_session_id_sessions_id_fk": {
+          "name": "events_session_id_sessions_id_fk",
+          "tableFrom": "events",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ingest_activity_runs": {
+      "name": "ingest_activity_runs",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "projected_at": {
+          "name": "projected_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_event_id": {
+          "name": "last_event_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "stage": {
+          "name": "stage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "connector": {
+          "name": "connector",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "dry_run": {
+          "name": "dry_run",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "job_name": {
+          "name": "job_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "schedule_id": {
+          "name": "schedule_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "schedule_name": {
+          "name": "schedule_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "related_session_ids_json": {
+          "name": "related_session_ids_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_scanned": {
+          "name": "raw_scanned",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_written": {
+          "name": "raw_written",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_skipped": {
+          "name": "raw_skipped",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_indexed": {
+          "name": "raw_indexed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_index_skipped": {
+          "name": "raw_index_skipped",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "wiki_pages_touched": {
+          "name": "wiki_pages_touched",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "failures": {
+          "name": "failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "search_indexed": {
+          "name": "search_indexed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "item_count": {
+          "name": "item_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "has_writes_or_wiki_indexes": {
+          "name": "has_writes_or_wiki_indexes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_ingest_activity_runs_started": {
+          "name": "idx_ingest_activity_runs_started",
+          "columns": [
+            "\"started_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_ingest_activity_runs_write_index": {
+          "name": "idx_ingest_activity_runs_write_index",
+          "columns": [
+            "has_writes_or_wiki_indexes",
+            "\"started_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_ingest_activity_runs_source": {
+          "name": "idx_ingest_activity_runs_source",
+          "columns": [
+            "source",
+            "\"started_at\" desc"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "ingest_activity_runs_session_id_sessions_id_fk": {
+          "name": "ingest_activity_runs_session_id_sessions_id_fk",
+          "tableFrom": "ingest_activity_runs",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "job_schedules": {
+      "name": "job_schedules",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "job_name": {
+          "name": "job_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "input_json": {
+          "name": "input_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "trigger_json": {
+          "name": "trigger_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "next_run_at": {
+          "name": "next_run_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_run_at": {
+          "name": "last_run_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_session_id": {
+          "name": "last_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_status": {
+          "name": "last_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "locked_at": {
+          "name": "locked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_job_schedules_due": {
+          "name": "idx_job_schedules_due",
+          "columns": [
+            "enabled",
+            "next_run_at"
+          ],
+          "isUnique": false
+        },
+        "idx_job_schedules_job": {
+          "name": "idx_job_schedules_job",
+          "columns": [
+            "job_name"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "messages": {
+      "name": "messages",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tool_call_id": {
+          "name": "tool_call_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tool_calls_json": {
+          "name": "tool_calls_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "attachments_json": {
+          "name": "attachments_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "usage_json": {
+          "name": "usage_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "ts": {
+          "name": "ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_messages_session": {
+          "name": "idx_messages_session",
+          "columns": [
+            "session_id",
+            "ts"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "messages_session_id_sessions_id_fk": {
+          "name": "messages_session_id_sessions_id_fk",
+          "tableFrom": "messages",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "routine_artifacts": {
+      "name": "routine_artifacts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "routine_run_id": {
+          "name": "routine_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "routine_id": {
+          "name": "routine_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schema_name": {
+          "name": "schema_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schema_version": {
+          "name": "schema_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload_json": {
+          "name": "payload_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "validation_status": {
+          "name": "validation_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "task_status": {
+          "name": "task_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source_refs_json": {
+          "name": "source_refs_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_routine_artifacts_run": {
+          "name": "idx_routine_artifacts_run",
+          "columns": [
+            "routine_run_id",
+            "\"created_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_routine_artifacts_routine": {
+          "name": "idx_routine_artifacts_routine",
+          "columns": [
+            "routine_id",
+            "\"created_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_routine_artifacts_dedupe": {
+          "name": "idx_routine_artifacts_dedupe",
+          "columns": [
+            "routine_id",
+            "dedupe_key"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "routine_artifacts_routine_run_id_routine_runs_id_fk": {
+          "name": "routine_artifacts_routine_run_id_routine_runs_id_fk",
+          "tableFrom": "routine_artifacts",
+          "tableTo": "routine_runs",
+          "columnsFrom": [
+            "routine_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "routine_artifacts_routine_id_routines_id_fk": {
+          "name": "routine_artifacts_routine_id_routines_id_fk",
+          "tableFrom": "routine_artifacts",
+          "tableTo": "routines",
+          "columnsFrom": [
+            "routine_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "routine_artifacts_session_id_sessions_id_fk": {
+          "name": "routine_artifacts_session_id_sessions_id_fk",
+          "tableFrom": "routine_artifacts",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "routine_runs": {
+      "name": "routine_runs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "routine_id": {
+          "name": "routine_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "routine_version": {
+          "name": "routine_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "input_json": {
+          "name": "input_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "task_status": {
+          "name": "task_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "job_session_id": {
+          "name": "job_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "agent_session_id": {
+          "name": "agent_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "child_session_ids_json": {
+          "name": "child_session_ids_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "output_artifact_ids_json": {
+          "name": "output_artifact_ids_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_routine_runs_routine": {
+          "name": "idx_routine_runs_routine",
+          "columns": [
+            "routine_id",
+            "\"started_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_routine_runs_started": {
+          "name": "idx_routine_runs_started",
+          "columns": [
+            "\"started_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_routine_runs_status": {
+          "name": "idx_routine_runs_status",
+          "columns": [
+            "status",
+            "\"started_at\" desc"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "routine_runs_routine_id_routines_id_fk": {
+          "name": "routine_runs_routine_id_routines_id_fk",
+          "tableFrom": "routine_runs",
+          "tableTo": "routines",
+          "columnsFrom": [
+            "routine_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "routine_runs_job_session_id_sessions_id_fk": {
+          "name": "routine_runs_job_session_id_sessions_id_fk",
+          "tableFrom": "routine_runs",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "job_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "routine_runs_agent_session_id_sessions_id_fk": {
+          "name": "routine_runs_agent_session_id_sessions_id_fk",
+          "tableFrom": "routine_runs",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "agent_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "routines": {
+      "name": "routines",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "prompt": {
+          "name": "prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "input_schema_json": {
+          "name": "input_schema_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "default_input_json": {
+          "name": "default_input_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "output_schema_json": {
+          "name": "output_schema_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "output_mode": {
+          "name": "output_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tool_profile": {
+          "name": "tool_profile",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "required_skills_json": {
+          "name": "required_skills_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "pre_run_steps_json": {
+          "name": "pre_run_steps_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "publication_policy_json": {
+          "name": "publication_policy_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_routines_status": {
+          "name": "idx_routines_status",
+          "columns": [
+            "status",
+            "\"updated_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_routines_updated": {
+          "name": "idx_routines_updated",
+          "columns": [
+            "\"updated_at\" desc"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "sessions": {
+      "name": "sessions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "git_commit": {
+          "name": "git_commit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_sessions_started": {
+          "name": "idx_sessions_started",
+          "columns": [
+            "\"started_at\" desc"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {
+      "idx_classification_corrections_created": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_classification_corrections_status": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_ingest_activity_runs_started": {
+        "columns": {
+          "\"started_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_ingest_activity_runs_write_index": {
+        "columns": {
+          "\"started_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_ingest_activity_runs_source": {
+        "columns": {
+          "\"started_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_routine_artifacts_run": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_routine_artifacts_routine": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_routine_runs_routine": {
+        "columns": {
+          "\"started_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_routine_runs_started": {
+        "columns": {
+          "\"started_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_routine_runs_status": {
+        "columns": {
+          "\"started_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_routines_status": {
+        "columns": {
+          "\"updated_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_routines_updated": {
+        "columns": {
+          "\"updated_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_sessions_started": {
+        "columns": {
+          "\"started_at\" desc": {
+            "isExpression": true
+          }
+        }
+      }
+    }
+  }
+}

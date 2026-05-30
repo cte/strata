@@ -19,23 +19,42 @@ The server-side job persisted in `ChatRunStore` (`packages/web-api/src/chatRunSt
 _Avoid_: "stream" or "request" when meaning the persisted job record.
 
 **Job**:
-A registered local operation that Strata can run outside the model loop, such as `connector.pull`, `raw.index`, `wiki.search-index.refresh`, `wiki.hygiene`, or `maintenance.run`. Jobs live behind the `@strata/jobs` registry/runner interface, persist an enclosing `kind = "job"` Session, and may call lower-level connector, raw-to-wiki, search-index, or maintenance modules that create their own domain-specific Sessions.
+A registered local operation that Strata can run outside the model loop, such as `connector.pull`, `raw.index`, `wiki.search-index.refresh`, `wiki.hygiene`, `maintenance.run`, or the orchestrating `routine.run`. Jobs live behind the `@strata/jobs` registry/runner interface, persist an enclosing `kind = "job"` Session, and may call lower-level connector, raw-to-wiki, search-index, or maintenance modules that create their own domain-specific Sessions. Deterministic Jobs are invoked **by Routines** — guaranteed via `preRunSteps` or at agent discretion via the `job.run` Tool — not scheduled directly.
 _Avoid_: cron task, background command, automation when meaning the registered operation.
 
-**Schedule**:
-A persisted `.strata/state.sqlite` record that binds a Job plus JSON input to an interval or cron trigger. Schedules are local-only, enabled/disabled independently from the Job definition, and run through the shared Job runner so results are trace-backed.
-_Avoid_: crontab entry when meaning Strata's first-party schedule record.
+**Schedule** _(removed)_:
+Formerly a persisted record binding any Job to an interval/cron trigger. Removed per [ADR-0002](docs/adr/0002-collapse-schedules-into-routines.md): the `job_schedules` table was reshaped into `routine_triggers`, the `agent.prompt` Job and `/schedules` surface were deleted, and the only thing put on a timer is now a **Routine** via its **Routine triggers**. Use "Routine trigger," not "Schedule."
+
+**Routine**:
+The single local automation primitive: a reusable definition that runs an agent workflow with structured input, structured output, a prompt, required Skills, a Tool Profile, optional pre-run Jobs, its own Routine triggers, and a publication policy. A Routine always runs the agent (`routine.run` → pre-run Jobs → agent loop); the agent does deterministic ops by calling Jobs via the `preRunSteps` field (guaranteed, before the agent) and the `job.run` Tool (agent discretion). A Routine can be triggered manually, by a Routine trigger, by API, or later by source events.
+_Avoid_: scheduled prompt, extraction pipeline when meaning the durable Routine definition. (A Routine *is* the unit of automation, so "automation" is no longer a term to avoid here.)
+
+**Routine trigger**:
+A persisted `.strata/state.sqlite` record in `routine_triggers` (FK to a Routine, no `jobName`) that binds JSON input plus an interval or cron cadence to a Routine. The scheduler worker claims due triggers and fires `routine.run` for the bound Routine, so results are trace-backed. Triggers are local-only and enabled/disabled independently of the Routine. Many triggers may target one Routine.
+_Avoid_: crontab entry, Schedule when meaning Strata's first-party recurring-trigger record.
+
+**Routine run**:
+One execution of a Routine. A Routine run is trace-backed, creates or links a `routine.run` Job Session, may create child Job Sessions for pre-run work, starts one shared-loop agent Session for the model/tool part, and records structured artifacts. Its infrastructure status is distinct from the task status.
+_Avoid_: run when the distinction from an agent Run or Job Session matters.
+
+**Routine artifact**:
+A schema-validated structured output produced by a Routine run, persisted with provenance, source refs, validation status, task status, dedupe key, and linked Session ids. TODO candidates from a Granola daily TODO Routine are Routine artifacts until reviewed and published into `wiki/actions/`.
+_Avoid_: final answer, action item, extraction candidate when the artifact has not been accepted into a downstream surface.
 
 **Ingest activity**:
 The normalized, browser-safe view of connector, raw-to-wiki, and Job Sessions that answers what source content was pulled, skipped, indexed, failed, and which trace explains it. Built from `SessionStore` Events through `@strata/ingest/activity`; not parsed from `wiki/log.md`.
 _Avoid_: wiki log, audit log when meaning the normalized DTO surface.
 
 **Ingest taxonomy**:
-The local workspace vocabulary used by raw-to-wiki indexing, loaded from `.strata/ingest/taxonomy.json` by `@strata/ingest/ingest-taxonomy`. It contains user/workspace-specific aliases such as canonical project names, self-name ownership hints, and Slack materiality/ignore patterns. The product code should keep generic source parsing and extraction grammar; subject-matter vocabulary belongs in the Ingest taxonomy or reviewed schema Proposals. The loader may read legacy `.strata/ingest/profile.json` files, but new tooling should write `taxonomy.json`.
+The local workspace vocabulary used by raw-to-wiki indexing, loaded from `.strata/ingest/taxonomy.json` by `@strata/ingest/ingest-taxonomy`. It contains user/workspace-specific aliases such as canonical project names, self-name ownership hints, and Slack materiality/ignore patterns. The product code should keep generic source parsing and extraction grammar; subject-matter vocabulary belongs in the Ingest taxonomy or reviewed schema Proposals. It is read/written only at `taxonomy.json` (the legacy `profile.json` path has been removed).
 _Avoid_: hard-coded classifier rules, built-in project aliases, workspace vocabulary in TypeScript.
 
+**Classification correction**:
+A typed reviewer verdict on a raw-to-wiki classification outcome — confirm, wrong project, noise, or unrecognized project — captured as durable feedback that seeds taxonomy schema Proposals and serves as eval ground truth for the taxonomy-suggestion loop.
+_Avoid_: flag, thumbs-down, correction note when the typed verdict and its provenance matter.
+
 **Extraction**:
-The evidence-backed process that turns wiki/source material into reviewable artifacts such as TODOs. An Extraction is defined by source selection, segmentation, candidate generation, optional verifier policy, dedupe, publication rules, and trace events. Planned in [docs/extraction-framework-plan.md](docs/extraction-framework-plan.md), with `daily.todo` as the first extractor.
+The evidence-backed process that turns wiki/source material into reviewable artifacts such as TODOs. The previous `daily.todo` implementation was removed after poor quality results. Future action extraction should be implemented through Routine artifacts after the action schema and write-back contract are redesigned.
 _Avoid_: one-off parser, hidden classifier, browser-only detection logic.
 
 **Evidence span**:
@@ -43,11 +62,11 @@ A bounded source excerpt considered by an Extraction, with source path, source k
 _Avoid_: snippet when the source location and provenance matter.
 
 **Extraction candidate**:
-A normalized artifact proposed by an Extraction from one or more Evidence spans, before or after verifier review. For daily TODOs, candidates classify potential commitments or requests and carry owner, due-date, confidence, rationale, publication state, and stable dedupe keys.
+A normalized artifact proposed by an Extraction from one or more Evidence spans, before reviewer publication. Future TODO candidates should usually be Routine artifacts first, carrying owner, due-date, confidence, rationale, source refs, publication state, and stable dedupe keys.
 _Avoid_: action item when the candidate has not yet been accepted into `wiki/actions/`.
 
 **Extraction run**:
-A trace-backed execution of one Extraction over a specific source scope, usually a day for `daily.todo`. Stores extractor/verifier versions, counts, and candidate outcomes so historical wiki days can be re-indexed idempotently.
+A trace-backed execution of one Extraction over a specific source scope. This is historical vocabulary after the extraction reset; new automated TODO discovery should use Routine runs and Routine artifacts instead of restoring the old `daily.todo` run model.
 _Avoid_: backfill when meaning the individual recorded run.
 
 **Wiki hygiene**:
@@ -132,10 +151,11 @@ _Avoid_: suggestion, change request.
 - A **Session** contains many **Runs** in chronological order.
 - A **Run** writes **Messages** and **Events** back to the **Session** it belongs to.
 - A **Web chat run** wraps exactly one **Run** and stores its event stream durably for browser reconnects.
-- A **Schedule** triggers many **Jobs** over time.
-- A **Job** creates a trace-backed **Session** of kind `job`; domain adapters under the Job may create additional ingest or maintenance Sessions.
-- **Ingest activity** is derived from **Events** across Job and ingest Sessions, with parent/child links inferred from job output and schedule metadata.
-- An **Extraction run** reads **Evidence spans**, produces **Extraction candidates**, and may publish reviewed results into wiki artifacts such as `wiki/actions/`; raw source material remains immutable.
+- A **Job** creates a trace-backed **Session** of kind `job`; domain adapters under the Job may create additional ingest or maintenance Sessions. Deterministic Jobs are invoked by Routines (via `preRunSteps`/`job.run`), not scheduled directly.
+- A **Routine** owns many **Routine triggers**; each trigger fires `routine.run` for its Routine on a cadence. A Routine can also be run manually or by API.
+- A **Routine run** links the enclosing `routine.run` **Job** Session, any child pre-run **Job** Sessions, the agent **Session**, and any produced **Routine artifacts**.
+- **Ingest activity** is derived from **Events** across Job and ingest Sessions, with parent/child links inferred from job output and Routine trigger metadata.
+- A future **Extraction** may read **Evidence spans** and produce reviewed **Routine artifacts** or other candidates before publishing into wiki artifacts such as `wiki/actions/`; raw source material remains immutable.
 - Every **Event** is mirrored to the **Trace** file for the same Session; SQLite is canonical, the Trace file is derived.
 - An **`AgentRunEvent`** is emitted in process as work happens; it may correspond to a persisted **Event** but is a separate type.
 - A **Tool** is declared as a **ToolDefinition** and held in the **ToolRegistry**.
@@ -158,3 +178,4 @@ _Avoid_: suggestion, change request.
 - **Messages and Events as separate tables** is a Strata-local choice; Pi keeps a single typed entry stream per session. Open question for a future ADR: should Strata collapse the two into a unified entry stream, or keep them split for SQL queryability (FTS, joins for session search)?
 - **Mode and Profile share two values (`learning`, `dangerous`)** but they are different enums. `Mode` classifies a Tool; `Profile` filters which Tools a registry exposes (a Profile is a set of allowed Modes). At a glance the names look interchangeable; they aren't. Pi has no equivalent concept — Strata's Mode/Profile layering exists because one Strata process serves multiple capability budgets (CLI, ingest, web chat, scheduled maintenance) from a shared registry. The decision is to document the distinction here rather than rename the enums.
 - **`LearningProposalKind = "schema"`** now covers reviewed local-schema changes such as `ingest.taxonomy.*` operations. These are durable runtime-configuration changes, not wiki-page edits.
+- **Schedule vs Routine** was resolved by unification, not coexistence, and has now landed. [ADR-0002](docs/adr/0002-collapse-schedules-into-routines.md) deleted **Schedule** as a concept: `job_schedules` became `routine_triggers` (FK to a Routine, no `jobName`), `agent.prompt` was removed, deterministic Jobs survive only as `preRunSteps`/`job.run` targets, and the `/schedules` page + `strata schedules` CLI were removed in favor of the Routines Triggers surface (`strata routines trigger …`). Accepted trade-off: every automation now runs the agent, so cadence'd infra (connector sync, index refresh) gains a model dependency.

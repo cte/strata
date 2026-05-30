@@ -11,7 +11,14 @@ import {
   runAgentLoopEvents as runSharedAgentLoopEvents,
   type ThinkingLevel,
 } from "@strata/agent";
-import { getStrataPaths, type JsonObject, type JsonValue, SessionStore } from "@strata/core";
+import {
+  getStrataPaths,
+  type JsonObject,
+  type JsonValue,
+  type SessionStatus,
+  SessionStore,
+} from "@strata/core";
+
 import { createConfiguredMcpToolPack } from "@strata/integration-mcp/exa";
 
 import { createToolRegistryWithPacks, type ToolPack, type ToolRegistry } from "@strata/tools";
@@ -395,8 +402,8 @@ class DefaultChatService implements ChatService {
       this.runStore.finishRun(active.runId, finish);
       this.unregisterRun(active);
       active.events.close();
-      if (finish.status === "completed" && active.sessionId !== undefined) {
-        void this.drainQueuedMessages(active.sessionId, input);
+      if (isContinuableSessionStatus(finish.status) && active.sessionId !== undefined) {
+        void this.drainQueuedMessages(active.sessionId, this.queuedMessageDefaults(input));
       }
     }
   }
@@ -438,7 +445,22 @@ class DefaultChatService implements ChatService {
     if (input.attachments !== undefined && input.attachments.length > 0) {
       config.attachments = input.attachments;
     }
+
     return config;
+  }
+
+  private queuedMessageDefaults(input: StartChatRunInput): StartChatRunInput {
+    const defaults: StartChatRunInput = { message: "" };
+    if (input.provider !== undefined) {
+      defaults.provider = input.provider;
+    }
+    if (input.model !== undefined) {
+      defaults.model = input.model;
+    }
+    if (input.reasoningEffort !== undefined) {
+      defaults.reasoningEffort = input.reasoningEffort;
+    }
+    return defaults;
   }
 
   private registerRun(active: ActiveChatRun): void {
@@ -577,6 +599,11 @@ class DefaultChatService implements ChatService {
         action: "requeued",
         errorMessage: messageFromError(error),
       });
+      await this.recordSessionEvent(sessionId, "web.chat.queue.delivery_failed", {
+        sessionId,
+        queuedMessageId: next.id,
+        errorMessage: messageFromError(error),
+      });
     }
   }
 
@@ -646,7 +673,7 @@ function startInputFromQueuedMessage(
   } else if (defaults.reasoningEffort !== undefined) {
     input.reasoningEffort = defaults.reasoningEffort;
   }
-  const attachments = attachmentsFromQueuedMessage(queued) ?? defaults.attachments;
+  const attachments = attachmentsFromQueuedMessage(queued);
   if (attachments !== undefined) {
     input.attachments = attachments;
   }
@@ -797,6 +824,10 @@ function terminalFromResult(result: AgentRunResult): FinishChatRunInput {
     stoppedReason: result.stoppedReason,
     cancelled: result.stoppedReason === "cancelled",
   };
+}
+
+function isContinuableSessionStatus(status: SessionStatus): boolean {
+  return status === "completed" || status === "failed";
 }
 
 function iterableFromArray<T>(items: T[]): AsyncIterable<T> {

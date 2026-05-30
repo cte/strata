@@ -6,6 +6,7 @@ import {
 } from "@strata/ingest/granola-connector";
 import {
   addWikiActionForWeb,
+  deleteWikiActionForWeb,
   listWikiActionsForWeb,
   updateWikiActionForWeb,
 } from "./actionServices.js";
@@ -35,31 +36,7 @@ import {
   startNotionMcp,
   validateNotion,
 } from "./connectorServices.js";
-import {
-  acceptDailyTodoCandidateForWeb,
-  listDailyTodoCandidatesForWeb,
-  listDailyTodoExtractionRunsForWeb,
-  rejectDailyTodoCandidateForWeb,
-} from "./extractionServices.js";
-import {
-  addIngestTaxonomyProjectAliasForWeb,
-  addIngestTaxonomySelfNameForWeb,
-  addIngestTaxonomySlackPatternForWeb,
-  applyIngestTaxonomyProposalForWeb,
-  getIngestTaxonomyForWeb,
-} from "./ingestTaxonomyServices.js";
-import {
-  applyConnectorSchedulePreset,
-  connectorScheduleStatus,
-  createSchedule,
-  deleteSchedule,
-  listJobs,
-  listSchedules,
-  runConnectorScheduleNow,
-  runScheduleNowFromWeb,
-  setConnectorScheduleEnabled,
-  updateSchedule,
-} from "./jobServices.js";
+import { listJobs } from "./jobServices.js";
 import {
   deleteMcpSettings,
   getMcpSettingsStatus,
@@ -83,7 +60,30 @@ import {
   listProposalsForWeb,
   rejectProposalFromWeb,
 } from "./proposalServices.js";
+import {
+  getRetrievalIndexStatusForWeb,
+  refreshRetrievalIndexForWeb,
+} from "./retrievalIndexServices.js";
+import {
+  createRoutineForWeb,
+  createRoutineFromTemplateForWeb,
+  createRoutineTriggerForWeb,
+  deleteRoutineForWeb,
+  deleteRoutineTriggerForWeb,
+  getRoutineForWeb,
+  listRoutineArtifactsForWeb,
+  listRoutineRunsForWeb,
+  listRoutinesForWeb,
+  listRoutineTemplatesForWeb,
+  listRoutineTriggersForWeb,
+  runRoutineForWeb,
+  runRoutineTriggerNowFromWeb,
+  setRoutineStatusForWeb,
+  updateRoutineForWeb,
+  updateRoutineTriggerForWeb,
+} from "./routineServices.js";
 import { repoRoot, type WebApiOptions } from "./runtime.js";
+import { correctTaxonomyReviewForWeb, listTaxonomyReviewForWeb } from "./taxonomyReviewServices.js";
 
 import type {
   ChatQueueAddInput,
@@ -144,32 +144,35 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     listWikiActions: (input) => listWikiActionsForWeb(input, options),
     updateWikiAction: (input) => updateWikiActionForWeb(input, options),
     addWikiAction: (input) => addWikiActionForWeb(input, options),
-    listDailyTodoExtractionRuns: (input) => listDailyTodoExtractionRunsForWeb(input, options),
-    listDailyTodoCandidates: (input) => listDailyTodoCandidatesForWeb(input, options),
-    acceptDailyTodoCandidate: (input) => acceptDailyTodoCandidateForWeb(input, options),
-    rejectDailyTodoCandidate: (input) => rejectDailyTodoCandidateForWeb(input, options),
+    deleteWikiAction: (input) => deleteWikiActionForWeb(input, options),
     listIngestActivity: (input) => listIngestActivityForWeb(input, options),
     getIngestActivity: (input) => getIngestActivityForWeb(input, options),
-    getIngestTaxonomy: () => getIngestTaxonomyForWeb(options),
-    addIngestTaxonomyProjectAlias: (input) => addIngestTaxonomyProjectAliasForWeb(input, options),
-    addIngestTaxonomySelfName: (input) => addIngestTaxonomySelfNameForWeb(input, options),
-    addIngestTaxonomySlackPattern: (input) => addIngestTaxonomySlackPatternForWeb(input, options),
-    applyIngestTaxonomyProposal: (input) => applyIngestTaxonomyProposalForWeb(input, options),
+    listTaxonomyReview: (input) => listTaxonomyReviewForWeb(input, options),
+    correctTaxonomyReview: (input) => correctTaxonomyReviewForWeb(input, options),
     listProposals: (input) => listProposalsForWeb(input, options),
     getProposal: (input) => getProposalForWeb(input, options),
     applyProposal: (input) => applyProposalFromWeb(input, options),
     rejectProposal: (input) => rejectProposalFromWeb(input, options),
     deferProposal: (input) => deferProposalFromWeb(input, options),
+    listRoutines: (input) => listRoutinesForWeb(input, options),
+    getRoutine: (input) => getRoutineForWeb(input, options),
+    createRoutine: (input) => createRoutineForWeb(input, options),
+    updateRoutine: (input) => updateRoutineForWeb(input, options),
+    setRoutineStatus: (input) => setRoutineStatusForWeb(input, options),
+    deleteRoutine: (input) => deleteRoutineForWeb(input, options),
+    listRoutineTemplates: () => listRoutineTemplatesForWeb(),
+    createRoutineFromTemplate: (input) => createRoutineFromTemplateForWeb(input, options),
+    runRoutine: (input) => runRoutineForWeb(input, options),
+    listRoutineRuns: (input) => listRoutineRunsForWeb(input, options),
+    listRoutineArtifacts: (input) => listRoutineArtifactsForWeb(input, options),
+    listRoutineTriggers: (input) => listRoutineTriggersForWeb(input, options),
+    createRoutineTrigger: (input) => createRoutineTriggerForWeb(input, options),
+    updateRoutineTrigger: (input) => updateRoutineTriggerForWeb(input, options),
+    deleteRoutineTrigger: (input) => deleteRoutineTriggerForWeb(input, options),
+    runRoutineTriggerNow: (input) => runRoutineTriggerNowFromWeb(input, options),
     listJobs,
-    listSchedules: () => listSchedules(options),
-    createSchedule: (input) => createSchedule(input, options),
-    updateSchedule: (input) => updateSchedule(input, options),
-    deleteSchedule: (input) => deleteSchedule(input, options),
-    runScheduleNow: (input) => runScheduleNowFromWeb(input, options),
-    connectorScheduleStatus: (input) => connectorScheduleStatus(input, options),
-    applyConnectorSchedulePreset: (input) => applyConnectorSchedulePreset(input, options),
-    setConnectorScheduleEnabled: (input) => setConnectorScheduleEnabled(input, options),
-    runConnectorScheduleNow: (input) => runConnectorScheduleNow(input, options),
+    retrievalIndexStatus: () => getRetrievalIndexStatusForWeb(options),
+    refreshRetrievalIndex: (input) => refreshRetrievalIndexForWeb(input, options),
 
     modelAuthStatus: () => getModelAuthStatus(options),
     startModelAuth: (input) => startModelAuth(input, input.origin, options),

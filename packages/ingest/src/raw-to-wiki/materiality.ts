@@ -1,6 +1,5 @@
 import type { ResolvedIngestPatternRule, ResolvedIngestTaxonomy } from "../ingestTaxonomy.js";
 import { decisionCandidateLines } from "./extraction.js";
-import { slackActionCandidateLines } from "./slack.js";
 import type { ClassificationReason, RawFrontmatter } from "./types.js";
 
 interface PatternRule {
@@ -49,7 +48,6 @@ export function slackMateriality(input: SlackMaterialityInput): SlackMateriality
       .filter((message) => !isSlackStatusOnlyMessage(message, input.taxonomy))
       .join("\n"),
   );
-  const actionCandidates = slackActionCandidateLines(input.body, 1);
   const decisionCandidates = decisionCandidateLines(signalCombined, 1);
   const materialRules = [
     ...genericRules(GENERIC_SLACK_MATERIAL_PATTERNS, "material signal"),
@@ -60,12 +58,6 @@ export function slackMateriality(input: SlackMaterialityInput): SlackMateriality
     nonLogCombined === "" ? null : firstMatchingPattern(nonLogCombined, materialRules);
   const materialReasons = [
     ...(materialRule === null ? [] : [patternReason(materialRule, "slack_material_signal")]),
-    ...actionCandidates.slice(0, 1).map((candidate) => ({
-      kind: "slack_material_signal" as const,
-      source: "generic" as const,
-      label: "action candidate",
-      matchedText: candidate.text,
-    })),
     ...decisionCandidates.slice(0, 1).map((candidate) => ({
       kind: "slack_material_signal" as const,
       source: "generic" as const,

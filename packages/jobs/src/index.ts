@@ -1,12 +1,16 @@
 export { defaultJobDefinitions } from "./definitions.js";
 export { createDefaultJobRegistry, JobRegistry } from "./registry.js";
+export {
+  nextRunAt,
+  normalizeTrigger,
+  RoutineTriggerStore,
+} from "./routineTriggerStore.js";
 export { runJob } from "./runner.js";
-export { runDueSchedulesOnce, runScheduleNow, runSchedulerLoop } from "./scheduler.js";
-export { nextRunAt, normalizeTrigger, ScheduleStore } from "./scheduleStore.js";
+export { runDueTriggersOnce, runSchedulerLoop, runTriggerNow } from "./scheduler.js";
 export type {
-  CreateJobScheduleInput,
-  CronScheduleTrigger,
-  IntervalScheduleTrigger,
+  CreateRoutineTriggerInput,
+  CronCadence,
+  IntervalCadence,
   JobConcurrencyPolicy,
   JobDefinition,
   JobExecutionResult,
@@ -16,9 +20,9 @@ export type {
   JobRunContext,
   JobRunOutput,
   JobRunStatus,
-  JobScheduleRecord,
-  JobScheduleRunResult,
-  JobScheduleTrigger,
-  RunDueSchedulesResult,
-  UpdateJobScheduleInput,
+  RoutineTriggerCadence,
+  RoutineTriggerRecord,
+  RoutineTriggerRunResult,
+  RunDueTriggersResult,
+  UpdateRoutineTriggerInput,
 } from "./types.js";

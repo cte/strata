@@ -81,9 +81,6 @@ export interface IngestActivityItem {
   projectPaths: string[];
   decisionPaths: string[];
   threadPaths: string[];
-  actionCount: number;
-  extractionRunIds: string[];
-  actionCandidateIds: string[];
   writtenPaths: string[];
   classificationReasons: ClassificationReason[];
   reason: string | null;
@@ -747,16 +744,16 @@ function eventRowToTraceEvent(sessionId: string, row: EventRow): TraceEvent {
 }
 
 function scheduleByLastSessionId(store: SessionStore): Map<string, ScheduleRow> {
-  if (!tableExists(store, "job_schedules")) {
+  if (!tableExists(store, "routine_triggers")) {
     return new Map();
   }
   const rows = store.db
     .query<ScheduleRow, []>(
       `select
         id,
-        name,
+        coalesce(name, routine_id) as name,
         last_session_id as lastSessionId
-      from job_schedules
+      from routine_triggers
       where last_session_id is not null`,
     )
     .all();
@@ -1212,33 +1209,9 @@ function normalizeItems(
       continue;
     }
 
-    if (
-      event.type === "raw_to_wiki.index.item" ||
-      event.type === "raw_to_wiki.granola.index.item"
-    ) {
-      const payload = event.payload;
-      push({
-        ...baseActivityItem(
-          event,
-          "raw_to_wiki",
-          booleanValue(payload.dryRun) === true ? "previewed" : "indexed",
-          sourceFromValue(payload.source) ?? sourceFromRawPath(stringValue(payload.rawPath)),
-          "raw.index",
-        ),
-        title: stringValue(payload.title),
-        rawPath: stringValue(payload.rawPath),
-        primaryKind: stringValue(payload.primaryKind),
-        primaryPath: stringValue(payload.primaryPath),
-        peoplePaths: stringArray(payload.peoplePaths),
-        projectPaths: stringArray(payload.projectPaths),
-        decisionPaths: stringArray(payload.decisionPaths),
-        threadPaths: stringArray(payload.threadPaths),
-        actionCount: numberValue(payload, "actionCount") ?? 0,
-        extractionRunIds: stringArray(payload.extractionRunIds),
-        actionCandidateIds: stringArray(payload.actionCandidateIds),
-        writtenPaths: stringArray(payload.writtenPaths),
-        classificationReasons: classificationReasonArray(payload.classificationReasons),
-      });
+    const rawIndexItem = rawToWikiIndexItemFromEvent(event);
+    if (rawIndexItem !== null) {
+      push(rawIndexItem);
       continue;
     }
 
@@ -1321,15 +1294,81 @@ function baseActivityItem(
     projectPaths: [],
     decisionPaths: [],
     threadPaths: [],
-    actionCount: 0,
-    extractionRunIds: [],
-    actionCandidateIds: [],
     writtenPaths: [],
     classificationReasons: [],
     reason: null,
     message: null,
     relatedSessionIds: [],
   };
+}
+
+/**
+ * Build an {@link IngestActivityItem} from a single `raw_to_wiki.index.item`
+ * event (or its `granola` variant), or `null` for any other event type. Shared
+ * by per-session detail assembly and the cross-session reader below so both
+ * read raw-to-wiki classification outcomes identically.
+ */
+export function rawToWikiIndexItemFromEvent(event: TraceEvent): IngestActivityItem | null {
+  if (event.type !== "raw_to_wiki.index.item" && event.type !== "raw_to_wiki.granola.index.item") {
+    return null;
+  }
+  const payload = event.payload;
+  return {
+    ...baseActivityItem(
+      event,
+      "raw_to_wiki",
+      booleanValue(payload.dryRun) === true ? "previewed" : "indexed",
+      sourceFromValue(payload.source) ?? sourceFromRawPath(stringValue(payload.rawPath)),
+      "raw.index",
+    ),
+    title: stringValue(payload.title),
+    rawPath: stringValue(payload.rawPath),
+    primaryKind: stringValue(payload.primaryKind),
+    primaryPath: stringValue(payload.primaryPath),
+    peoplePaths: stringArray(payload.peoplePaths),
+    projectPaths: stringArray(payload.projectPaths),
+    decisionPaths: stringArray(payload.decisionPaths),
+    threadPaths: stringArray(payload.threadPaths),
+    writtenPaths: stringArray(payload.writtenPaths),
+    classificationReasons: classificationReasonArray(payload.classificationReasons),
+  };
+}
+
+/** A raw-to-wiki index item paired with the session that emitted it. */
+export interface RawToWikiIndexRecord {
+  sessionId: string;
+  item: IngestActivityItem;
+}
+
+/**
+ * Read `raw_to_wiki.index.item` events directly from the event log across all
+ * sessions, most-recent first. Raw-to-wiki indexing runs in its own sessions
+ * that are *not* projected into `ingest_activity_runs`, so consumers that need
+ * classification outcomes (e.g. the taxonomy review queue) must read the events
+ * rather than walk the materialized run-list.
+ */
+export function listRawToWikiIndexItems(
+  store: SessionStore,
+  options: { limit?: number } = {},
+): RawToWikiIndexRecord[] {
+  const limit = Math.max(1, Math.min(options.limit ?? 2000, 20000));
+  const rows = store.db
+    .query<EventRow & { sessionId: string }, [number]>(
+      `select id, session_id as sessionId, ts, type, payload_json as payloadJson
+      from events
+      where type in ('raw_to_wiki.index.item', 'raw_to_wiki.granola.index.item')
+      order by id desc
+      limit ?`,
+    )
+    .all(limit);
+  const records: RawToWikiIndexRecord[] = [];
+  for (const row of rows) {
+    const item = rawToWikiIndexItemFromEvent(eventRowToTraceEvent(row.sessionId, row));
+    if (item !== null) {
+      records.push({ sessionId: row.sessionId, item });
+    }
+  }
+  return records;
 }
 
 function connectorStatus(payload: JsonObject, dryRun: boolean): IngestActivityItemStatus {

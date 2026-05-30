@@ -10,6 +10,7 @@ import {
   type ChatSessionSummary,
   deleteChatSession,
 } from "@/lib/api";
+import { clearLastChatSessionId } from "@/lib/chatLastSession";
 import { useRunningSessionIds } from "@/lib/useChatRun";
 import { cn } from "@/lib/utils";
 
@@ -80,6 +81,7 @@ export function useDeleteChatSession(): (
   return useCallback(
     async (session: ChatSessionSummary): Promise<ChatSessionDeleteResult> => {
       const result = await deleteChatSession(session.id);
+      clearLastChatSessionId(session.id);
       queryClient.removeQueries({ queryKey: ["chat", "sessions", "detail", session.id] });
       await queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
       const match = matchRoute({ to: "/chat/$sessionId" }) as false | { sessionId?: string };
@@ -146,8 +148,8 @@ export function SessionCommandRow({
     >
       <SessionStatusDot session={session} className="mt-2 size-1.5" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-[13px] font-medium tracking-tight">{title}</span>
-        <span className="font-mono text-[11.5px] leading-5 text-black/50 dark:text-white/50">
+        <span className="truncate text-sm font-medium tracking-tight">{title}</span>
+        <span className="font-mono text-xs leading-5 text-black/50 dark:text-white/50">
           {formatSessionTime(session.startedAt)}
         </span>
       </span>
@@ -171,8 +173,8 @@ export function SessionCommandRow({
               event.stopPropagation();
             }}
             className={cn(
-              "absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-[var(--fg-mute)] opacity-0 transition-[opacity,color,background-color] duration-150 hover:bg-[var(--bad)]/10 hover:text-[var(--bad)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-30 group-hover/session-command:opacity-100 group-data-[selected=true]/session-command:opacity-100",
-              deleteOpen && "bg-[var(--bad)]/10 text-[var(--bad)] opacity-100",
+              "absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-fg-mute opacity-0 transition-[opacity,color,background-color] duration-150 hover:bg-bad/10 hover:text-bad focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-30 group-hover/session-command:opacity-100 group-data-[selected=true]/session-command:opacity-100",
+              deleteOpen && "bg-bad/10 text-bad opacity-100",
             )}
           >
             <Trash2 size={12} strokeWidth={1.75} />
@@ -195,7 +197,7 @@ export function SessionCommandRow({
             // outside interactions that would close the dialog.
             event.stopPropagation();
           }}
-          className="w-64 rounded-lg border border-[var(--hairline)] bg-[var(--bg-elev)] p-3 text-[var(--fg)] shadow-lg"
+          className="w-64 rounded-lg border border-hairline bg-bg-elev p-3 text-fg shadow-lg"
         >
           <ChatSessionDeleteConfirm
             title={title}
@@ -226,23 +228,21 @@ export function ChatSessionDeleteConfirm({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1">
-        <p className="text-[13px] font-medium tracking-tight text-[var(--fg)]">Delete session?</p>
-        <p className="line-clamp-2 text-[12px] leading-snug text-[var(--fg-dim)]">
-          <span className="text-[var(--fg)]">{title}</span>
+        <p className="text-sm font-medium tracking-tight text-fg">Delete session?</p>
+        <p className="line-clamp-2 text-xs leading-snug text-fg-dim">
+          <span className="text-fg">{title}</span>
           <span> will be permanently removed.</span>
         </p>
       </div>
       {error ? (
-        <p className="rounded-sm bg-[var(--bad)]/10 px-2 py-1 font-mono text-[10.5px] text-[var(--bad)]">
-          {error}
-        </p>
+        <p className="rounded-sm bg-bad/10 px-2 py-1 font-mono text-2xs text-bad">{error}</p>
       ) : null}
       <div className="flex justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
           disabled={deleting}
-          className="h-7 rounded-md border border-[var(--hairline-strong)] bg-transparent px-2.5 text-[11.5px] font-medium text-[var(--fg-dim)] transition-colors duration-150 hover:bg-[var(--surface-2)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-7 rounded-md border border-hairline-strong bg-transparent px-2.5 text-xs font-medium text-fg-dim transition-colors duration-150 hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           Cancel
         </button>
@@ -251,7 +251,7 @@ export function ChatSessionDeleteConfirm({
           autoFocus
           onClick={onConfirm}
           disabled={deleting}
-          className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--bad)] px-2.5 text-[11.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[var(--bad)]/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--bad)]/40 disabled:cursor-not-allowed disabled:opacity-70"
+          className="flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-xs font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-bad/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bad/40 disabled:cursor-not-allowed disabled:opacity-70"
         >
           {deleting ? <LoaderCircle size={13} strokeWidth={2} className="animate-spin" /> : null}
           {deleting ? "Deleting" : "Delete"}
@@ -283,13 +283,13 @@ export function formatSessionTime(value: string): string {
 function statusDotClass(status: ChatSessionSummary["status"]): string {
   switch (status) {
     case "completed":
-      return "bg-[var(--good)]";
+      return "bg-good";
     case "failed":
-      return "bg-[var(--bad)]";
+      return "bg-bad";
     case "interrupted":
-      return "bg-[var(--warn)]";
+      return "bg-warn";
     case "running":
-      return "bg-[var(--accent)]";
+      return "bg-accent";
   }
 }
 
@@ -314,7 +314,7 @@ export function SessionStatusDot({
       className={cn(
         "shrink-0 rounded-full",
         className,
-        live ? "bg-[var(--accent)] text-[var(--accent)] dot-pulse" : statusDotClass(session.status),
+        live ? "bg-accent text-accent dot-pulse" : statusDotClass(session.status),
       )}
     />
   );

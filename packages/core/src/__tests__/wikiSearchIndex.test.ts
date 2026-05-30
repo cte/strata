@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { refreshWikiSearchIndex, searchWikiSearchIndex } from "../wikiSearchIndex.js";
+import {
+  getWikiSearchIndexStatus,
+  refreshWikiSearchIndex,
+  retrieveWikiContext,
+  searchWikiSearchIndex,
+} from "../wikiSearchIndex.js";
 
 async function withTempRepo<T>(fn: (repoRoot: string) => Promise<T>): Promise<T> {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-wiki-search-"));
@@ -53,6 +58,15 @@ describe("wiki search index", () => {
       expect(refresh.curated).toBe(1);
       expect(refresh.raw).toBe(1);
       expect(refresh.sources).toBe(1);
+      expect(refresh.chunks).toBeGreaterThanOrEqual(3);
+
+      const status = await getWikiSearchIndexStatus({ repoRoot });
+      expect(status).toMatchObject({
+        indexed: true,
+        schema: "current",
+        documents: { total: 3, curated: 1, sources: 1, raw: 1 },
+      });
+      expect(status.chunks).toBeGreaterThanOrEqual(3);
 
       const curatedOnly = await searchWikiSearchIndex({
         repoRoot,
@@ -233,6 +247,65 @@ describe("wiki search index", () => {
         "source:sources/slack/roo-code-sync.md",
         "raw:raw/slack/roo-code-sync.md",
       ]);
+    });
+  });
+
+  test("runs hybrid chunk retrieval with graph expansion and token packing", async () => {
+    await withTempRepo(async (repoRoot) => {
+      await mkdir(path.join(repoRoot, "wiki", "decisions"), { recursive: true });
+      await writeFile(
+        path.join(repoRoot, "wiki", "projects", "alpha.md"),
+        [
+          "---",
+          "type: project",
+          "title: Alpha",
+          "---",
+          "",
+          "# Alpha",
+          "",
+          "## Status",
+          "",
+          "The retrieval launch depends on decision evidence and careful citation packing.",
+          "",
+          "Related decision: [[decisions/2026-05-29-alpha-retrieval]]",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(repoRoot, "wiki", "decisions", "2026-05-29-alpha-retrieval.md"),
+        [
+          "---",
+          "type: decision",
+          "title: Alpha retrieval decision",
+          "---",
+          "",
+          "# Alpha retrieval decision",
+          "",
+          "We chose chunked search with reciprocal rank fusion and graph context.",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      await refreshWikiSearchIndex({ repoRoot, includeRaw: false });
+      const result = await retrieveWikiContext({
+        repoRoot,
+        query: "retrieval launch citation evidence",
+        limit: 5,
+        tokenBudget: 700,
+      });
+
+      expect(result).toMatchObject({
+        indexed: true,
+        strategy: "hybrid",
+      });
+      expect(result?.matches[0]).toMatchObject({
+        path: "projects/alpha.md",
+        heading: "Status",
+      });
+      expect(result?.matches.some((match) => match.path.startsWith("decisions/"))).toBe(true);
+      expect(result?.estimatedTokens).toBeLessThanOrEqual(700);
     });
   });
 });

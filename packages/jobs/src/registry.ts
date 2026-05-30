@@ -1,5 +1,5 @@
 import type { JsonObject } from "@strata/core";
-import { defaultJobDefinitions } from "./definitions.js";
+import { type DefaultJobDefinitionsOptions, defaultJobDefinitions } from "./definitions.js";
 import type { JobDefinition, JobMetadata } from "./types.js";
 
 export class JobRegistry {
@@ -29,9 +29,9 @@ export class JobRegistry {
   }
 }
 
-export function createDefaultJobRegistry(): JobRegistry {
+export function createDefaultJobRegistry(options: DefaultJobDefinitionsOptions = {}): JobRegistry {
   const registry = new JobRegistry();
-  for (const definition of defaultJobDefinitions()) {
+  for (const definition of defaultJobDefinitions(options)) {
     registry.register(definition);
   }
   return registry;

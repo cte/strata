@@ -1,5 +1,6 @@
 import {
   addWikiAction,
+  deleteWikiAction,
   listWikiActions,
   updateWikiAction,
   type WikiActionItem,
@@ -7,6 +8,7 @@ import {
 import { repoRoot, type WebApiOptions } from "./runtime.js";
 import type {
   WikiActionAddRpcInput,
+  WikiActionDeleteRpcInput,
   WikiActionListRpcInput,
   WikiActionUpdateRpcInput,
 } from "./trpc.js";
@@ -48,4 +50,11 @@ export async function addWikiActionForWeb(
       ...(input.context === undefined ? {} : { context: input.context }),
     }),
   };
+}
+
+export async function deleteWikiActionForWeb(
+  input: WikiActionDeleteRpcInput,
+  options: WebApiOptions,
+): Promise<{ deleted: boolean }> {
+  return deleteWikiAction(repoRoot(options), { id: input.id });
 }

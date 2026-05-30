@@ -44,6 +44,16 @@ export async function runJob(options: RunJobOptions): Promise<JobExecutionResult
       env: options.env ?? Bun.env,
       now,
       sessionId: session.id,
+      runJob: (input) =>
+        runJob({
+          jobName: input.jobName,
+          repoRoot,
+          now,
+          registry: options.registry,
+          ...(options.env === undefined ? {} : { env: options.env }),
+          ...(input.input === undefined ? {} : { input: input.input }),
+          ...(input.title === undefined ? {} : { title: input.title }),
+        }),
     };
     const output = await definition.run(input, context);
     const result: JobExecutionResult = {

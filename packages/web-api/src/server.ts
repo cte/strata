@@ -22,6 +22,7 @@ import {
   repoRoot,
   type WebApiOptions,
 } from "./services.js";
+import { TerminalSessionManager, type TerminalSocketData } from "./terminal.js";
 import { appRouter } from "./trpc.js";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -175,12 +176,62 @@ export async function startWebApiServer(
   await ensureRuntimeDirs(getStrataPaths(root));
   const host = options.env?.STRATA_WEB_HOST ?? Bun.env.STRATA_WEB_HOST ?? DEFAULT_HOST;
   const port = positiveInt(options.env?.STRATA_WEB_PORT ?? Bun.env.STRATA_WEB_PORT, DEFAULT_PORT);
-  const server = Bun.serve({
+  const handler = createWebApiHandler({ ...options, repoRoot: root });
+
+  const terminals = new TerminalSessionManager(root, options.env ?? Bun.env);
+
+  const server = Bun.serve<TerminalSocketData>({
     hostname: host,
     port,
     idleTimeout: WEB_API_IDLE_TIMEOUT_SECONDS,
-    fetch: createWebApiHandler({ ...options, repoRoot: root }),
+    fetch(request, server) {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/terminal/connect") {
+        const session = terminals.create();
+        const upgraded = server.upgrade(request, {
+          data: { kind: "terminal", sessionId: session.id },
+        });
+        if (!upgraded) {
+          void terminals.close(session.id);
+          return new Response("WebSocket upgrade failed", { status: 400 });
+        }
+        return undefined;
+      }
+      return handler(request);
+    },
+    websocket: {
+      open(ws) {
+        const session = terminals.get(ws.data.sessionId);
+        if (session === undefined) {
+          ws.close(1011, "terminal session missing");
+          return;
+        }
+        void pumpTerminalStream(session.process.stdout, (chunk) => ws.send(chunk));
+        void pumpTerminalStream(session.process.stderr, (chunk) => ws.send(chunk));
+        void session.process.exited.finally(() => {
+          ws.close(1000, "terminal exited");
+          void terminals.close(ws.data.sessionId);
+        });
+      },
+      message(ws, message) {
+        const session = terminals.get(ws.data.sessionId);
+        if (session === undefined) {
+          ws.close(1011, "terminal session missing");
+          return;
+        }
+        const payload = typeof message === "string" ? message : new TextDecoder().decode(message);
+        try {
+          session.stdin.write(new TextEncoder().encode(payload));
+        } catch {
+          ws.close(1011, "terminal stdin closed");
+        }
+      },
+      close(ws) {
+        void terminals.close(ws.data.sessionId);
+      },
+    },
   });
+
   console.log(`Strata web API listening on http://${server.hostname}:${server.port}`);
   return server;
 }
@@ -192,6 +243,24 @@ function positiveInt(value: string | undefined, fallback: number): number {
 
 function positiveNumber(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+async function pumpTerminalStream(
+  stream: ReadableStream<Uint8Array>,
+  send: (chunk: Uint8Array) => void | number,
+): Promise<void> {
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) return;
+      send(next.value);
+    }
+  } catch {
+    // WebSocket close and process teardown race during normal terminal shutdown.
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function lastEventId(request: Request): number {

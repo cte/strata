@@ -52,6 +52,11 @@ export interface WikiActionAddInput {
   now?: Date;
 }
 
+export interface WikiActionDeleteInput {
+  id: string;
+  now?: Date;
+}
+
 interface ParsedWikiActionItem extends WikiActionItem {
   lineIndex: number;
   contextLineIndex: number | null;
@@ -206,6 +211,37 @@ export async function addWikiAction(
     throw new Error(`Added action item could not be reread: ${ledgerPath}`);
   }
   return stripParserFields(added);
+}
+
+export async function deleteWikiAction(
+  repoRoot: string,
+  input: WikiActionDeleteInput,
+): Promise<{ deleted: boolean }> {
+  const parsedId = parseActionId(input.id);
+  const owner = parsedId.owner;
+  const absolutePath = path.join(repoRoot, ACTION_PATHS[owner]);
+  const existing = await readTextFileOrUndefined(absolutePath);
+  if (existing === undefined) {
+    throw new Error(`Action ledger not found: ${ACTION_PATHS[owner]}`);
+  }
+
+  const parsed = parseWikiActionContent(owner, ACTION_PATHS[owner], existing);
+  const item = parsed.find((candidate) => candidate.id === input.id);
+  if (item === undefined) {
+    throw new Error(`Action item not found: ${input.id}`);
+  }
+
+  const lines = splitLines(existing);
+  // Remove the hidden context line (always item.lineIndex + 1) before the task
+  // line so the earlier index stays valid.
+  if (item.contextLineIndex !== null) {
+    lines.splice(item.contextLineIndex, 1);
+  }
+  lines.splice(item.lineIndex, 1);
+
+  const updated = updateFrontmatterLastUpdated(joinLines(lines), input.now ?? new Date());
+  await writeTextFile(absolutePath, updated);
+  return { deleted: true };
 }
 
 export function parseWikiActionContent(

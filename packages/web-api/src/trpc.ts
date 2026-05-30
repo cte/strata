@@ -1,3 +1,6 @@
+import type { ModelCapabilities, ModelProviderName } from "@strata/agent";
+import type { WikiSearchIndexSource, WikiSearchIndexStatus } from "@strata/core";
+import type { ClassificationCorrection } from "@strata/core/classification-correction-store";
 import type {
   LearningProposalApplyResult,
   LearningProposalDetail,
@@ -28,28 +31,20 @@ import type {
   ConnectorConfigProfileRecord,
   ConnectorWorkflowResult,
 } from "@strata/ingest/connectors";
+import type { ReviewQueueItem } from "@strata/ingest/review-queue";
 import type {
-  DailyTodoReviewPublicationResult,
-  ExtractionSourceKind,
-  ExtractionSourceType,
-  TodoCandidateKind,
-  TodoCandidateStatus,
-  TodoVerification,
-} from "@strata/ingest/extraction";
-import type {
-  IngestPatternRule,
-  IngestSlackPatternField,
-  IngestTaxonomy,
-  IngestTaxonomyApplyResult,
-  IngestTaxonomyOperation,
-  IngestTaxonomyProposalApplyResult,
-} from "@strata/ingest/ingest-taxonomy";
-import type {
+  JobExecutionResult,
   JobMetadata,
-  JobScheduleRecord,
-  JobScheduleRunResult,
-  JobScheduleTrigger,
+  RoutineTriggerCadence,
+  RoutineTriggerRecord,
+  RoutineTriggerRunResult,
 } from "@strata/jobs";
+import type {
+  RoutineArtifactRecord,
+  RoutineDefinition,
+  RoutineRunRecord,
+  RoutineStatus,
+} from "@strata/routines";
 import { initTRPC } from "@trpc/server";
 import { z } from "zod";
 
@@ -100,30 +95,6 @@ export interface GranolaStatus {
   configured: boolean;
   message: string;
   validatedAt?: string;
-}
-
-export type ScheduledConnectorName = Extract<ConnectorName, "granola" | "slack">;
-
-export interface ConnectorSchedulePreset {
-  id: string;
-  connector: ScheduledConnectorName;
-  label: string;
-  description: string;
-  scheduleName: string;
-  trigger: JobScheduleTrigger;
-  input: JsonObject;
-  usesDefaultProfile: boolean;
-}
-
-export interface ConnectorScheduleStatus {
-  connector: ScheduledConnectorName;
-  schedule: JobScheduleRecord | null;
-  scheduleCount: number;
-  presets: ConnectorSchedulePreset[];
-  defaultProfile: ConnectorConfigProfileRecord | null;
-  scheduleProfile: ConnectorConfigProfileRecord | null;
-  scheduleProfileMissing: string | null;
-  lastActivity: IngestActivityRunSummary | null;
 }
 
 export type ModelAuthProviderName = "openai-codex" | "anthropic-claude";
@@ -211,6 +182,13 @@ export interface ChatModelStatus {
 export interface ChatModelSummary {
   id: string;
   description: string;
+  provider?: ModelProviderName;
+  capabilities?: ModelCapabilities;
+}
+
+export interface RetrievalIndexRefreshResult {
+  run: JobExecutionResult;
+  status: WikiSearchIndexStatus;
 }
 
 export interface ChatFileEntry {
@@ -252,68 +230,11 @@ export interface WikiActionResult {
   action: WikiActionItem;
 }
 
-export interface DailyTodoRunSummary {
-  id: string;
-  name: string;
-  day: string | null;
-  status: string;
-  startedAt: string;
-  endedAt: string | null;
-  extractorVersion: string;
-  verifierVersion: string;
-  modelName: string | null;
-  sessionId: string | null;
-  dryRun: boolean;
-  candidateCount: number;
-  rejectedCount: number;
-}
-
-export interface DailyTodoRunsListResult {
-  runs: DailyTodoRunSummary[];
-}
-
-export interface DailyTodoCandidateSummary {
-  id: string;
-  runId: string;
-  day: string;
-  sourcePath: string;
-  sourceKind: ExtractionSourceKind;
-  sourceType: ExtractionSourceType;
-  sourceTarget: string;
-  sourceLabel: string;
-  lineStart: number;
-  lineEnd: number;
-  evidenceText: string;
-  candidateKind: TodoCandidateKind;
-  candidateText: string;
-  status: TodoCandidateStatus;
-  owner: TodoVerification["owner"];
-  actionText: string;
-  confidence: number;
-  rationale: string;
-  deterministicReasons: string[];
-  publishedTarget: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DailyTodoCandidateResult {
-  candidate: DailyTodoCandidateSummary;
-  publication?: DailyTodoReviewPublicationResult;
-}
-
 export interface IngestActivityListResult {
   runs: IngestActivityRunSummary[];
 }
 
 export type IngestActivityDetail = IngestActivityRunDetail;
-
-export interface IngestTaxonomyResult {
-  taxonomy: IngestTaxonomy;
-  path: string;
-  found: boolean;
-  source: "taxonomy" | "legacy-profile" | "empty";
-}
 
 export interface ProposalListResult {
   proposals: LearningProposalRecord[];
@@ -321,6 +242,36 @@ export interface ProposalListResult {
 
 export interface ProposalStatusResult {
   proposal: LearningProposalRecord;
+}
+
+export interface RoutineListResult {
+  routines: RoutineDefinition[];
+}
+
+export interface RoutineDetailResult {
+  routine: RoutineDefinition | null;
+}
+
+export interface RoutineMutationResult {
+  routine: RoutineDefinition;
+}
+
+export interface RoutineTemplateSummary {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface RoutineTemplatesListResult {
+  templates: RoutineTemplateSummary[];
+}
+
+export interface RoutineRunsListResult {
+  runs: RoutineRunRecord[];
+}
+
+export interface RoutineArtifactsListResult {
+  artifacts: RoutineArtifactRecord[];
 }
 
 export interface ChatSessionSummary {
@@ -400,31 +351,6 @@ export const granolaConfigureInput = z.object({
 });
 
 export type GranolaConfigureRpcInput = z.output<typeof granolaConfigureInput>;
-
-export const scheduledConnectorInput = z.object({
-  connector: z.enum(["granola", "slack"]),
-});
-
-export type ScheduledConnectorRpcInput = z.output<typeof scheduledConnectorInput> & {
-  connector: ScheduledConnectorName;
-};
-
-export const connectorSchedulePresetInput = scheduledConnectorInput.extend({
-  presetId: z.string().min(1),
-  enabled: z.boolean().optional(),
-});
-
-export type ConnectorSchedulePresetRpcInput = z.output<typeof connectorSchedulePresetInput> & {
-  connector: ScheduledConnectorName;
-};
-
-export const connectorScheduleEnabledInput = scheduledConnectorInput.extend({
-  enabled: z.boolean(),
-});
-
-export type ConnectorScheduleEnabledRpcInput = z.output<typeof connectorScheduleEnabledInput> & {
-  connector: ScheduledConnectorName;
-};
 
 export const connectorRunInput = z.object({
   connector: z.enum(["granola", "notion", "slack"]),
@@ -664,45 +590,11 @@ export type WikiActionAddRpcInput = z.output<typeof wikiActionAddInput> & {
   owner: WikiActionOwner;
 };
 
-const dayInput = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-
-export const dailyTodoRunsListInput = z.object({
-  day: dayInput.optional(),
-  limit: z.number().int().min(1).max(100).default(20),
-});
-
-export type DailyTodoRunsListRpcInput = z.output<typeof dailyTodoRunsListInput>;
-
-export const dailyTodoCandidateListInput = z.object({
-  day: dayInput.optional(),
-  status: z.enum(["all", "confirmed", "needs_review", "rejected"]).default("all"),
-  publication: z.enum(["pending", "published", "all"]).default("pending"),
-  source: z.enum(["all", "slack", "granola", "notion", "wiki"]).default("all"),
-  limit: z.number().int().min(1).max(200).default(100),
-});
-
-export type DailyTodoCandidateListRpcInput = z.output<typeof dailyTodoCandidateListInput> & {
-  status: TodoCandidateStatus | "all";
-  source: ExtractionSourceType | "all";
-};
-
-export const dailyTodoCandidateAcceptInput = z.object({
+export const wikiActionDeleteInput = z.object({
   id: z.string().min(1),
-  owner: z.enum(["mine", "theirs"]).optional(),
-  actionText: z.string().trim().min(1).max(1000).optional(),
-  context: z.string().max(4000).optional(),
 });
 
-export type DailyTodoCandidateAcceptRpcInput = z.output<typeof dailyTodoCandidateAcceptInput> & {
-  owner?: WikiActionOwner;
-};
-
-export const dailyTodoCandidateRejectInput = z.object({
-  id: z.string().min(1),
-  reason: z.string().trim().max(1000).optional(),
-});
-
-export type DailyTodoCandidateRejectRpcInput = z.output<typeof dailyTodoCandidateRejectInput>;
+export type WikiActionDeleteRpcInput = z.output<typeof wikiActionDeleteInput>;
 
 export const activityListInput = z.object({
   limit: z.number().int().min(1).max(200).default(50),
@@ -749,56 +641,44 @@ export type ActivityGetRpcInput = z.output<typeof activityGetInput> & {
   resultFilters?: IngestActivityResultFilter[];
 };
 
-const ingestPatternRuleInput = z.object({
-  value: z.string().trim().min(1),
-  match: z.enum(["literal", "regex"]).optional(),
-  flags: z.string().trim().min(1).optional(),
-  reason: z.string().trim().min(1).optional(),
+export const taxonomyReviewListInput = z.object({
+  source: z.enum(["all", "granola", "slack", "notion"]).default("all"),
+  limit: z.number().int().min(1).max(200).default(50),
 });
 
-export const ingestTaxonomyProjectAliasInput = z.object({
-  label: z.string().trim().min(1),
-  aliases: z.array(z.string().trim().min(1)).min(1),
-  propose: z.boolean().default(false),
-  reason: z.string().trim().min(1).optional(),
+export type TaxonomyReviewListRpcInput = z.output<typeof taxonomyReviewListInput>;
+
+export interface TaxonomyReviewListResult {
+  items: ReviewQueueItem[];
+}
+
+export const taxonomyReviewCorrectInput = z.object({
+  dedupeKey: z.string().min(1),
+  source: z.string().min(1),
+  targetSessionId: z.string().min(1),
+  targetEventId: z.number().int(),
+  rawPath: z.string().min(1),
+  title: z.string().nullable().optional(),
+  projectPaths: z.array(z.string()).default([]),
+  reviewReason: z.string().optional(),
+  verdict: z.enum(["confirm", "wrong_project", "unrecognized_project", "noise", "is_me", "not_me"]),
+  projectLabel: z.string().trim().min(1).optional(),
+  aliases: z.array(z.string().trim().min(1)).optional(),
+  selfName: z.string().trim().min(1).optional(),
+  ignorePattern: z.string().trim().min(1).optional(),
 });
 
-export type IngestTaxonomyProjectAliasRpcInput = z.output<typeof ingestTaxonomyProjectAliasInput>;
+export type TaxonomyReviewCorrectRpcInput = z.output<typeof taxonomyReviewCorrectInput>;
 
-export const ingestTaxonomySelfNameInput = z.object({
-  name: z.string().trim().min(1),
-  propose: z.boolean().default(false),
-  reason: z.string().trim().min(1).optional(),
-});
-
-export type IngestTaxonomySelfNameRpcInput = z.output<typeof ingestTaxonomySelfNameInput>;
-
-export const ingestTaxonomySlackPatternInput = z.object({
-  field: z.enum([
-    "materialPatterns",
-    "ignoredLogPatterns",
-    "transientCheckPatterns",
-    "routineCoordinationPatterns",
-    "statusOnlyPatterns",
-  ]),
-  rule: ingestPatternRuleInput,
-  propose: z.boolean().default(false),
-  reason: z.string().trim().min(1).optional(),
-});
-
-export type IngestTaxonomySlackPatternRpcInput = z.output<
-  typeof ingestTaxonomySlackPatternInput
-> & {
-  field: IngestSlackPatternField;
-  rule: IngestPatternRule;
-};
-
-export const ingestTaxonomyProposalApplyInput = z.object({
-  id: z.string().min(1),
-  reason: z.string().trim().min(1).optional(),
-});
-
-export type IngestTaxonomyProposalApplyRpcInput = z.output<typeof ingestTaxonomyProposalApplyInput>;
+export interface TaxonomyReviewCorrectResult {
+  correction: ClassificationCorrection;
+  /** True when the verdict mapped to a taxonomy operation that was applied directly. */
+  applied: boolean;
+  /** Human-readable description of what was applied (null for feedback-only verdicts). */
+  appliedSummary: string | null;
+  /** Whether the taxonomy file actually changed (false when the rule already existed). */
+  changed: boolean;
+}
 
 export const proposalListInput = z.object({
   status: z
@@ -828,7 +708,119 @@ export type ProposalActionRpcInput = z.output<typeof proposalActionInput>;
 
 const jsonObjectInput = z.record(z.string(), z.any()).default({});
 
-const scheduleTriggerInput = z.discriminatedUnion("type", [
+export const routineListInput = z.object({
+  status: z.enum(["all", "enabled", "disabled", "archived"]).default("all"),
+  limit: z.number().int().min(1).max(500).default(100),
+});
+
+export type RoutineListRpcInput = z.output<typeof routineListInput> & {
+  status: RoutineStatus | "all";
+};
+
+export const routineGetInput = z.object({
+  id: z.string().min(1),
+});
+
+export type RoutineGetRpcInput = z.output<typeof routineGetInput>;
+
+export const routineRunInput = routineGetInput.extend({
+  input: jsonObjectInput,
+  provider: z.enum(["openai-codex", "openai-compatible", "anthropic-claude"]).optional(),
+  model: z.string().min(1).optional(),
+  reasoningEffort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
+});
+
+export type RoutineRunRpcInput = z.output<typeof routineRunInput> & {
+  input: JsonObject;
+};
+
+export const retrievalIndexRefreshInput = z.object({
+  source: z.enum(["all", "granola", "notion", "slack"]).default("all"),
+  includeRaw: z.boolean().default(true),
+});
+
+export type RetrievalIndexRefreshRpcInput = z.output<typeof retrievalIndexRefreshInput> & {
+  source: WikiSearchIndexSource;
+};
+
+const routinePreRunStepInput = z.object({
+  jobName: z.string().trim().min(1),
+  input: z.record(z.string(), z.any()).default({}),
+});
+
+const routineStatusInput = z.enum(["enabled", "disabled", "archived"]);
+const routineOutputModeInput = z.enum(["required", "optional", "none"]);
+const routineToolProfileInput = z.enum(["read-only", "maintenance", "learning", "dangerous"]);
+const nullableJsonObjectInput = z.record(z.string(), z.any()).nullable();
+
+export const routineCreateInput = z.object({
+  id: z.string().trim().min(1).optional(),
+  name: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  status: routineStatusInput.optional(),
+  prompt: z.string().trim().min(1),
+  inputSchema: z.record(z.string(), z.any()).default({}),
+  defaultInput: nullableJsonObjectInput.optional(),
+  outputSchema: nullableJsonObjectInput.optional(),
+  outputMode: routineOutputModeInput.optional(),
+  toolProfile: routineToolProfileInput.optional(),
+  requiredSkills: z.array(z.string().trim().min(1)).optional(),
+  preRunSteps: z.array(routinePreRunStepInput).optional(),
+  publicationPolicy: z.record(z.string(), z.any()).optional(),
+});
+
+export type RoutineCreateRpcInput = z.output<typeof routineCreateInput>;
+
+export const routineUpdateInput = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1).optional(),
+  description: z.string().trim().min(1).optional(),
+  status: routineStatusInput.optional(),
+  prompt: z.string().trim().min(1).optional(),
+  inputSchema: z.record(z.string(), z.any()).optional(),
+  defaultInput: nullableJsonObjectInput.optional(),
+  outputSchema: nullableJsonObjectInput.optional(),
+  outputMode: routineOutputModeInput.optional(),
+  toolProfile: routineToolProfileInput.optional(),
+  requiredSkills: z.array(z.string().trim().min(1)).optional(),
+  preRunSteps: z.array(routinePreRunStepInput).optional(),
+  publicationPolicy: z.record(z.string(), z.any()).optional(),
+});
+
+export type RoutineUpdateRpcInput = z.output<typeof routineUpdateInput>;
+
+export const routineSetStatusInput = routineGetInput.extend({
+  status: routineStatusInput,
+});
+
+export type RoutineSetStatusRpcInput = z.output<typeof routineSetStatusInput>;
+
+export const routineDeleteInput = routineGetInput;
+
+export type RoutineDeleteRpcInput = z.output<typeof routineDeleteInput>;
+
+export const routineTemplateCreateInput = z.object({
+  key: z.string().trim().min(1),
+});
+
+export type RoutineTemplateCreateRpcInput = z.output<typeof routineTemplateCreateInput>;
+
+export const routineRunsListInput = z.object({
+  routineId: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});
+
+export type RoutineRunsListRpcInput = z.output<typeof routineRunsListInput>;
+
+export const routineArtifactsListInput = z.object({
+  routineId: z.string().min(1).optional(),
+  routineRunId: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});
+
+export type RoutineArtifactsListRpcInput = z.output<typeof routineArtifactsListInput>;
+
+const routineTriggerCadenceInput = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("interval"),
     seconds: z.number().int().min(1),
@@ -839,39 +831,44 @@ const scheduleTriggerInput = z.discriminatedUnion("type", [
   }),
 ]);
 
-export const scheduleCreateInput = z.object({
-  name: z.string().min(1),
-  jobName: z.string().min(1),
-  input: jsonObjectInput,
-  trigger: scheduleTriggerInput,
+export const routineTriggerListInput = z.object({
+  routineId: z.string().min(1),
+});
+
+export type RoutineTriggerListRpcInput = z.output<typeof routineTriggerListInput>;
+
+export const routineTriggerCreateInput = z.object({
+  routineId: z.string().min(1),
+  name: z.string().min(1).optional(),
+  input: jsonObjectInput.optional(),
+  trigger: routineTriggerCadenceInput,
   enabled: z.boolean().default(true),
 });
 
-export type ScheduleCreateRpcInput = z.output<typeof scheduleCreateInput> & {
-  input: JsonObject;
-  trigger: JobScheduleTrigger;
+export type RoutineTriggerCreateRpcInput = z.output<typeof routineTriggerCreateInput> & {
+  input?: JsonObject;
+  trigger: RoutineTriggerCadence;
 };
 
-export const scheduleUpdateInput = z.object({
+export const routineTriggerUpdateInput = z.object({
   id: z.string().min(1),
   name: z.string().min(1).optional(),
-  jobName: z.string().min(1).optional(),
   input: jsonObjectInput.optional(),
-  trigger: scheduleTriggerInput.optional(),
+  trigger: routineTriggerCadenceInput.optional(),
   enabled: z.boolean().optional(),
 });
 
-export type ScheduleUpdateRpcInput = z.output<typeof scheduleUpdateInput> & {
+export type RoutineTriggerUpdateRpcInput = z.output<typeof routineTriggerUpdateInput> & {
   input?: JsonObject;
-  trigger?: JobScheduleTrigger;
+  trigger?: RoutineTriggerCadence;
 };
 
-export const scheduleIdInput = z.object({
+export const routineTriggerIdInput = z.object({
   id: z.string().min(1),
 });
 
-export type ScheduleDeleteRpcInput = z.output<typeof scheduleIdInput>;
-export type ScheduleRunNowRpcInput = z.output<typeof scheduleIdInput>;
+export type RoutineTriggerDeleteRpcInput = z.output<typeof routineTriggerIdInput>;
+export type RoutineTriggerRunNowRpcInput = z.output<typeof routineTriggerIdInput>;
 
 export interface WebApiServices {
   health(): { ok: true; repoRoot: string };
@@ -896,43 +893,43 @@ export interface WebApiServices {
   listWikiActions(input: WikiActionListRpcInput): Promise<WikiActionListResult>;
   updateWikiAction(input: WikiActionUpdateRpcInput): Promise<WikiActionResult>;
   addWikiAction(input: WikiActionAddRpcInput): Promise<WikiActionResult>;
-  listDailyTodoExtractionRuns(input: DailyTodoRunsListRpcInput): Promise<DailyTodoRunsListResult>;
-  listDailyTodoCandidates(
-    input: DailyTodoCandidateListRpcInput,
-  ): Promise<{ candidates: DailyTodoCandidateSummary[] }>;
-  acceptDailyTodoCandidate(
-    input: DailyTodoCandidateAcceptRpcInput,
-  ): Promise<DailyTodoCandidateResult>;
-  rejectDailyTodoCandidate(
-    input: DailyTodoCandidateRejectRpcInput,
-  ): Promise<DailyTodoCandidateResult>;
+  deleteWikiAction(input: WikiActionDeleteRpcInput): Promise<{ deleted: boolean }>;
   listIngestActivity(input: ActivityListRpcInput): Promise<IngestActivityListResult>;
   getIngestActivity(input: ActivityGetRpcInput): Promise<IngestActivityDetail | null>;
-  getIngestTaxonomy(): Promise<IngestTaxonomyResult>;
-  addIngestTaxonomyProjectAlias(
-    input: IngestTaxonomyProjectAliasRpcInput,
-  ): Promise<IngestTaxonomyApplyResult | { proposal: LearningProposalRecord }>;
-  addIngestTaxonomySelfName(
-    input: IngestTaxonomySelfNameRpcInput,
-  ): Promise<IngestTaxonomyApplyResult | { proposal: LearningProposalRecord }>;
-  addIngestTaxonomySlackPattern(
-    input: IngestTaxonomySlackPatternRpcInput,
-  ): Promise<IngestTaxonomyApplyResult | { proposal: LearningProposalRecord }>;
-  applyIngestTaxonomyProposal(
-    input: IngestTaxonomyProposalApplyRpcInput,
-  ): Promise<IngestTaxonomyProposalApplyResult>;
+  listTaxonomyReview(input: TaxonomyReviewListRpcInput): Promise<TaxonomyReviewListResult>;
+  correctTaxonomyReview(input: TaxonomyReviewCorrectRpcInput): Promise<TaxonomyReviewCorrectResult>;
   listProposals(input: ProposalListRpcInput): Promise<ProposalListResult>;
   getProposal(input: ProposalGetRpcInput): Promise<LearningProposalDetail | null>;
   applyProposal(input: ProposalActionRpcInput): Promise<LearningProposalApplyResult>;
   rejectProposal(input: ProposalActionRpcInput): Promise<ProposalStatusResult>;
   deferProposal(input: ProposalActionRpcInput): Promise<ProposalStatusResult>;
 
+  listRoutines(input: RoutineListRpcInput): Promise<RoutineListResult>;
+  getRoutine(input: RoutineGetRpcInput): Promise<RoutineDetailResult>;
+  createRoutine(input: RoutineCreateRpcInput): Promise<RoutineMutationResult>;
+  updateRoutine(input: RoutineUpdateRpcInput): Promise<RoutineMutationResult>;
+  setRoutineStatus(input: RoutineSetStatusRpcInput): Promise<RoutineMutationResult>;
+  deleteRoutine(input: RoutineDeleteRpcInput): Promise<{ deleted: boolean }>;
+  listRoutineTemplates(): RoutineTemplatesListResult;
+  createRoutineFromTemplate(input: RoutineTemplateCreateRpcInput): Promise<RoutineMutationResult>;
+  runRoutine(input: RoutineRunRpcInput): Promise<JobExecutionResult>;
+  listRoutineRuns(input: RoutineRunsListRpcInput): Promise<RoutineRunsListResult>;
+  listRoutineArtifacts(input: RoutineArtifactsListRpcInput): Promise<RoutineArtifactsListResult>;
+  listRoutineTriggers(
+    input: RoutineTriggerListRpcInput,
+  ): Promise<{ triggers: RoutineTriggerRecord[] }>;
+  createRoutineTrigger(
+    input: RoutineTriggerCreateRpcInput,
+  ): Promise<{ trigger: RoutineTriggerRecord }>;
+  updateRoutineTrigger(
+    input: RoutineTriggerUpdateRpcInput,
+  ): Promise<{ trigger: RoutineTriggerRecord }>;
+  deleteRoutineTrigger(input: RoutineTriggerDeleteRpcInput): Promise<{ deleted: boolean }>;
+  runRoutineTriggerNow(input: RoutineTriggerRunNowRpcInput): Promise<RoutineTriggerRunResult>;
+
   listJobs(): { jobs: JobMetadata[] };
-  listSchedules(): Promise<{ schedules: JobScheduleRecord[] }>;
-  createSchedule(input: ScheduleCreateRpcInput): Promise<JobScheduleRecord>;
-  updateSchedule(input: ScheduleUpdateRpcInput): Promise<JobScheduleRecord>;
-  deleteSchedule(input: ScheduleDeleteRpcInput): Promise<{ deleted: boolean }>;
-  runScheduleNow(input: ScheduleRunNowRpcInput): Promise<JobScheduleRunResult>;
+  retrievalIndexStatus(): Promise<WikiSearchIndexStatus>;
+  refreshRetrievalIndex(input: RetrievalIndexRefreshRpcInput): Promise<RetrievalIndexRefreshResult>;
 
   modelAuthStatus(): Promise<ModelAuthStatus>;
   startModelAuth(input: ModelAuthStartInput): Promise<ModelAuthStartResult>;
@@ -973,14 +970,6 @@ export interface WebApiServices {
   granolaStatus(): Promise<GranolaStatus>;
   configureGranola(input: GranolaConfigureRpcInput): Promise<GranolaStatus>;
   disconnectGranola(): Promise<GranolaStatus>;
-  connectorScheduleStatus(input: ScheduledConnectorRpcInput): Promise<ConnectorScheduleStatus>;
-  applyConnectorSchedulePreset(
-    input: ConnectorSchedulePresetRpcInput,
-  ): Promise<ConnectorScheduleStatus>;
-  setConnectorScheduleEnabled(
-    input: ConnectorScheduleEnabledRpcInput,
-  ): Promise<ConnectorScheduleStatus>;
-  runConnectorScheduleNow(input: ScheduledConnectorRpcInput): Promise<ConnectorScheduleStatus>;
 }
 
 export interface WebApiContext {
@@ -1066,30 +1055,9 @@ export const appRouter = t.router({
       add: t.procedure
         .input(wikiActionAddInput)
         .mutation(({ ctx, input }) => ctx.services.addWikiAction(input as WikiActionAddRpcInput)),
-    }),
-  }),
-  extraction: t.router({
-    dailyTodos: t.router({
-      runs: t.router({
-        list: t.procedure
-          .input(dailyTodoRunsListInput)
-          .query(({ ctx, input }) => ctx.services.listDailyTodoExtractionRuns(input)),
-      }),
-      candidates: t.router({
-        list: t.procedure
-          .input(dailyTodoCandidateListInput)
-          .query(({ ctx, input }) =>
-            ctx.services.listDailyTodoCandidates(input as DailyTodoCandidateListRpcInput),
-          ),
-        accept: t.procedure
-          .input(dailyTodoCandidateAcceptInput)
-          .mutation(({ ctx, input }) =>
-            ctx.services.acceptDailyTodoCandidate(input as DailyTodoCandidateAcceptRpcInput),
-          ),
-        reject: t.procedure
-          .input(dailyTodoCandidateRejectInput)
-          .mutation(({ ctx, input }) => ctx.services.rejectDailyTodoCandidate(input)),
-      }),
+      delete: t.procedure
+        .input(wikiActionDeleteInput)
+        .mutation(({ ctx, input }) => ctx.services.deleteWikiAction(input)),
     }),
   }),
   activity: t.router({
@@ -1102,21 +1070,16 @@ export const appRouter = t.router({
   }),
   ingest: t.router({
     taxonomy: t.router({
-      get: t.procedure.query(({ ctx }) => ctx.services.getIngestTaxonomy()),
-      addProjectAlias: t.procedure
-        .input(ingestTaxonomyProjectAliasInput)
-        .mutation(({ ctx, input }) => ctx.services.addIngestTaxonomyProjectAlias(input)),
-      addSelfName: t.procedure
-        .input(ingestTaxonomySelfNameInput)
-        .mutation(({ ctx, input }) => ctx.services.addIngestTaxonomySelfName(input)),
-      addSlackPattern: t.procedure
-        .input(ingestTaxonomySlackPatternInput)
-        .mutation(({ ctx, input }) =>
-          ctx.services.addIngestTaxonomySlackPattern(input as IngestTaxonomySlackPatternRpcInput),
-        ),
-      applyProposal: t.procedure
-        .input(ingestTaxonomyProposalApplyInput)
-        .mutation(({ ctx, input }) => ctx.services.applyIngestTaxonomyProposal(input)),
+      review: t.router({
+        list: t.procedure
+          .input(taxonomyReviewListInput)
+          .query(({ ctx, input }) => ctx.services.listTaxonomyReview(input)),
+        correct: t.procedure
+          .input(taxonomyReviewCorrectInput)
+          .mutation(({ ctx, input }) =>
+            ctx.services.correctTaxonomyReview(input as TaxonomyReviewCorrectRpcInput),
+          ),
+      }),
     }),
   }),
   proposals: t.router({
@@ -1136,23 +1099,78 @@ export const appRouter = t.router({
       .input(proposalActionInput)
       .mutation(({ ctx, input }) => ctx.services.deferProposal(input)),
   }),
+  routines: t.router({
+    list: t.procedure
+      .input(routineListInput)
+      .query(({ ctx, input }) => ctx.services.listRoutines(input as RoutineListRpcInput)),
+    get: t.procedure
+      .input(routineGetInput)
+      .query(({ ctx, input }) => ctx.services.getRoutine(input)),
+    create: t.procedure
+      .input(routineCreateInput)
+      .mutation(({ ctx, input }) => ctx.services.createRoutine(input as RoutineCreateRpcInput)),
+    update: t.procedure
+      .input(routineUpdateInput)
+      .mutation(({ ctx, input }) => ctx.services.updateRoutine(input as RoutineUpdateRpcInput)),
+    setStatus: t.procedure
+      .input(routineSetStatusInput)
+      .mutation(({ ctx, input }) => ctx.services.setRoutineStatus(input)),
+    delete: t.procedure
+      .input(routineDeleteInput)
+      .mutation(({ ctx, input }) => ctx.services.deleteRoutine(input)),
+    templates: t.router({
+      list: t.procedure.query(({ ctx }) => ctx.services.listRoutineTemplates()),
+      create: t.procedure
+        .input(routineTemplateCreateInput)
+        .mutation(({ ctx, input }) => ctx.services.createRoutineFromTemplate(input)),
+    }),
+    run: t.procedure
+      .input(routineRunInput)
+      .mutation(({ ctx, input }) => ctx.services.runRoutine(input as RoutineRunRpcInput)),
+    runs: t.router({
+      list: t.procedure
+        .input(routineRunsListInput)
+        .query(({ ctx, input }) => ctx.services.listRoutineRuns(input)),
+    }),
+    artifacts: t.router({
+      list: t.procedure
+        .input(routineArtifactsListInput)
+        .query(({ ctx, input }) => ctx.services.listRoutineArtifacts(input)),
+    }),
+    triggers: t.router({
+      list: t.procedure
+        .input(routineTriggerListInput)
+        .query(({ ctx, input }) => ctx.services.listRoutineTriggers(input)),
+      create: t.procedure
+        .input(routineTriggerCreateInput)
+        .mutation(({ ctx, input }) =>
+          ctx.services.createRoutineTrigger(input as RoutineTriggerCreateRpcInput),
+        ),
+      update: t.procedure
+        .input(routineTriggerUpdateInput)
+        .mutation(({ ctx, input }) =>
+          ctx.services.updateRoutineTrigger(input as RoutineTriggerUpdateRpcInput),
+        ),
+      delete: t.procedure
+        .input(routineTriggerIdInput)
+        .mutation(({ ctx, input }) => ctx.services.deleteRoutineTrigger(input)),
+      runNow: t.procedure
+        .input(routineTriggerIdInput)
+        .mutation(({ ctx, input }) => ctx.services.runRoutineTriggerNow(input)),
+    }),
+  }),
   jobs: t.router({
     list: t.procedure.query(({ ctx }) => ctx.services.listJobs()),
   }),
-  schedules: t.router({
-    list: t.procedure.query(({ ctx }) => ctx.services.listSchedules()),
-    create: t.procedure
-      .input(scheduleCreateInput)
-      .mutation(({ ctx, input }) => ctx.services.createSchedule(input as ScheduleCreateRpcInput)),
-    update: t.procedure
-      .input(scheduleUpdateInput)
-      .mutation(({ ctx, input }) => ctx.services.updateSchedule(input as ScheduleUpdateRpcInput)),
-    delete: t.procedure
-      .input(scheduleIdInput)
-      .mutation(({ ctx, input }) => ctx.services.deleteSchedule(input)),
-    runNow: t.procedure
-      .input(scheduleIdInput)
-      .mutation(({ ctx, input }) => ctx.services.runScheduleNow(input)),
+  system: t.router({
+    retrievalIndex: t.router({
+      status: t.procedure.query(({ ctx }) => ctx.services.retrievalIndexStatus()),
+      refresh: t.procedure
+        .input(retrievalIndexRefreshInput)
+        .mutation(({ ctx, input }) =>
+          ctx.services.refreshRetrievalIndex(input as RetrievalIndexRefreshRpcInput),
+        ),
+    }),
   }),
   auth: t.router({
     models: t.router({
@@ -1244,28 +1262,6 @@ export const appRouter = t.router({
         .input(granolaConfigureInput)
         .mutation(({ ctx, input }) => ctx.services.configureGranola(input)),
       disconnect: t.procedure.mutation(({ ctx }) => ctx.services.disconnectGranola()),
-    }),
-    schedules: t.router({
-      status: t.procedure
-        .input(scheduledConnectorInput)
-        .query(({ ctx, input }) =>
-          ctx.services.connectorScheduleStatus(input as ScheduledConnectorRpcInput),
-        ),
-      applyPreset: t.procedure
-        .input(connectorSchedulePresetInput)
-        .mutation(({ ctx, input }) =>
-          ctx.services.applyConnectorSchedulePreset(input as ConnectorSchedulePresetRpcInput),
-        ),
-      setEnabled: t.procedure
-        .input(connectorScheduleEnabledInput)
-        .mutation(({ ctx, input }) =>
-          ctx.services.setConnectorScheduleEnabled(input as ConnectorScheduleEnabledRpcInput),
-        ),
-      runNow: t.procedure
-        .input(scheduledConnectorInput)
-        .mutation(({ ctx, input }) =>
-          ctx.services.runConnectorScheduleNow(input as ScheduledConnectorRpcInput),
-        ),
     }),
   }),
 });

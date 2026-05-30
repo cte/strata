@@ -400,7 +400,7 @@ export const PromptInputActionAddAttachments = ({
 
   return (
     <DropdownMenuItem
-      className={cn("text-[13px] [&>svg]:!size-3.5", className)}
+      className={cn("text-sm [&>svg]:!size-3.5", className)}
       {...props}
       onSelect={handleSelect}
     >
@@ -448,7 +448,7 @@ export const PromptInputActionAddScreenshot = ({
 
   return (
     <DropdownMenuItem
-      className={cn("text-[13px] [&>svg]:!size-3.5", className)}
+      className={cn("text-sm [&>svg]:!size-3.5", className)}
       {...props}
       onSelect={handleSelect}
     >
@@ -1112,7 +1112,7 @@ export const PromptInputActionMenuContent = ({
   className,
   ...props
 }: PromptInputActionMenuContentProps) => (
-  <DropdownMenuContent align="start" className={cn("text-[13px]", className)} {...props} />
+  <DropdownMenuContent align="start" className={cn("text-sm", className)} {...props} />
 );
 
 export type PromptInputActionMenuItemProps = ComponentProps<typeof DropdownMenuItem>;
@@ -1120,7 +1120,7 @@ export const PromptInputActionMenuItem = ({
   className,
   ...props
 }: PromptInputActionMenuItemProps) => (
-  <DropdownMenuItem className={cn("text-[13px] [&>svg]:!size-3.5", className)} {...props} />
+  <DropdownMenuItem className={cn("text-sm [&>svg]:!size-3.5", className)} {...props} />
 );
 
 // Note: Actions that perform side-effects (like opening a file dialog)
@@ -1259,10 +1259,7 @@ export type PromptInputTabLabelProps = HTMLAttributes<HTMLHeadingElement>;
 export const PromptInputTabLabel = ({ className, ...props }: PromptInputTabLabelProps) => (
   // Content provided via children in props
   // oxlint-disable-next-line eslint-plugin-jsx-a11y(heading-has-content)
-  <h3
-    className={cn("mb-2 px-3 font-medium text-[11.5px] text-muted-foreground", className)}
-    {...props}
-  />
+  <h3 className={cn("mb-2 px-3 font-medium text-xs text-muted-foreground", className)} {...props} />
 );
 
 export type PromptInputTabBodyProps = HTMLAttributes<HTMLDivElement>;
@@ -1275,7 +1272,7 @@ export type PromptInputTabItemProps = HTMLAttributes<HTMLDivElement>;
 
 export const PromptInputTabItem = ({ className, ...props }: PromptInputTabItemProps) => (
   <div
-    className={cn("flex items-center gap-2 px-3 py-2 text-[11.5px] hover:bg-accent", className)}
+    className={cn("flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent", className)}
     {...props}
   />
 );

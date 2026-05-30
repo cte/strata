@@ -560,7 +560,7 @@ describe("runAgentLoop", () => {
     }
   });
 
-  test("continueSessionId seeds prior turns into the model context", async () => {
+  test("continueSessionId appends the next user turn before model continuation", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
     try {
       const firstModel = new SequenceModelAdapter([
@@ -580,23 +580,169 @@ describe("runAgentLoop", () => {
           toolCalls: [],
         },
       ]);
-      const second = await runAgentLoop({
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
         question: "What did you just say?",
         model: secondModel,
         repoRoot,
         continueSessionId: first.sessionId,
-      });
+      })) {
+        events.push(event);
+      }
 
-      expect(second.sessionId).toBe(first.sessionId);
+      const completed = events.find((event) => event.type === "agent.completed");
+      if (completed?.type !== "agent.completed") {
+        throw new Error("missing completion event");
+      }
+      expect(completed.result.sessionId).toBe(first.sessionId);
 
-      // The seed for the second run should include both the prior user
-      // question and the prior assistant reply, plus the new user turn.
       const seeded = secondModel.requests[0]?.messages ?? [];
       const nonSystem = seeded.filter((m) => m.role !== "system");
       expect(nonSystem.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
       expect(nonSystem[0]?.content).toBe("Who are you?");
       expect(nonSystem[1]?.content).toBe("Hi, I'm Strata.");
       expect(nonSystem[2]?.content).toBe("What did you just say?");
+      expect(events).toContainEqual({ type: "message.user", content: "What did you just say?" });
+
+      const store = await SessionStore.open(repoRoot);
+      try {
+        expect(
+          store
+            .listMessages(first.sessionId)
+            .filter((message) => message.role !== "system")
+            .map((message) => message.role),
+        ).toEqual(["user", "assistant", "user", "assistant"]);
+      } finally {
+        store.close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("continueSessionId reuses an already-persisted trailing user turn", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-"));
+    try {
+      const firstModel = new SequenceModelAdapter([
+        { content: "Hi, I'm Strata.", finishReason: "stop", toolCalls: [] },
+      ]);
+      const first = await runAgentLoop({
+        question: "Who are you?",
+        model: firstModel,
+        repoRoot,
+      });
+      const store = await SessionStore.open(repoRoot);
+      try {
+        await store.recordUserMessage({ sessionId: first.sessionId, content: "Acknowledged." });
+      } finally {
+        store.close();
+      }
+
+      const secondModel = new SequenceModelAdapter([
+        { content: "ok", finishReason: "stop", toolCalls: [] },
+      ]);
+      await runAgentLoop({
+        question: "Acknowledged.",
+        model: secondModel,
+        repoRoot,
+        continueSessionId: first.sessionId,
+      });
+
+      const seeded = secondModel.requests[0]?.messages ?? [];
+      const nonSystem = seeded.filter((m) => m.role !== "system");
+      expect(nonSystem.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+      expect(nonSystem[2]?.content).toBe("Acknowledged.");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("continueSessionId repairs an incomplete prior tool turn before model continuation", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-dangling-tool-"));
+    let sessionId = "";
+    try {
+      const store = await SessionStore.open(repoRoot);
+      try {
+        const session = await store.createSession({
+          kind: "query",
+          title: "dangling tool",
+          model: "sequence-test",
+        });
+        sessionId = session.id;
+        await store.recordUserMessage({ sessionId, content: "Start." });
+        await store.recordAssistantMessage({
+          sessionId,
+          iteration: 1,
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "call_missing",
+              name: "shell.run",
+              argumentsText: JSON.stringify({ command: "echo never-finished" }),
+            },
+          ],
+        });
+        await store.recordToolStart({
+          sessionId,
+          toolCallId: "call_missing",
+          toolName: "shell.run",
+          argumentsText: JSON.stringify({ command: "echo never-finished" }),
+        });
+        await store.recordUserMessage({ sessionId, content: "Continue" });
+      } finally {
+        store.close();
+      }
+
+      const model = new SequenceModelAdapter([
+        { content: "Recovered.", finishReason: "stop", toolCalls: [] },
+      ]);
+      const result = await runAgentLoop({
+        question: "Continue",
+        model,
+        repoRoot,
+        continueSessionId: sessionId,
+      });
+
+      expect(result.status).toBe("completed");
+      const nonSystem = (model.requests[0]?.messages ?? []).filter((m) => m.role !== "system");
+      expect(nonSystem.map((m) => m.role)).toEqual(["user", "assistant", "tool", "user"]);
+      expect(nonSystem[2]).toMatchObject({
+        role: "tool",
+        toolCallId: "call_missing",
+      });
+      expect(nonSystem[2]?.content).toContain("missing_tool_result");
+      expect(nonSystem[3]?.content).toBe("Continue");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("continueSessionId rejects prior context ending in assistant when no new prompt is provided", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-continue-assistant-"));
+    try {
+      const firstModel = new SequenceModelAdapter([
+        { content: "Hi, I'm Strata.", finishReason: "stop", toolCalls: [] },
+      ]);
+      const first = await runAgentLoop({
+        question: "Who are you?",
+        model: firstModel,
+        repoRoot,
+      });
+      expect(first.status).toBe("completed");
+
+      const secondModel = new SequenceModelAdapter([
+        { content: "unreachable", finishReason: "stop", toolCalls: [] },
+      ]);
+      const second = await runAgentLoop({
+        question: "",
+        model: secondModel,
+        repoRoot,
+        continueSessionId: first.sessionId,
+      });
+
+      expect(second.status).toBe("failed");
+      expect(secondModel.requests).toHaveLength(0);
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

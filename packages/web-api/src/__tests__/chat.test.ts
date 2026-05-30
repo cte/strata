@@ -101,6 +101,36 @@ describe("chat service", () => {
     expect(service.getActiveRunForSession("session-1")).toBeUndefined();
   });
 
+  test("queued messages are persisted before Pi-style continuation", async () => {
+    const repoRoot = testRepoRoot();
+    const seenConfigs: AgentRunConfig[] = [];
+    const service = createChatService({
+      ...baseOptions(),
+      repoRoot,
+      createRunId: sequenceIds("run-1", "run-2"),
+      runAgentLoopEvents: async function* (config) {
+        seenConfigs.push(config);
+        yield sessionStarted("session-1");
+        yield completed("session-1");
+      },
+    });
+
+    const first = await service.startRun({ message: "first" });
+    await service.addQueuedMessage({
+      id: "queued-1",
+      sessionId: "session-1",
+      message: "follow-up",
+      attachments: [],
+    });
+    await collect(first.events);
+
+    await waitUntil(() => seenConfigs.length === 2);
+    expect(seenConfigs[0]).toMatchObject({ question: "first" });
+    expect(seenConfigs[0]?.continueSessionId).toBeUndefined();
+    expect(seenConfigs[1]?.question).toBe("follow-up");
+    expect(seenConfigs[1]?.continueSessionId).toBe("session-1");
+  });
+
   test("cleans up active state after agent-loop failure", async () => {
     const service = createChatService({
       ...baseOptions(),

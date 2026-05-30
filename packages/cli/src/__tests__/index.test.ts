@@ -3,8 +3,10 @@ import { spawnSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listWikiActions, SessionStore, writeLearningProposal } from "@strata/core";
+import { SessionStore, writeLearningProposal } from "@strata/core";
 import { frontmatter } from "@strata/ingest/common";
+import { RoutineStore } from "@strata/routines";
+import { parseQueryOptions, parseTuiOptions } from "../index.js";
 
 const cliPath = path.resolve(import.meta.dir, "..", "index.ts");
 
@@ -69,7 +71,7 @@ describe("strata tui options", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("--continue, -c");
-      expect(result.stdout).toContain("--resume, -r");
+      expect(result.stdout).toContain("--resume, -r [id]");
       expect(result.stdout).toContain("--session <id>");
       expect(result.stdout).toContain("--fork <id>");
     });
@@ -88,9 +90,19 @@ describe("strata tui options", () => {
     });
   });
 
+  test("parses -r with an id as session resume shorthand", () => {
+    expect(parseTuiOptions(["-r", "abc123"])).toEqual({
+      initialSession: { type: "session", selector: "abc123" },
+    });
+  });
+
+  test("parses bare -r as picker resume", () => {
+    expect(parseTuiOptions(["-r"])).toEqual({ initialSession: { type: "resume" } });
+  });
+
   test("rejects fork combined with other resume modes", async () => {
     await withTempRepo(async (repoRoot) => {
-      const result = spawnSync("bun", [cliPath, "tui", "--fork", "abc", "--continue"], {
+      const result = spawnSync("bun", [cliPath, "tui", "--fork", "abc", "-r", "def"], {
         cwd: repoRoot,
         encoding: "utf8",
         env: process.env,
@@ -102,182 +114,37 @@ describe("strata tui options", () => {
   });
 });
 
-describe("strata extract daily-todos", () => {
-  test("dry-runs one day and skips completed backfill days", async () => {
-    await withTempRepo(async (repoRoot) => {
-      const rawDir = path.join(repoRoot, "wiki/raw/slack");
-      await mkdir(rawDir, { recursive: true });
-      await writeFile(
-        path.join(rawDir, "2026-05-09-launch.md"),
-        rawCliSlackSnapshot("2026-05-09", "Launch thread"),
-        "utf8",
-      );
-      await writeFile(
-        path.join(rawDir, "2026-05-10-retro.md"),
-        rawCliSlackSnapshot("2026-05-10", "Retro thread"),
-        "utf8",
-      );
-
-      const single = spawnSync(
-        "bun",
-        [cliPath, "extract", "daily-todos", "--date", "2026-05-09", "--dry-run", "--json"],
-        {
-          cwd: repoRoot,
-          encoding: "utf8",
-          env: process.env,
-        },
-      );
-      expect(single.status).toBe(0);
-      expect(JSON.parse(single.stdout)).toMatchObject({
-        extractionName: "daily.todo",
-        day: "2026-05-09",
-        candidateCount: 2,
-      });
-
-      const backfill = spawnSync(
-        "bun",
-        [
-          cliPath,
-          "extract",
-          "daily-todos",
-          "backfill",
-          "--from",
-          "2026-05-09",
-          "--to",
-          "2026-05-10",
-          "--dry-run",
-          "--json",
-        ],
-        {
-          cwd: repoRoot,
-          encoding: "utf8",
-          env: process.env,
-        },
-      );
-      expect(backfill.status).toBe(0);
-      expect(JSON.parse(backfill.stdout)).toMatchObject({
-        extractionName: "daily.todo",
-        processed: 1,
-        skipped: 1,
-      });
-
-      const repeated = spawnSync(
-        "bun",
-        [
-          cliPath,
-          "extract",
-          "daily-todos",
-          "backfill",
-          "--from",
-          "2026-05-09",
-          "--to",
-          "2026-05-10",
-          "--dry-run",
-          "--json",
-        ],
-        {
-          cwd: repoRoot,
-          encoding: "utf8",
-          env: process.env,
-        },
-      );
-      expect(repeated.status).toBe(0);
-      expect(JSON.parse(repeated.stdout)).toMatchObject({
-        extractionName: "daily.todo",
-        processed: 0,
-        skipped: 2,
-      });
-
-      const apply = spawnSync(
-        "bun",
-        [
-          cliPath,
-          "extract",
-          "daily-todos",
-          "backfill",
-          "--from",
-          "2026-05-09",
-          "--to",
-          "2026-05-10",
-          "--apply",
-          "--json",
-        ],
-        {
-          cwd: repoRoot,
-          encoding: "utf8",
-          env: process.env,
-        },
-      );
-      expect(apply.status).toBe(0);
-      expect(JSON.parse(apply.stdout)).toMatchObject({
-        extractionName: "daily.todo",
-        dryRun: false,
-        processed: 2,
-        skipped: 0,
-        publishedCount: 2,
-      });
-      const actions = await listWikiActions(repoRoot, { owner: "all", status: "all" });
-      expect(actions).toHaveLength(2);
+describe("strata query options", () => {
+  test("accepts Anthropic as a shared model provider", () => {
+    expect(
+      parseQueryOptions([
+        "--provider",
+        "anthropic-claude",
+        "--model",
+        "claude-opus-4-8",
+        "--thinking",
+        "xhigh",
+        "say",
+        "ok",
+      ]),
+    ).toEqual({
+      provider: "anthropic-claude",
+      model: "claude-opus-4-8",
+      reasoningEffort: "xhigh",
+      question: "say ok",
     });
   });
 
-  test("requires --verify before accepting model options", async () => {
-    await withTempRepo(async (repoRoot) => {
-      const result = spawnSync(
-        "bun",
-        [
-          cliPath,
-          "extract",
-          "daily-todos",
-          "--date",
-          "2026-05-09",
-          "--dry-run",
-          "--model",
-          "gpt-test",
-        ],
-        {
-          cwd: repoRoot,
-          encoding: "utf8",
-          env: process.env,
-        },
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("--provider and --model require --verify");
-    });
+  test("uses the shared provider list in validation errors", () => {
+    expect(() => parseQueryOptions(["--provider", "other", "say ok"])).toThrow(
+      "--provider must be openai-codex, openai-compatible, anthropic-claude",
+    );
   });
 
-  test("applies confirmed daily todos to wiki action ledgers", async () => {
-    await withTempRepo(async (repoRoot) => {
-      const rawDir = path.join(repoRoot, "wiki/raw/slack");
-      await mkdir(rawDir, { recursive: true });
-      await writeFile(
-        path.join(rawDir, "2026-05-09-launch.md"),
-        rawCliSlackSnapshot("2026-05-09", "Launch thread"),
-        "utf8",
-      );
-
-      const result = spawnSync(
-        "bun",
-        [cliPath, "extract", "daily-todos", "--date", "2026-05-09", "--apply", "--json"],
-        {
-          cwd: repoRoot,
-          encoding: "utf8",
-          env: process.env,
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        extractionName: "daily.todo",
-        dryRun: false,
-        publishedCount: 1,
-      });
-      const actions = await listWikiActions(repoRoot, { owner: "all", status: "all" });
-      expect(actions.map((item) => [item.owner, item.title])).toEqual([
-        ["theirs", "Ada Lovelace will update the billing copy by Friday."],
-      ]);
-    });
+  test("validates query thinking levels from the shared level list", () => {
+    expect(() => parseQueryOptions(["--thinking", "nope", "say ok"])).toThrow(
+      "--thinking must be off, minimal, low, medium, high, xhigh",
+    );
   });
 });
 
@@ -370,6 +237,132 @@ describe("strata proposals", () => {
       expect(
         await readFile(path.join(repoRoot, "wiki/projects/cli-proposals.md"), "utf8"),
       ).toContain("- Reviewed through the CLI.");
+    });
+  });
+});
+
+describe("strata routines", () => {
+  test("imports, lists, shows, and inspects routine runs and artifacts", async () => {
+    await withTempRepo(async (repoRoot) => {
+      const routinePath = path.join(repoRoot, "routine.json");
+      await writeFile(
+        routinePath,
+        JSON.stringify(
+          {
+            id: "routine_cli_smoke",
+            name: "CLI smoke routine",
+            description: "Exercise routine CLI surfaces.",
+            prompt: "Summarize input.",
+            inputSchema: { type: "object" },
+            outputMode: "none",
+            outputSchema: null,
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const created = spawnSync("bun", [cliPath, "routines", "create", "--file", routinePath], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(created.status).toBe(0);
+      expect(created.stdout).toContain("created routine routine_cli_smoke");
+
+      const listed = spawnSync("bun", [cliPath, "routines", "list", "--json"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(listed.status).toBe(0);
+      expect(JSON.parse(listed.stdout)).toMatchObject({
+        routines: [expect.objectContaining({ id: "routine_cli_smoke", status: "enabled" })],
+      });
+
+      const shown = spawnSync("bun", [cliPath, "routines", "show", "routine_cli_smoke", "--json"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(shown.status).toBe(0);
+      expect(JSON.parse(shown.stdout)).toMatchObject({
+        routine: {
+          id: "routine_cli_smoke",
+          name: "CLI smoke routine",
+          outputMode: "none",
+        },
+      });
+
+      let jobSessionId = "";
+      let agentSessionId = "";
+      const sessionStore = await SessionStore.open(repoRoot);
+      try {
+        jobSessionId = (await sessionStore.createSession({ kind: "job", title: "Routine CLI job" }))
+          .id;
+        agentSessionId = (
+          await sessionStore.createSession({
+            kind: "query",
+            title: "Routine CLI agent",
+          })
+        ).id;
+      } finally {
+        sessionStore.close();
+      }
+
+      const store = await RoutineStore.open({ repoRoot });
+      try {
+        const run = store.createRoutineRun({
+          routineId: "routine_cli_smoke",
+          routineVersion: 1,
+          input: {},
+          status: "completed",
+          taskStatus: "succeeded",
+          jobSessionId,
+          agentSessionId,
+        });
+        store.createRoutineArtifact({
+          routineRunId: run.id,
+          routineId: "routine_cli_smoke",
+          schemaName: "routine_cli_smoke.output",
+          schemaVersion: "1",
+          payload: { ok: true },
+          taskStatus: "succeeded",
+          sessionId: agentSessionId,
+        });
+      } finally {
+        store.close();
+      }
+
+      const runs = spawnSync("bun", [cliPath, "routines", "runs", "routine_cli_smoke", "--json"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(runs.status).toBe(0);
+      expect(JSON.parse(runs.stdout)).toMatchObject({
+        runs: [expect.objectContaining({ routineId: "routine_cli_smoke" })],
+      });
+
+      const artifacts = spawnSync(
+        "bun",
+        [cliPath, "routines", "artifacts", "routine_cli_smoke", "--json"],
+        {
+          cwd: repoRoot,
+          encoding: "utf8",
+          env: process.env,
+        },
+      );
+      expect(artifacts.status).toBe(0);
+      expect(JSON.parse(artifacts.stdout)).toMatchObject({
+        artifacts: [
+          expect.objectContaining({
+            routineId: "routine_cli_smoke",
+            payload: { ok: true },
+          }),
+        ],
+      });
     });
   });
 });
@@ -714,27 +707,3 @@ We agreed to test pricing with a small cohort.
     });
   });
 });
-
-function rawCliSlackSnapshot(date: string, title: string): string {
-  return `${frontmatter({
-    type: "raw_slack_thread",
-    source: "slack",
-    date,
-    channel: "C123",
-    thread_ts: "1778304572.568589",
-    latest_ts: "1778304580.000000",
-    title,
-    message_count: 2,
-    pulled_at: `${date}T10:00:00.000Z`,
-  })}
-# ${title}
-
-## 1778304572.568589 | Sam Rivera
-
-Can you prepare the launch checklist?
-
-## 1778304580.000000 | Ada Lovelace
-
-I will update the billing copy by Friday.
-`;
-}

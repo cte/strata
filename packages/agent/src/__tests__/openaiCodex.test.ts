@@ -82,7 +82,7 @@ describe("OpenAICodexModelAdapter", () => {
     });
   });
 
-  test("includes reasoning effort when set, mapping xhigh to high", async () => {
+  test("includes Pi-mapped reasoning effort when set", async () => {
     const captured: JsonObject[] = [];
     const fetchImpl = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
@@ -104,7 +104,7 @@ describe("OpenAICodexModelAdapter", () => {
     await adapter.complete({
       messages: [{ role: "user", content: "hi" }],
       tools: [],
-      reasoningEffort: "high",
+      reasoningEffort: "minimal",
     });
     await adapter.complete({
       messages: [{ role: "user", content: "hi" }],
@@ -121,8 +121,8 @@ describe("OpenAICodexModelAdapter", () => {
       tools: [],
     });
 
-    expect(captured[0]?.reasoning).toEqual({ effort: "high" });
-    expect(captured[1]?.reasoning).toEqual({ effort: "high" });
+    expect(captured[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
+    expect(captured[1]?.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
     expect(captured[2]?.reasoning).toBeUndefined();
     expect(captured[3]?.reasoning).toBeUndefined();
   });

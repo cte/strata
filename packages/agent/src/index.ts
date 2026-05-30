@@ -7,6 +7,7 @@ export * from "./chatgptOAuth.js";
 export * from "./compaction.js";
 export * from "./maintenance.js";
 export * from "./model.js";
+export * from "./modelCapabilities.js";
 export * from "./modelFactory.js";
 export * from "./openaiCodex.js";
 export * from "./openaiCompatible.js";

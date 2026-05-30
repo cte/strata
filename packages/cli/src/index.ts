@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
@@ -6,17 +7,21 @@ import {
   clearAnthropicCredentials,
   clearChatGptCredentials,
   createModelAdapter,
+  formatModelProviderList,
   getAnthropicCredentials,
   getChatGptCredentials,
   listMaintenanceJobs,
   loginAnthropic,
   loginChatGpt,
   type ModelProviderName,
+  parseModelProvider,
   runAgentLoop,
   runMaintenanceJob,
   runReflection,
   setAnthropicCredentials,
   setChatGptCredentials,
+  THINKING_LEVELS,
+  type ThinkingLevel,
 } from "@strata/agent";
 
 import {
@@ -50,17 +55,6 @@ import {
   writeConnectorConfigProfile,
 } from "@strata/ingest/connectors";
 import {
-  createModelDailyTodoVerifier,
-  type DailyTodoApplyResult,
-  type DailyTodoBackfillResult,
-  type DailyTodoExtractionResult,
-  runDailyTodoExtractionApply,
-  runDailyTodoExtractionBackfillApply,
-  runDailyTodoExtractionBackfillDryRun,
-  runDailyTodoExtractionDryRun,
-  type TodoVerifier,
-} from "@strata/ingest/extraction";
-import {
   addIngestTaxonomyProjectAlias,
   addIngestTaxonomySelfName,
   addIngestTaxonomySlackPattern,
@@ -88,12 +82,21 @@ import { archiveGeneratedSlackThreads, compactWikiIndex } from "@strata/ingest/w
 import { createConfiguredMcpToolPack } from "@strata/integration-mcp/exa";
 import {
   createDefaultJobRegistry,
-  type JobScheduleTrigger,
+  type RoutineTriggerCadence,
+  RoutineTriggerStore,
   runJob,
-  runScheduleNow,
   runSchedulerLoop,
-  ScheduleStore,
+  runTriggerNow,
 } from "@strata/jobs";
+import {
+  type CreateRoutineInput,
+  type RoutineArtifactRecord,
+  type RoutineDefinition,
+  type RoutineRunRecord,
+  type RoutineStatus,
+  RoutineStore,
+  type UpdateRoutineInput,
+} from "@strata/routines";
 
 import {
   createDefaultToolRegistry,
@@ -125,7 +128,6 @@ commands:
   ingest slack [options]        snapshot an explicit Slack thread into wiki/raw/slack
   ingest taxonomy show          show local raw-to-wiki classification taxonomy
   ingest taxonomy add-*         update or propose reviewed taxonomy entries
-  extract daily-todos           dry-run daily TODO extraction from wiki evidence
   connectors config list <connector> [--json]
   connectors config save <connector> <id> --config JSON [--label TEXT] [--default] [--json]
   connectors config delete <connector> <id>
@@ -133,7 +135,8 @@ commands:
   wiki compact-index            rebuild the human wiki index without raw-source fanout
   wiki search-index refresh     refresh the local wiki/raw retrieval index
   wiki search <query>           search the local retrieval index with curated-first ranking
-  query [options] <question>   run an agent query using the default dangerous tool profile
+  query [--provider P] [--model M] [--thinking L] <question>
+                               run an agent query using the default dangerous tool profile
   learn reflect [options] <id>  reflect on a completed session trace
   proposals list [options]      list staged learning/wiki proposals
   proposals show <id>           print a proposal by id, path, or unique prefix
@@ -142,10 +145,13 @@ commands:
   proposals defer <id>          mark a proposal deferred
   jobs list                    list registered jobs
   jobs run <job> [json]        run one registered job and persist a trace
-  jobs worker                  run due schedules until stopped
-  schedules list               list configured recurring schedules
-  schedules create [options]   create a recurring schedule
-  schedules run-now <id>       run a schedule immediately
+  jobs worker                  run due routine triggers until stopped
+  routines list                list saved routines
+  routines show <id>           show one saved routine definition
+  routines run <id>            run a saved routine through the job runner
+  routines runs <id>           list recent runs for a routine
+  routines artifacts <id>      list recent artifacts for a routine
+  routines trigger <cmd>       manage a routine's recurring triggers
   maintain list                list maintenance jobs
   maintain run <job>           run one maintenance job and persist a trace
   tui [options]                launch the interactive Strata TUI
@@ -160,7 +166,7 @@ commands:
 
 type ProviderName = ModelProviderName;
 
-interface TuiCliOptions {
+export interface TuiCliOptions {
   help?: boolean;
   initialSession?: RunTuiOptions["initialSession"];
 }
@@ -172,6 +178,7 @@ interface ModelOptions {
 
 interface QueryOptions extends ModelOptions {
   question: string;
+  reasoningEffort?: ThinkingLevel;
 }
 
 interface ReflectOptions extends ModelOptions {
@@ -270,12 +277,11 @@ interface WikiSearchIndexRefreshOptions {
   includeRaw: boolean;
 }
 
-interface ScheduleCreateOptions {
-  name: string;
-  jobName: string;
-  trigger: JobScheduleTrigger;
-  input?: JsonObject;
-  enabled: boolean;
+interface RoutineRunCliOptions extends ModelOptions {
+  routineId: string;
+  input: JsonObject;
+  json: boolean;
+  reasoningEffort?: ThinkingLevel;
 }
 
 interface WikiCompactIndexOptions {
@@ -285,28 +291,6 @@ interface WikiCompactIndexOptions {
 interface WikiArchiveGeneratedSlackThreadsOptions {
   dryRun: boolean;
   rewriteLinks: boolean;
-}
-
-interface ExtractDailyTodosOptions {
-  date: string;
-  dryRun: boolean;
-  apply: boolean;
-  json: boolean;
-  verify: boolean;
-  provider?: ProviderName;
-  model?: string;
-}
-
-interface ExtractDailyTodosBackfillOptions {
-  from: string;
-  to: string;
-  dryRun: boolean;
-  apply: boolean;
-  force: boolean;
-  json: boolean;
-  verify: boolean;
-  provider?: ProviderName;
-  model?: string;
 }
 
 const INGEST_USAGE = `usage:
@@ -328,11 +312,6 @@ const INGEST_USAGE = `usage:
   strata ingest taxonomy add-slack-pattern --field material|ignored-log|transient-check|routine-coordination|status-only --value TEXT [--match literal|regex] [--flags FLAGS] [--reason TEXT] [--propose]
   strata ingest taxonomy apply-proposal <id|path|prefix> [--json]`;
 
-const EXTRACT_USAGE = `usage:
-  strata extract daily-todos --date YYYY-MM-DD --dry-run [--verify] [--provider P] [--model M] [--json]
-  strata extract daily-todos --date YYYY-MM-DD --apply [--verify] [--provider P] [--model M] [--json]
-  strata extract daily-todos backfill --from YYYY-MM-DD --to YYYY-MM-DD (--dry-run | --apply) [--force] [--verify] [--provider P] [--model M] [--json]`;
-
 const WIKI_USAGE = `usage:
   strata wiki compact-index [--dry-run]
   strata wiki archive-generated-slack-threads [--dry-run] [--no-rewrite-links]
@@ -351,6 +330,23 @@ const CONNECTORS_USAGE = `usage:
   strata connectors config save <granola|notion|slack> <id> --config JSON [--label TEXT] [--default] [--json]
   strata connectors config delete <granola|notion|slack> <id>
   strata connectors config default <granola|notion|slack> <id>`;
+
+const ROUTINES_USAGE = `usage:
+  strata routines list [--status all|enabled|disabled|archived] [--limit N] [--json]
+  strata routines show <id> [--json]
+  strata routines create --file routine.json [--json]
+  strata routines update <id> --file routine.json [--json]
+  strata routines enable <id> [--json]
+  strata routines disable <id> [--json]
+  strata routines run <id> [--input-json JSON] [--provider P] [--model M] [--thinking L] [--json]
+  strata routines runs <id> [--limit N] [--json]
+  strata routines artifacts <id> [--run-id RUN_ID] [--limit N] [--json]
+  strata routines trigger add <routineId> (--interval-seconds N | --cron EXPR) [--name X] [--input JSON] [--disabled]
+  strata routines trigger list <routineId>
+  strata routines trigger enable <triggerId>
+  strata routines trigger disable <triggerId>
+  strata routines trigger remove <triggerId>
+  strata routines trigger run <triggerId>`;
 
 function parseLimit(args: string[], fallback = 20): number {
   const index = args.indexOf("--limit");
@@ -433,6 +429,71 @@ function printConnectorConfigProfiles(
     console.log(
       `${profile.id.padEnd(18)} ${profile.isDefault ? "default" : "       "} ${profile.updatedAt} ${profile.label}`,
     );
+  }
+}
+
+function printRoutines(routines: RoutineDefinition[]): void {
+  if (routines.length === 0) {
+    console.log("No routines found.");
+    return;
+  }
+  for (const routine of routines) {
+    console.log(
+      `${routine.updatedAt}  ${routine.status.padEnd(8)}  v${String(routine.version).padEnd(3)}  ${routine.outputMode.padEnd(8)}  ${routine.id}  ${routine.name}`,
+    );
+  }
+}
+
+function printRoutine(routine: RoutineDefinition): void {
+  console.log(`${routine.name} (${routine.id})`);
+  console.log(`status: ${routine.status}`);
+  console.log(`version: ${routine.version}`);
+  console.log(`output: ${routine.outputMode}`);
+  console.log(`tool profile: ${routine.toolProfile}`);
+  console.log(`updated: ${routine.updatedAt}`);
+  console.log(`pre-run steps: ${routine.preRunSteps.length}`);
+  console.log(`required skills: ${routine.requiredSkills.length}`);
+  if (routine.description.trim() !== "") {
+    console.log("");
+    console.log(routine.description.trim());
+  }
+}
+
+function printRoutineRuns(runs: RoutineRunRecord[]): void {
+  if (runs.length === 0) {
+    console.log("No routine runs found.");
+    return;
+  }
+  for (const run of runs) {
+    console.log(
+      `${run.startedAt}  ${run.status.padEnd(9)}  ${(run.taskStatus ?? "unknown").padEnd(12)}  artifacts=${run.outputArtifactIds.length}  ${run.id}`,
+    );
+    if (run.agentSessionId !== null) {
+      console.log(`  agent session: ${run.agentSessionId}`);
+    }
+    if (run.error !== null) {
+      console.log(`  error: ${run.error}`);
+    }
+  }
+}
+
+function printRoutineArtifacts(artifacts: RoutineArtifactRecord[]): void {
+  if (artifacts.length === 0) {
+    console.log("No routine artifacts found.");
+    return;
+  }
+  for (const artifact of artifacts) {
+    console.log(
+      `${artifact.createdAt}  ${artifact.validationStatus.padEnd(7)}  ${artifact.taskStatus.padEnd(12)}  ${artifact.id}`,
+    );
+    console.log(`  routine run: ${artifact.routineRunId}`);
+    console.log(`  schema: ${artifact.schemaName}@${artifact.schemaVersion}`);
+    if (artifact.dedupeKey !== null) {
+      console.log(`  dedupe: ${artifact.dedupeKey}`);
+    }
+    if (artifact.sourceRefs.length > 0) {
+      console.log(`  source refs: ${artifact.sourceRefs.length}`);
+    }
   }
 }
 
@@ -540,12 +601,14 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
   }
 
   const repoRoot = getStrataPaths().repoRoot;
-  const result = await runAgentLoop({
+  const runOptions = {
     question: options.question,
     model: await createModelAdapter(options),
     repoRoot,
     tools: await createAgentToolRegistry({ repoRoot, env: Bun.env }),
-  });
+    ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+  };
+  const result = await runAgentLoop(runOptions);
 
   if (result.finalAnswer.trim() !== "") {
     console.log(result.finalAnswer.trim());
@@ -556,86 +619,6 @@ async function cmdQuery(args: string[]): Promise<CommandResult> {
     `\n[session: ${result.sessionId}; status: ${result.status}; iterations: ${result.iterations}; tool calls: ${result.toolCalls}]`,
   );
   return result.status === "failed" ? 1 : 0;
-}
-
-async function cmdExtract(args: string[]): Promise<CommandResult> {
-  const extraction = args.shift();
-  if (!extraction || extraction === "--help" || extraction === "-h") {
-    console.log(EXTRACT_USAGE);
-    return 0;
-  }
-  if (extraction !== "daily-todos") {
-    throw new Error(`Unknown extraction: ${extraction}`);
-  }
-  if (args.includes("--help") || args.includes("-h")) {
-    console.log(EXTRACT_USAGE);
-    return 0;
-  }
-  const repoRoot = getStrataPaths().repoRoot;
-  if (args[0] === "backfill") {
-    args.shift();
-    const options = parseExtractDailyTodosBackfillOptions(args);
-    const verifier = await createDailyTodoVerifierFromCliOptions(options, repoRoot);
-    const runOptions: Parameters<typeof runDailyTodoExtractionBackfillDryRun>[0] = {
-      repoRoot,
-      from: options.from,
-      to: options.to,
-      force: options.force,
-    };
-    if (verifier !== undefined) {
-      runOptions.verifier = verifier;
-    }
-    const result = options.apply
-      ? await runDailyTodoExtractionBackfillApply(runOptions)
-      : await runDailyTodoExtractionBackfillDryRun(runOptions);
-    if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
-    } else {
-      printDailyTodoBackfillResult(result);
-    }
-    return 0;
-  }
-
-  const options = parseExtractDailyTodosOptions(args);
-  const verifier = await createDailyTodoVerifierFromCliOptions(options, repoRoot);
-  const runOptions: Parameters<typeof runDailyTodoExtractionDryRun>[0] = {
-    repoRoot,
-    day: options.date,
-  };
-  if (verifier !== undefined) {
-    runOptions.verifier = verifier;
-  }
-  const result = options.apply
-    ? await runDailyTodoExtractionApply(runOptions)
-    : await runDailyTodoExtractionDryRun(runOptions);
-  if (options.json) {
-    console.log(JSON.stringify(result, null, 2));
-  } else if (options.apply) {
-    printDailyTodoApplyResult(result as DailyTodoApplyResult);
-  } else {
-    printDailyTodoExtractionResult(result as DailyTodoExtractionResult);
-  }
-  return 0;
-}
-
-async function createDailyTodoVerifierFromCliOptions(
-  options: Pick<ModelOptions, "provider" | "model"> & { verify: boolean },
-  repoRoot: string,
-): Promise<TodoVerifier | undefined> {
-  if (!options.verify) {
-    return undefined;
-  }
-  await loadDotenv();
-  const modelOptions: Parameters<typeof createModelAdapter>[0] = { repoRoot };
-  if (options.provider !== undefined) {
-    modelOptions.provider = options.provider;
-  }
-  if (options.model !== undefined) {
-    modelOptions.model = options.model;
-  }
-  return createModelDailyTodoVerifier({
-    model: await createModelAdapter(modelOptions),
-  });
 }
 
 async function createAgentToolRegistry(options: {
@@ -1490,81 +1473,249 @@ async function cmdJobs(args: string[]): Promise<CommandResult> {
   throw new Error(`Unknown jobs subcommand: ${subcommand}`);
 }
 
-async function cmdSchedules(args: string[]): Promise<CommandResult> {
+async function cmdRoutineTrigger(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: strata schedules <list|create|enable|disable|delete|run-now>`);
+    console.log(`usage: strata routines trigger <add|list|enable|disable|remove|run>`);
     return 0;
   }
 
-  const store = await ScheduleStore.open({ repoRoot: getStrataPaths().repoRoot });
+  if (subcommand === "run") {
+    const id = requireArgValue(args.shift(), "routines trigger run requires a trigger id");
+    ensureNoExtraArgs(args, "routines trigger run");
+    await loadDotenv();
+    const result = await runTriggerNow({
+      triggerId: id,
+      repoRoot: getStrataPaths().repoRoot,
+      env: Bun.env,
+      registry: createDefaultJobRegistry(),
+    });
+    console.log(`${result.triggerName ?? result.routineId}: ${result.status}`);
+    console.log(result.summary);
+    console.log(`session: ${result.sessionId}`);
+    return result.status === "completed" ? 0 : 1;
+  }
+
+  const store = await RoutineTriggerStore.open({ repoRoot: getStrataPaths().repoRoot });
   try {
     if (subcommand === "list") {
-      if (args.length !== 0) {
-        throw new Error(`Unknown schedules list argument: ${args.join(" ")}`);
-      }
-      printSchedules(store.list());
+      const routineId = requireArgValue(
+        args.shift(),
+        "routines trigger list requires a routine id",
+      );
+      ensureNoExtraArgs(args, "routines trigger list");
+      printRoutineTriggers(store.listByRoutine(routineId));
       return 0;
     }
 
-    if (subcommand === "create") {
-      const registry = createDefaultJobRegistry();
-      const options = parseScheduleCreateOptions(args);
-      if (registry.get(options.jobName) === undefined) {
-        throw new Error(`Unknown job: ${options.jobName}`);
-      }
-      const schedule = store.create({
-        name: options.name,
-        jobName: options.jobName,
+    if (subcommand === "add") {
+      const routineId = requireArgValue(args.shift(), "routines trigger add requires a routine id");
+      const options = parseRoutineTriggerAddOptions(args);
+      const trigger = store.create({
+        routineId,
         trigger: options.trigger,
         enabled: options.enabled,
+        ...(options.name === undefined ? {} : { name: options.name }),
         ...(options.input === undefined ? {} : { input: options.input }),
       });
-      printSchedule(schedule);
+      printRoutineTrigger(trigger);
       return 0;
     }
 
     if (subcommand === "enable" || subcommand === "disable") {
-      const id = requireArgValue(args.shift(), `schedules ${subcommand} requires a schedule id`);
-      if (args.length !== 0) {
-        throw new Error(`Unknown schedules ${subcommand} argument: ${args.join(" ")}`);
-      }
-      printSchedule(store.setEnabled(id, subcommand === "enable"));
+      const id = requireArgValue(
+        args.shift(),
+        `routines trigger ${subcommand} requires a trigger id`,
+      );
+      ensureNoExtraArgs(args, `routines trigger ${subcommand}`);
+      printRoutineTrigger(store.setEnabled(id, subcommand === "enable"));
       return 0;
     }
 
-    if (subcommand === "delete") {
-      const id = requireArgValue(args.shift(), "schedules delete requires a schedule id");
-      if (args.length !== 0) {
-        throw new Error(`Unknown schedules delete argument: ${args.join(" ")}`);
-      }
+    if (subcommand === "remove") {
+      const id = requireArgValue(args.shift(), "routines trigger remove requires a trigger id");
+      ensureNoExtraArgs(args, "routines trigger remove");
       const deleted = store.delete(id);
-      console.log(deleted ? `deleted ${id}` : `missing ${id}`);
+      console.log(deleted ? `removed ${id}` : `missing ${id}`);
       return deleted ? 0 : 1;
     }
   } finally {
     store.close();
   }
 
-  if (subcommand === "run-now") {
-    const id = requireArgValue(args.shift(), "schedules run-now requires a schedule id");
-    if (args.length !== 0) {
-      throw new Error(`Unknown schedules run-now argument: ${args.join(" ")}`);
+  throw new Error(`Unknown routines trigger subcommand: ${subcommand}`);
+}
+
+async function cmdRoutines(args: string[]): Promise<CommandResult> {
+  const subcommand = args.shift();
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(ROUTINES_USAGE);
+    return 0;
+  }
+
+  if (subcommand === "trigger") {
+    return cmdRoutineTrigger(args);
+  }
+
+  const repoRoot = getStrataPaths().repoRoot;
+  const store = await RoutineStore.open({ repoRoot });
+  try {
+    if (subcommand === "list") {
+      const json = consumeBooleanFlag(args, "--json");
+      const status = parseRoutineStatusFilter(args);
+      const limit = parseLimit(args, 50);
+      ensureNoExtraArgs(args, "routines list");
+      const routines = store.listRoutines({ status, limit });
+      if (json) {
+        console.log(JSON.stringify({ routines }, null, 2));
+      } else {
+        printRoutines(routines);
+      }
+      return 0;
     }
+
+    if (subcommand === "show") {
+      const json = consumeBooleanFlag(args, "--json");
+      const id = requireArgValue(args.shift(), "routines show requires a routine id");
+      ensureNoExtraArgs(args, "routines show");
+      const routine = store.getRoutine(id);
+      if (routine === null) {
+        throw new Error(`Routine not found: ${id}`);
+      }
+      if (json) {
+        console.log(JSON.stringify({ routine }, null, 2));
+      } else {
+        printRoutine(routine);
+      }
+      return 0;
+    }
+
+    if (subcommand === "create") {
+      const json = consumeBooleanFlag(args, "--json");
+      const file = parseOptionalTextFlag(args, "--file");
+      if (file === undefined) {
+        throw new Error("routines create requires --file");
+      }
+      ensureNoExtraArgs(args, "routines create");
+      const routine = store.createRoutine(await readRoutineCreateInput(file));
+      if (json) {
+        console.log(JSON.stringify({ routine }, null, 2));
+      } else {
+        console.log(`created routine ${routine.id}`);
+      }
+      return 0;
+    }
+
+    if (subcommand === "update") {
+      const json = consumeBooleanFlag(args, "--json");
+      const id = requireArgValue(args.shift(), "routines update requires a routine id");
+      const file = parseOptionalTextFlag(args, "--file");
+      if (file === undefined) {
+        throw new Error("routines update requires --file");
+      }
+      ensureNoExtraArgs(args, "routines update");
+      const routine = store.updateRoutine(await readRoutineUpdateInput(id, file));
+      if (json) {
+        console.log(JSON.stringify({ routine }, null, 2));
+      } else {
+        console.log(`updated routine ${routine.id}`);
+      }
+      return 0;
+    }
+
+    if (subcommand === "enable" || subcommand === "disable") {
+      const json = consumeBooleanFlag(args, "--json");
+      const id = requireArgValue(args.shift(), `routines ${subcommand} requires a routine id`);
+      ensureNoExtraArgs(args, `routines ${subcommand}`);
+      const routine = store.updateRoutine({
+        id,
+        status: subcommand === "enable" ? "enabled" : "disabled",
+      });
+      if (json) {
+        console.log(JSON.stringify({ routine }, null, 2));
+      } else {
+        console.log(`${routine.status} routine ${routine.id}`);
+      }
+      return 0;
+    }
+
+    if (subcommand === "runs") {
+      const json = consumeBooleanFlag(args, "--json");
+      const limit = parseLimit(args, 50);
+      const routineId = requireArgValue(args.shift(), "routines runs requires a routine id");
+      ensureNoExtraArgs(args, "routines runs");
+      const runs = store.listRoutineRuns({ routineId, limit });
+      if (json) {
+        console.log(JSON.stringify({ runs }, null, 2));
+      } else {
+        printRoutineRuns(runs);
+      }
+      return 0;
+    }
+
+    if (subcommand === "artifacts") {
+      const json = consumeBooleanFlag(args, "--json");
+      const routineRunId = parseOptionalTextFlag(args, "--run-id");
+      const limit = parseLimit(args, 50);
+      const routineId = requireArgValue(args.shift(), "routines artifacts requires a routine id");
+      ensureNoExtraArgs(args, "routines artifacts");
+      const artifacts = store.listRoutineArtifacts({
+        ...(routineRunId === undefined ? { routineId } : { routineRunId }),
+        limit,
+      });
+      if (json) {
+        console.log(JSON.stringify({ artifacts }, null, 2));
+      } else {
+        printRoutineArtifacts(artifacts);
+      }
+      return 0;
+    }
+  } finally {
+    store.close();
+  }
+
+  if (subcommand === "run") {
+    const options = parseRoutineRunOptions(args);
     await loadDotenv();
-    const result = await runScheduleNow({
-      scheduleId: id,
-      repoRoot: getStrataPaths().repoRoot,
+    const input: JsonObject = {
+      routineId: options.routineId,
+      input: options.input,
+      ...(options.provider === undefined ? {} : { provider: options.provider }),
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: options.reasoningEffort }),
+    };
+    const result = await runJob({
+      jobName: "routine.run",
+      input,
+      repoRoot,
       env: Bun.env,
       registry: createDefaultJobRegistry(),
     });
-    console.log(`${result.scheduleName}: ${result.status}`);
-    console.log(result.summary);
-    console.log(`session: ${result.sessionId}`);
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`${result.jobName}: ${result.status}`);
+      console.log(result.summary);
+      console.log(`session: ${result.sessionId}`);
+      const metrics = result.output?.metrics;
+      if (metrics !== undefined) {
+        console.log(`routine run: ${String(metrics.routineRunId ?? "")}`);
+        console.log(`task: ${String(metrics.taskStatus ?? "unknown")}`);
+        const outputArtifactIds = metrics.outputArtifactIds;
+        if (Array.isArray(outputArtifactIds)) {
+          console.log(`artifacts: ${outputArtifactIds.length}`);
+        }
+      }
+      if (result.errorMessage !== null) {
+        console.log(`error: ${result.errorMessage}`);
+      }
+    }
     return result.status === "completed" ? 0 : 1;
   }
 
-  throw new Error(`Unknown schedules subcommand: ${subcommand}`);
+  throw new Error(`Unknown routines subcommand: ${subcommand}`);
 }
 
 function tuiUsage(): string {
@@ -1572,14 +1723,14 @@ function tuiUsage(): string {
 
 options:
   --continue, -c        continue the most recent session
-  --resume, -r          select a session to resume
-  --session <id>        resume a specific session by id or unique id prefix
+  --resume, -r [id]     select a session to resume, or resume by id/prefix
+  --session <id>        resume a specific session by id or unique id prefix (legacy)
   --fork <id>           fork a specific session by id or unique id prefix
   --help, -h            show this help
 `;
 }
 
-function parseTuiOptions(args: string[]): TuiCliOptions {
+export function parseTuiOptions(args: string[]): TuiCliOptions {
   let showHelp = false;
   let continueRequested = false;
   let resumeRequested = false;
@@ -1593,7 +1744,13 @@ function parseTuiOptions(args: string[]): TuiCliOptions {
     } else if (arg === "--continue" || arg === "-c") {
       continueRequested = true;
     } else if (arg === "--resume" || arg === "-r") {
-      resumeRequested = true;
+      const next = args[index + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        sessionSelector = next;
+        index += 1;
+      } else {
+        resumeRequested = true;
+      }
     } else if (arg === "--session") {
       sessionSelector = requireArgValue(args[++index], "--session requires a session id");
     } else if (arg === "--fork") {
@@ -1607,7 +1764,7 @@ function parseTuiOptions(args: string[]): TuiCliOptions {
     forkSelector !== undefined &&
     (sessionSelector !== undefined || resumeRequested || continueRequested)
   ) {
-    throw new Error("--fork cannot be combined with --session, --resume, or --continue");
+    throw new Error("--fork cannot be combined with --session, --resume/-r, or --continue");
   }
 
   const parsed: TuiCliOptions = {};
@@ -1683,9 +1840,6 @@ async function main(argv: string[]): Promise<CommandResult> {
   if (command === "ingest") {
     return cmdIngest(argv);
   }
-  if (command === "extract") {
-    return cmdExtract(argv);
-  }
   if (command === "connectors") {
     return cmdConnectors(argv);
   }
@@ -1707,8 +1861,8 @@ async function main(argv: string[]): Promise<CommandResult> {
   if (command === "jobs") {
     return cmdJobs(argv);
   }
-  if (command === "schedules") {
-    return cmdSchedules(argv);
+  if (command === "routines") {
+    return cmdRoutines(argv);
   }
   if (command === "tui") {
     const options = parseTuiOptions(argv);
@@ -1720,7 +1874,10 @@ async function main(argv: string[]): Promise<CommandResult> {
     if (options.initialSession !== undefined) {
       runOptions.initialSession = options.initialSession;
     }
-    await runTui(runOptions);
+    const result = await runTui(runOptions);
+    if (result.exitMessage !== "") {
+      console.log(result.exitMessage);
+    }
     return 0;
   }
   if (command === "trace") {
@@ -1736,15 +1893,17 @@ async function main(argv: string[]): Promise<CommandResult> {
   throw new Error(`Unknown command: ${command}\n\n${usage()}`);
 }
 
-main(process.argv.slice(2)).then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  },
-);
+if (import.meta.main) {
+  main(process.argv.slice(2)).then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error: unknown) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    },
+  );
+}
 
 function parseToolProfile(args: string[]): ToolProfile {
   const index = args.indexOf("--profile");
@@ -1784,6 +1943,64 @@ function parseProposalStatusFilter(args: string[]): LearningProposalStatusFilter
   return value;
 }
 
+function parseRoutineStatusFilter(args: string[]): RoutineStatus | "all" {
+  const index = args.indexOf("--status");
+  if (index === -1) {
+    return "all";
+  }
+  const value = args[index + 1];
+  if (value !== "all" && value !== "enabled" && value !== "disabled" && value !== "archived") {
+    throw new Error("--status must be all, enabled, disabled, or archived");
+  }
+  args.splice(index, 2);
+  return value;
+}
+
+function parseRoutineRunOptions(args: string[]): RoutineRunCliOptions {
+  const json = consumeBooleanFlag(args, "--json");
+  const rawInput = parseOptionalTextFlag(args, "--input-json");
+  const { provider, model, reasoningEffort, rest } = parseModelOptions(args, {
+    parseThinking: true,
+  });
+  if (rest.length !== 1 || rest[0]?.trim() === "") {
+    throw new Error("routines run requires exactly one routine id");
+  }
+  const routineId = rest[0];
+  if (routineId === undefined) {
+    throw new Error("routines run requires exactly one routine id");
+  }
+  const parsed: RoutineRunCliOptions = {
+    routineId,
+    input: rawInput === undefined ? {} : parseJsonObjectArg(rawInput, "--input-json"),
+    json,
+  };
+  if (provider !== undefined) {
+    parsed.provider = provider;
+  }
+  if (model !== undefined) {
+    parsed.model = model;
+  }
+  if (reasoningEffort !== undefined) {
+    parsed.reasoningEffort = reasoningEffort;
+  }
+  return parsed;
+}
+
+async function readRoutineCreateInput(file: string): Promise<CreateRoutineInput> {
+  return parseJsonObjectArg(
+    await readFile(file, "utf8"),
+    "--file",
+  ) as unknown as CreateRoutineInput;
+}
+
+async function readRoutineUpdateInput(id: string, file: string): Promise<UpdateRoutineInput> {
+  const input = parseJsonObjectArg(
+    await readFile(file, "utf8"),
+    "--file",
+  ) as unknown as UpdateRoutineInput;
+  return { ...input, id };
+}
+
 function parseOptionalTextFlag(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   if (index === -1) {
@@ -1794,8 +2011,10 @@ function parseOptionalTextFlag(args: string[], name: string): string | undefined
   return value;
 }
 
-function parseQueryOptions(args: string[]): QueryOptions {
-  const { provider, model, rest } = parseModelOptions(args);
+export function parseQueryOptions(args: string[]): QueryOptions {
+  const { provider, model, reasoningEffort, rest } = parseModelOptions(args, {
+    parseThinking: true,
+  });
   const parsed: QueryOptions = {
     question: rest.join(" ").trim(),
   };
@@ -1804,6 +2023,9 @@ function parseQueryOptions(args: string[]): QueryOptions {
   }
   if (model !== undefined) {
     parsed.model = model;
+  }
+  if (reasoningEffort !== undefined) {
+    parsed.reasoningEffort = reasoningEffort;
   }
   return parsed;
 }
@@ -1820,68 +2042,6 @@ function parseReflectOptions(args: string[]): ReflectOptions {
   const parsed: ReflectOptions = {
     sessionId,
   };
-  if (provider !== undefined) {
-    parsed.provider = provider;
-  }
-  if (model !== undefined) {
-    parsed.model = model;
-  }
-  return parsed;
-}
-
-function parseExtractDailyTodosOptions(args: string[]): ExtractDailyTodosOptions {
-  const { provider, model, rest } = parseModelOptions(args);
-  const json = consumeBooleanFlag(rest, "--json");
-  const dryRun = consumeBooleanFlag(rest, "--dry-run");
-  const apply = consumeBooleanFlag(rest, "--apply");
-  const verify = consumeBooleanFlag(rest, "--verify");
-  const date = parseOptionalTextFlag(rest, "--date");
-  ensureNoExtraArgs(rest, "extract daily-todos");
-  if (dryRun === apply) {
-    throw new Error("extract daily-todos requires exactly one of --dry-run or --apply");
-  }
-  if (!verify && (provider !== undefined || model !== undefined)) {
-    throw new Error("--provider and --model require --verify for extract daily-todos");
-  }
-  if (date === undefined) {
-    throw new Error("extract daily-todos requires --date YYYY-MM-DD");
-  }
-  assertIsoDate(date, "--date");
-  const parsed: ExtractDailyTodosOptions = { date, dryRun, apply, json, verify };
-  if (provider !== undefined) {
-    parsed.provider = provider;
-  }
-  if (model !== undefined) {
-    parsed.model = model;
-  }
-  return parsed;
-}
-
-function parseExtractDailyTodosBackfillOptions(args: string[]): ExtractDailyTodosBackfillOptions {
-  const { provider, model, rest } = parseModelOptions(args);
-  const json = consumeBooleanFlag(rest, "--json");
-  const dryRun = consumeBooleanFlag(rest, "--dry-run");
-  const apply = consumeBooleanFlag(rest, "--apply");
-  const force = consumeBooleanFlag(rest, "--force");
-  const verify = consumeBooleanFlag(rest, "--verify");
-  const from = parseOptionalTextFlag(rest, "--from");
-  const to = parseOptionalTextFlag(rest, "--to");
-  ensureNoExtraArgs(rest, "extract daily-todos backfill");
-  if (dryRun === apply) {
-    throw new Error("extract daily-todos backfill requires exactly one of --dry-run or --apply");
-  }
-  if (!verify && (provider !== undefined || model !== undefined)) {
-    throw new Error("--provider and --model require --verify for extract daily-todos backfill");
-  }
-  if (from === undefined) {
-    throw new Error("extract daily-todos backfill requires --from YYYY-MM-DD");
-  }
-  if (to === undefined) {
-    throw new Error("extract daily-todos backfill requires --to YYYY-MM-DD");
-  }
-  assertIsoDate(from, "--from");
-  assertIsoDate(to, "--to");
-  const parsed: ExtractDailyTodosBackfillOptions = { from, to, dryRun, apply, force, json, verify };
   if (provider !== undefined) {
     parsed.provider = provider;
   }
@@ -2206,18 +2366,25 @@ function parseWorkerPollSeconds(args: string[]): number {
   return pollSeconds;
 }
 
-function parseScheduleCreateOptions(args: string[]): ScheduleCreateOptions {
-  const parsed: Partial<ScheduleCreateOptions> = { enabled: true };
+interface RoutineTriggerAddOptions {
+  trigger: RoutineTriggerCadence;
+  name?: string;
+  input?: JsonObject;
+  enabled: boolean;
+}
+
+function parseRoutineTriggerAddOptions(args: string[]): RoutineTriggerAddOptions {
+  let name: string | undefined;
+  let input: JsonObject | undefined;
+  let enabled = true;
   let intervalSeconds: number | undefined;
   let cronExpression: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--name") {
-      parsed.name = requireArgValue(args[++index], "--name requires a value");
-    } else if (arg === "--job") {
-      parsed.jobName = requireArgValue(args[++index], "--job requires a value");
+      name = requireArgValue(args[++index], "--name requires a value");
     } else if (arg === "--input") {
-      parsed.input = parseJsonObjectArg(
+      input = parseJsonObjectArg(
         requireArgValue(args[++index], "--input requires JSON"),
         "--input",
       );
@@ -2229,32 +2396,25 @@ function parseScheduleCreateOptions(args: string[]): ScheduleCreateOptions {
     } else if (arg === "--cron") {
       cronExpression = requireArgValue(args[++index], "--cron requires an expression");
     } else if (arg === "--disabled") {
-      parsed.enabled = false;
+      enabled = false;
     } else {
-      throw new Error(`Unknown schedules create argument: ${arg}`);
+      throw new Error(`Unknown routines trigger add argument: ${arg}`);
     }
-  }
-  if (!parsed.name) {
-    throw new Error("schedules create requires --name");
-  }
-  if (!parsed.jobName) {
-    throw new Error("schedules create requires --job");
   }
   if (intervalSeconds !== undefined && cronExpression !== undefined) {
     throw new Error("Use either --interval-seconds or --cron, not both.");
   }
   if (intervalSeconds === undefined && cronExpression === undefined) {
-    throw new Error("schedules create requires --interval-seconds or --cron");
+    throw new Error("routines trigger add requires --interval-seconds or --cron");
   }
   return {
-    name: parsed.name,
-    jobName: parsed.jobName,
-    enabled: parsed.enabled ?? true,
+    enabled,
     trigger:
       intervalSeconds !== undefined
         ? { type: "interval", seconds: intervalSeconds }
         : { type: "cron", expression: cronExpression ?? "" },
-    ...(parsed.input === undefined ? {} : { input: parsed.input }),
+    ...(name === undefined ? {} : { name }),
+    ...(input === undefined ? {} : { input }),
   };
 }
 
@@ -2457,68 +2617,6 @@ function compactConfig(input: Record<string, ConnectorConfig[string]>): Connecto
   return config;
 }
 
-function printDailyTodoExtractionResult(result: DailyTodoExtractionResult): void {
-  console.log(`extraction run: ${result.extractionRunId}`);
-  console.log(`session: ${result.sessionId}`);
-  console.log(`day: ${result.day}`);
-  console.log(`verifier: ${result.verifierVersion}`);
-  if (result.modelName !== undefined) {
-    console.log(`model: ${result.modelName}`);
-  }
-  console.log(`scanned: ${result.sourcesScanned} sources, ${result.spanCount} evidence spans`);
-  console.log(`candidates: ${result.candidateCount}`);
-  console.log(`rejected: ${result.rejectedCount}`);
-  for (const item of result.candidates) {
-    console.log(
-      `- ${item.candidate.candidateText} (${item.evidence.sourcePath}:${item.evidence.lineStart})`,
-    );
-  }
-}
-
-function printDailyTodoApplyResult(result: DailyTodoApplyResult): void {
-  console.log(`extraction run: ${result.extractionRunId}`);
-  console.log(`session: ${result.sessionId}`);
-  console.log(`day: ${result.day}`);
-  console.log(`verifier: ${result.verifierVersion}`);
-  if (result.modelName !== undefined) {
-    console.log(`model: ${result.modelName}`);
-  }
-  console.log(`candidates: ${result.candidateCount}`);
-  console.log(`published: ${result.publishedCount}`);
-  console.log(`skipped: ${result.skippedCount}`);
-  for (const item of result.published) {
-    console.log(`- ${item.owner}: ${item.title} (${item.publishedTarget})`);
-  }
-}
-
-function printDailyTodoBackfillResult(result: DailyTodoBackfillResult): void {
-  console.log(
-    `daily.todo backfill ${result.from}..${result.to} (${result.dryRun ? "dry-run" : "apply"})`,
-  );
-  console.log(`processed: ${result.processed}`);
-  console.log(`skipped: ${result.skipped}`);
-  console.log(`candidates: ${result.candidateCount}`);
-  console.log(`rejected: ${result.rejectedCount}`);
-  if (!result.dryRun) {
-    console.log(`published: ${result.publishedCount}`);
-    console.log(`publication skipped: ${result.publicationSkippedCount}`);
-    console.log(`pending review: ${result.pendingReviewCount}`);
-  }
-  for (const item of result.items) {
-    if (item.status === "processed") {
-      const publication =
-        "publishedCount" in item.result
-          ? `, ${item.result.publishedCount} published, ${item.result.skippedCount} skipped`
-          : "";
-      console.log(
-        `${item.day} processed ${item.result.candidateCount} candidates${publication} (${item.result.extractionRunId})`,
-      );
-    } else {
-      console.log(`${item.day} skipped existing ${item.existingRunId}`);
-    }
-  }
-}
-
 function printConnectorResult(result: ConnectorSessionResult): void {
   const itemCount = result.items?.length ?? 0;
   if (itemCount > 1) {
@@ -2560,26 +2658,28 @@ function printSearchIndexRefreshResult(result: RefreshWikiSearchIndexResult): vo
   );
 }
 
-function printSchedules(schedules: ReturnType<ScheduleStore["list"]>): void {
-  if (schedules.length === 0) {
-    console.log("No schedules configured.");
+function printRoutineTriggers(triggers: ReturnType<RoutineTriggerStore["list"]>): void {
+  if (triggers.length === 0) {
+    console.log("No triggers configured.");
     return;
   }
-  for (const schedule of schedules) {
-    printSchedule(schedule);
+  for (const trigger of triggers) {
+    printRoutineTrigger(trigger);
   }
 }
 
-function printSchedule(schedule: ReturnType<ScheduleStore["list"]>[number]): void {
-  const trigger =
-    schedule.trigger.type === "interval"
-      ? `every ${schedule.trigger.seconds}s`
-      : `cron ${schedule.trigger.expression}`;
-  console.log(`${schedule.id} ${schedule.enabled ? "enabled" : "disabled"} ${schedule.name}`);
-  console.log(`  job: ${schedule.jobName}`);
-  console.log(`  trigger: ${trigger}`);
-  console.log(`  next: ${schedule.nextRunAt ?? "none"}`);
-  console.log(`  last: ${schedule.lastStatus ?? "never"} ${schedule.lastRunAt ?? ""}`.trimEnd());
+function printRoutineTrigger(trigger: ReturnType<RoutineTriggerStore["list"]>[number]): void {
+  const cadence =
+    trigger.trigger.type === "interval"
+      ? `every ${trigger.trigger.seconds}s`
+      : `cron ${trigger.trigger.expression}`;
+  console.log(
+    `${trigger.id} ${trigger.enabled ? "enabled" : "disabled"} ${trigger.name ?? "(unnamed)"}`,
+  );
+  console.log(`  routine: ${trigger.routineId}`);
+  console.log(`  cadence: ${cadence}`);
+  console.log(`  next: ${trigger.nextRunAt ?? "none"}`);
+  console.log(`  last: ${trigger.lastStatus ?? "never"} ${trigger.lastRunAt ?? ""}`.trimEnd());
 }
 
 function printRawToWikiResult(result: GranolaRawToWikiResult): void {
@@ -2612,9 +2712,6 @@ function printGranolaIndexResult(result: GranolaRawToWikiIndexResult): void {
     if (item.threadPaths.length > 0) {
       console.log(`  threads: ${item.threadPaths.length}`);
     }
-    if (item.actionCount > 0) {
-      console.log(`  actions: ${item.actionCount}`);
-    }
   }
   for (const skipped of result.skipped) {
     console.log(`skipped: ${skipped.rawPath} (${skipped.reason})`);
@@ -2642,28 +2739,30 @@ function printRawIndexResult(result: RawToWikiIndexResult): void {
     if (item.threadPaths.length > 0) {
       console.log(`  threads: ${item.threadPaths.length}`);
     }
-    if (item.actionCount > 0) {
-      console.log(`  actions: ${item.actionCount}`);
-    }
   }
   for (const skipped of result.skipped) {
     console.log(`skipped: ${skipped.rawPath} (${skipped.reason})`);
   }
 }
 
-function parseModelOptions(args: string[]): ModelOptions & { rest: string[] } {
+function parseModelOptions(
+  args: string[],
+  options: { parseThinking?: boolean } = {},
+): ModelOptions & { reasoningEffort?: ThinkingLevel; rest: string[] } {
   const rest: string[] = [];
   let provider: ProviderName | undefined;
   let model: string | undefined;
+  let reasoningEffort: ThinkingLevel | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--provider") {
-      const value = args[index + 1];
-      if (value !== "openai-codex" && value !== "openai-compatible") {
-        throw new Error("--provider must be openai-codex or openai-compatible");
+      const value = requireArgValue(args[index + 1], "--provider requires a provider name");
+      try {
+        provider = parseModelProvider(value);
+      } catch {
+        throw new Error(`--provider must be ${formatModelProviderList()}`);
       }
-      provider = value;
       index += 1;
     } else if (arg === "--model") {
       const value = args[index + 1];
@@ -2672,17 +2771,34 @@ function parseModelOptions(args: string[]): ModelOptions & { rest: string[] } {
       }
       model = value;
       index += 1;
+    } else if (
+      options.parseThinking === true &&
+      (arg === "--thinking" || arg === "--reasoning-effort")
+    ) {
+      const value = requireArgValue(args[index + 1], `${arg} requires a thinking level`);
+      if (!isThinkingLevel(value)) {
+        throw new Error(`${arg} must be ${THINKING_LEVELS.join(", ")}`);
+      }
+      reasoningEffort = value;
+      index += 1;
     } else {
       rest.push(arg ?? "");
     }
   }
 
-  const parsed: ModelOptions & { rest: string[] } = { rest };
+  const parsed: ModelOptions & { reasoningEffort?: ThinkingLevel; rest: string[] } = { rest };
   if (provider !== undefined) {
     parsed.provider = provider;
   }
   if (model !== undefined) {
     parsed.model = model;
   }
+  if (reasoningEffort !== undefined) {
+    parsed.reasoningEffort = reasoningEffort;
+  }
   return parsed;
+}
+
+function isThinkingLevel(value: string): value is ThinkingLevel {
+  return (THINKING_LEVELS as readonly string[]).includes(value);
 }

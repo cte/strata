@@ -1,31 +1,36 @@
 import { Cable, Unplug } from "lucide-react";
 import type * as React from "react";
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useState } from "react";
 import { ConnectorOperationPanel } from "@/components/connector-operation-panel";
-import { ConnectorSchedulePanel } from "@/components/connector-schedule-panel";
 import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  configureGranola,
-  disconnectGranola,
-  type GranolaStatus,
-  getGranolaStatus,
-} from "@/lib/api";
+  useConfigureGranola,
+  useDisconnectGranola,
+  useGranolaStatus,
+} from "@/lib/queries/connectors";
 import {
   type ConnectorConfigDraft,
   useConnectorDefaultConfig,
 } from "@/lib/useConnectorDefaultConfig";
 
 export function ConnectorsGranolaPage(): React.ReactElement {
-  const [status, setStatus] = useState<GranolaStatus | null>(null);
   const [apiToken, setApiToken] = useState("");
   const [since, setSince] = useState("");
   const [pageSize, setPageSize] = useState("30");
   const [maxPages, setMaxPages] = useState("3");
-  const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [mutationError, setMutationError] = useState<string | null>(null);
+
+  const statusQuery = useGranolaStatus();
+  const configureMutation = useConfigureGranola();
+  const disconnectMutation = useDisconnectGranola();
+
+  const status = statusQuery.data ?? null;
+  const error = statusQuery.error ? messageOf(statusQuery.error) : mutationError;
+  const isPending = configureMutation.isPending || disconnectMutation.isPending;
+
   const applyDefaultConfig = useCallback((config: ConnectorConfigDraft) => {
     setSince(configString(config.since));
     setPageSize(configString(config.pageSize, "30"));
@@ -33,48 +38,22 @@ export function ConnectorsGranolaPage(): React.ReactElement {
   }, []);
   const defaults = useConnectorDefaultConfig("granola", applyDefaultConfig);
 
-  useEffect(() => {
-    let cancelled = false;
-    getGranolaStatus().then(
-      (next) => {
-        if (!cancelled) {
-          setStatus(next);
-        }
-      },
-      (cause: unknown) => {
-        if (!cancelled) {
-          setError(cause instanceof Error ? cause.message : String(cause));
-        }
+  function connect(): void {
+    setMutationError(null);
+    configureMutation.mutate(
+      { apiToken: apiToken.trim() },
+      {
+        onSuccess: () => setApiToken(""),
+        onError: (cause) => setMutationError(messageOf(cause)),
       },
     );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  function connect(): void {
-    setError(null);
-    startTransition(async () => {
-      try {
-        const next = await configureGranola({ apiToken: apiToken.trim() });
-        setStatus(next);
-        setApiToken("");
-      } catch (cause: unknown) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
-    });
   }
 
   function disconnect(): void {
-    setError(null);
-    startTransition(async () => {
-      try {
-        const next = await disconnectGranola();
-        setStatus(next);
-        setApiToken("");
-      } catch (cause: unknown) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
+    setMutationError(null);
+    disconnectMutation.mutate(undefined, {
+      onSuccess: () => setApiToken(""),
+      onError: (cause) => setMutationError(messageOf(cause)),
     });
   }
 
@@ -94,22 +73,17 @@ export function ConnectorsGranolaPage(): React.ReactElement {
         description={
           <>
             Strata pulls meeting transcripts via Granola’s personal API into{" "}
-            <span className="font-mono text-[var(--fg)]">wiki/raw/granola/</span>. Your key is
-            stored locally at{" "}
-            <span className="font-mono text-[var(--fg)]">.strata/secrets/granola.json</span>.
+            <span className="font-mono text-fg">wiki/raw/granola/</span>. Your key is stored locally
+            at <span className="font-mono text-fg">.strata/secrets/granola.json</span>.
           </>
         }
       />
 
-      <div className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-4">
-        <div className="flex items-start justify-between gap-3 border-b border-[var(--hairline)] pb-3">
+      <div className="rounded-md border border-hairline bg-surface p-4">
+        <div className="flex items-start justify-between gap-3 border-b border-hairline pb-3">
           <div>
-            <p className="text-[13px] font-medium tracking-tight text-[var(--fg)]">
-              Personal API key
-            </p>
-            {status ? (
-              <p className="mt-1 text-[12px] text-[var(--fg-dim)]">{status.message}</p>
-            ) : null}
+            <p className="text-sm font-medium tracking-tight text-fg">Personal API key</p>
+            {status ? <p className="mt-1 text-xs text-fg-dim">{status.message}</p> : null}
           </div>
           <Badge tone={connected ? "ready" : "muted"} pulse={connected}>
             {(status?.state ?? "unknown").replace("_", " ")}
@@ -126,7 +100,7 @@ export function ConnectorsGranolaPage(): React.ReactElement {
           }}
         >
           <label className="block space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">API key</span>
+            <span className="text-xs text-fg-dim">API key</span>
             <Input
               type="password"
               autoComplete="off"
@@ -135,10 +109,10 @@ export function ConnectorsGranolaPage(): React.ReactElement {
               onChange={(event) => setApiToken(event.target.value)}
               placeholder={connected ? "•••••• stored locally" : "grn_…"}
             />
-            <span className="block text-[11px] text-[var(--fg-mute)]">
+            <span className="block text-2xs text-fg-mute">
               Strata sends a single GET to{" "}
-              <span className="font-mono text-[var(--fg-dim)]">public-api.granola.ai/v1/notes</span>{" "}
-              to validate.
+              <span className="font-mono text-fg-dim">public-api.granola.ai/v1/notes</span> to
+              validate.
             </span>
           </label>
 
@@ -163,16 +137,14 @@ export function ConnectorsGranolaPage(): React.ReactElement {
         </form>
 
         {status?.validatedAt ? (
-          <p className="mt-4 border-t border-[var(--hairline)] pt-3 text-[11px] text-[var(--fg-mute)]">
+          <p className="mt-4 border-t border-hairline pt-3 text-2xs text-fg-mute">
             last validated{" "}
-            <span className="font-mono text-[var(--fg-dim)]">
+            <span className="font-mono text-fg-dim">
               {new Date(status.validatedAt).toISOString().replace("T", " ").slice(0, 19)} UTC
             </span>
           </p>
         ) : null}
       </div>
-
-      <ConnectorSchedulePanel connector="granola" />
 
       <ConnectorOperationPanel
         connector="granola"
@@ -180,8 +152,8 @@ export function ConnectorsGranolaPage(): React.ReactElement {
         description={
           <>
             Pull a bounded meeting window into{" "}
-            <span className="font-mono text-[var(--fg)]">wiki/raw/granola/</span>, then optionally
-            create curated wiki pages and refresh retrieval.
+            <span className="font-mono text-fg">wiki/raw/granola/</span>, then optionally create
+            curated wiki pages and refresh retrieval.
           </>
         }
         runTitle="Pull Granola meetings"
@@ -207,7 +179,7 @@ export function ConnectorsGranolaPage(): React.ReactElement {
       >
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_120px]">
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Since</span>
+            <span className="text-xs text-fg-dim">Since</span>
             <Input
               value={since}
               onChange={(event) => setSince(event.target.value)}
@@ -216,7 +188,7 @@ export function ConnectorsGranolaPage(): React.ReactElement {
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Page size</span>
+            <span className="text-xs text-fg-dim">Page size</span>
             <Input
               inputMode="numeric"
               value={pageSize}
@@ -224,7 +196,7 @@ export function ConnectorsGranolaPage(): React.ReactElement {
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-[12px] text-[var(--fg-dim)]">Max pages</span>
+            <span className="text-xs text-fg-dim">Max pages</span>
             <Input
               inputMode="numeric"
               value={maxPages}
@@ -235,13 +207,17 @@ export function ConnectorsGranolaPage(): React.ReactElement {
       </ConnectorOperationPanel>
 
       {error ? (
-        <div className="rounded-md border border-[var(--bad)]/40 bg-[var(--bad)]/[0.06] p-3">
-          <p className="font-mono text-[12px] text-[var(--bad)]">Validation failed</p>
-          <p className="mt-1 text-[13px] text-[var(--fg-dim)]">{error}</p>
+        <div className="rounded-md border border-bad/40 bg-bad/[0.06] p-3">
+          <p className="font-mono text-xs text-bad">Validation failed</p>
+          <p className="mt-1 text-sm text-fg-dim">{error}</p>
         </div>
       ) : null}
     </PageContainer>
   );
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function configString(value: unknown, fallback = ""): string {

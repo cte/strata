@@ -56,7 +56,7 @@ export const TerminalTitle = ({
   ...props
 }: TerminalTitleProps): ReactElement => (
   <div
-    className={cn("flex items-center gap-2 text-[11.5px] leading-5 text-zinc-400", className)}
+    className={cn("flex items-center gap-2 text-xs leading-5 text-zinc-400", className)}
     {...props}
   >
     <TerminalIcon className="size-[13px]" />
@@ -79,7 +79,7 @@ export const TerminalStatus = ({
 
   return (
     <div
-      className={cn("flex items-center gap-2 text-[11.5px] leading-5 text-zinc-400", className)}
+      className={cn("flex items-center gap-2 text-xs leading-5 text-zinc-400", className)}
       {...props}
     >
       {children}
@@ -205,7 +205,7 @@ export const TerminalContent = ({
 
   return (
     <div
-      className={cn("max-h-96 overflow-auto p-4 font-mono text-[11.5px] leading-5", className)}
+      className={cn("max-h-96 overflow-auto p-4 font-mono text-xs leading-5", className)}
       ref={containerRef}
       {...props}
     >

@@ -40,20 +40,6 @@ describe("ingest taxonomy", () => {
     });
   });
 
-  test("loads legacy profile.json as a fallback", async () => {
-    await withTempRepo(async (repoRoot) => {
-      await writeFile(
-        path.join(repoRoot, ".strata/ingest/profile.json"),
-        `${JSON.stringify({ version: 1, selfNames: ["Sam"] }, null, 2)}\n`,
-        "utf8",
-      );
-
-      const read = await readIngestTaxonomy(repoRoot);
-      expect(read.source).toBe("legacy-profile");
-      expect(read.taxonomy.selfNames).toEqual(["Sam"]);
-    });
-  });
-
   test("stages and applies taxonomy proposals", async () => {
     await withTempRepo(async (repoRoot) => {
       const proposal = await stageIngestTaxonomyProposal(repoRoot, {

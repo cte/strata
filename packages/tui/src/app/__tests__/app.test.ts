@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,11 +7,17 @@ import { SessionStore } from "@strata/core";
 import { stripAnsi } from "../../ansi.js";
 import { TuiRuntime } from "../../runtime.js";
 import { FakeTerminal } from "../../terminal.js";
-import { StrataApp } from "../app.js";
+import { buildTuiExitMessage, StrataApp } from "../app.js";
 
 function pump(ms = 30): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 describe("StrataApp", () => {
   test("initial --continue resumes the most recent session", async () => {
@@ -143,9 +150,15 @@ describe("StrataApp", () => {
     }
   });
 
-  test("initial --resume opens the session picker", async () => {
+  test("initial --resume opens the session picker with only resumable chat/query sessions", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    const store = await SessionStore.open(repoRoot);
     try {
+      await store.createSession({ kind: "ingest", title: "ingest source pull" });
+      await store.createSession({ kind: "maintain", title: "maintenance pass" });
+      await store.createSession({ kind: "query", title: "query session" });
+      await store.createSession({ kind: "chat", title: "chat session" });
+
       const terminal = new FakeTerminal(80, 20);
       const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
       const app = new StrataApp(
@@ -166,8 +179,12 @@ describe("StrataApp", () => {
 
       const output = stripAnsi(terminal.output);
       expect(output).toContain("Resume session");
-      expect(output).toContain("(no sessions yet)");
+      expect(output).toContain("query session");
+      expect(output).toContain("chat session");
+      expect(output).not.toContain("ingest source pull");
+      expect(output).not.toContain("maintenance pass");
     } finally {
+      store.close();
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
@@ -271,6 +288,81 @@ describe("StrataApp", () => {
       // App should still report running because /clear doesn't exit
       expect(app.running).toBe(true);
     } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("/model lists models across providers and selecting one switches provider", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tui-"));
+    const originalChatGptHome = Bun.env.STRATA_CHATGPT_HOME;
+    const originalRuntimeDir = Bun.env.XDG_RUNTIME_DIR;
+    const originalApiKey = Bun.env.STRATA_API_KEY;
+    Bun.env.STRATA_CHATGPT_HOME = path.join(repoRoot, "missing-chatgpt-home");
+    Bun.env.XDG_RUNTIME_DIR = path.join(repoRoot, "missing-runtime");
+    Bun.env.STRATA_API_KEY = "test-key";
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/models")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: "gpt-4o-mini", owned_by: "openai" },
+              { id: "gpt-4o", owned_by: "openai" },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    try {
+      const terminal = new FakeTerminal(80, 20);
+      const runtime = new TuiRuntime({ terminal, root: { render: () => ({ lines: [] }) } });
+      const app = new StrataApp(
+        runtime,
+        { repoRoot, provider: "openai-codex", model: "gpt-test" },
+        { codexLoggedIn: false, anthropicLoggedIn: false, apiKeyConfigured: true },
+      );
+      runtime.setRoot(app);
+      runtime.start();
+      await pump();
+
+      terminal.output = "";
+      terminal.feed("/model\r");
+      await pump(120);
+      const openedFrame = stripAnsi(
+        app.render({ width: terminal.columns, height: terminal.rows }).lines.join("\n"),
+      );
+      expect(openedFrame).toContain("Select model");
+      expect(openedFrame).toContain("gpt-4o");
+      expect(openedFrame).toContain("[openai-compatible]");
+      expect(openedFrame).not.toContain("Select provider");
+
+      terminal.feed("\r");
+      await pump();
+      runtime.stop();
+
+      const internal = app as unknown as { state: { provider: string; model: string } };
+      expect(internal.state.provider).toBe("openai-compatible");
+      expect(internal.state.model).toBe("gpt-4o");
+      const output = stripAnsi(terminal.output);
+      expect(output).toContain("model set to openai-compatible/gpt-4o");
+    } finally {
+      if (originalChatGptHome === undefined) {
+        delete Bun.env.STRATA_CHATGPT_HOME;
+      } else {
+        Bun.env.STRATA_CHATGPT_HOME = originalChatGptHome;
+      }
+      if (originalRuntimeDir === undefined) {
+        delete Bun.env.XDG_RUNTIME_DIR;
+      } else {
+        Bun.env.XDG_RUNTIME_DIR = originalRuntimeDir;
+      }
+      if (originalApiKey === undefined) {
+        delete Bun.env.STRATA_API_KEY;
+      } else {
+        Bun.env.STRATA_API_KEY = originalApiKey;
+      }
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
@@ -432,6 +524,53 @@ describe("StrataApp", () => {
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }
+  });
+
+  test("builds an exit message with token usage and resume command", () => {
+    const message = buildTuiExitMessage(
+      {
+        currentSessionId: "sess_fb71a200-1234-4567-8901-123456789abc",
+        contextWindow: 272_000,
+        usage: {
+          input: 80,
+          output: 20,
+          cacheRead: 20,
+          cacheWrite: 0,
+          total: 120,
+          cost: 0.0123,
+          latestContextTokens: 120,
+        },
+      },
+      "strata tui",
+    );
+
+    expect(message).not.toContain("Strata TUI ended.");
+    expect(message).toContain("input 80");
+    expect(message).toContain("output 20");
+    expect(message).toContain("cache read 20");
+    expect(message).toContain("total 120");
+    expect(message).toContain("cost $0.012");
+    expect(message).toContain("last context 120/272,000 (0.0%)");
+    expect(message).toContain("Resume: strata tui -r sess_fb71a20");
+    expect(message).not.toContain("sess_fb71a200-1234");
+  });
+
+  test("builds an empty exit message without token usage or resumable session", () => {
+    const message = buildTuiExitMessage({
+      currentSessionId: undefined,
+      contextWindow: undefined,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+        cost: 0,
+        latestContextTokens: undefined,
+      },
+    });
+
+    expect(message).toBe("");
   });
 
   test("/quit shuts down the app", async () => {

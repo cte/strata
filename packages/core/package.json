@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agent-instructions": "./src/agentInstructions.ts",
+    "./classification-correction-store": "./src/classificationCorrectionStore.ts",
     "./events": "./src/events.ts",
     "./file-store": "./src/fileStore.ts",
     "./memory-store": "./src/memoryStore.ts",

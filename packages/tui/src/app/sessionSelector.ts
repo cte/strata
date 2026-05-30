@@ -61,7 +61,7 @@ export class SessionSelector implements Component {
       emptyHint: "  (no sessions yet)",
       renderRow: (session, isSelected) => {
         const status = formatStatus(session);
-        const date = theme.muted(session.startedAt.slice(0, 10));
+        const startedAt = theme.muted(formatSessionStartedAt(session.startedAt));
         const rawTitle = sessionDisplayTitle(session);
         const isConfirmingDelete = session.id === this.confirmingDeleteId;
         const title = isConfirmingDelete
@@ -69,7 +69,7 @@ export class SessionSelector implements Component {
           : isSelected
             ? theme.accent(rawTitle)
             : rawTitle;
-        return `${status} ${date}  ${title}`;
+        return `${status} ${startedAt}  ${title}`;
       },
     });
   }
@@ -187,6 +187,11 @@ export function sessionDisplayTitle(session: SessionRecord): string {
   const source = session.title === "" ? session.kind : session.title;
   const sanitized = sanitizeTerminalText(source).replace(/\s+/g, " ").trim();
   return sanitized === "" ? session.kind : sanitized;
+}
+
+function formatSessionStartedAt(startedAt: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(startedAt);
+  return match === null ? startedAt : `${match[1]} ${match[2]}`;
 }
 
 function formatStatus(session: SessionRecord): string {

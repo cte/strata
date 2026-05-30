@@ -2,6 +2,11 @@ import type { JsonObject, JsonValue } from "@strata/core";
 import type { ToolMetadata } from "@strata/tools";
 import type { AnthropicCredentials } from "./authStore.js";
 import { ModelAdapterError } from "./model.js";
+import {
+  getModelCapabilities,
+  type ModelCapabilities,
+  mapThinkingLevel,
+} from "./modelCapabilities.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
 import { parseSseEvents } from "./sse.js";
 import type {
@@ -23,6 +28,7 @@ export interface AnthropicModelOptions {
   baseUrl?: string;
   name?: string;
   fetchImpl?: typeof fetch;
+  capabilities?: ModelCapabilities;
 }
 
 /**
@@ -68,6 +74,9 @@ const DEFAULT_MAX_TOKENS = 8192;
 const CLAUDE_CODE_VERSION = "2.1.85";
 const CLAUDE_CODE_SYSTEM_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 const ANTHROPIC_OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20";
+const ANTHROPIC_THINKING_DISPLAY = "summarized";
+
+type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export class AnthropicModelAdapter implements ModelAdapter {
   readonly name: string;
@@ -75,6 +84,7 @@ export class AnthropicModelAdapter implements ModelAdapter {
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  readonly capabilities: ModelCapabilities;
 
   constructor(options: AnthropicModelOptions) {
     this.auth = resolveAnthropicAuth(options);
@@ -82,6 +92,8 @@ export class AnthropicModelAdapter implements ModelAdapter {
     this.name = options.name ?? `anthropic-claude:${options.model}`;
     this.baseUrl = (options.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.capabilities =
+      options.capabilities ?? getModelCapabilities("anthropic-claude", options.model);
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
@@ -91,6 +103,7 @@ export class AnthropicModelAdapter implements ModelAdapter {
       request,
       toolNameMap.canonicalToProvider,
       this.auth.kind === "oauth",
+      this.capabilities,
     );
     const init: RequestInit = {
       method: "POST",
@@ -133,6 +146,7 @@ function buildAnthropicRequestBody(
   request: ModelRequest,
   canonicalToProvider: Map<string, string>,
   injectClaudeCodeIdentity: boolean,
+  capabilities: ModelCapabilities,
 ): JsonObject {
   const system = [
     ...(injectClaudeCodeIdentity ? [CLAUDE_CODE_SYSTEM_IDENTITY] : []),
@@ -160,9 +174,12 @@ function buildAnthropicRequestBody(
     body.tools = request.tools.map((tool) => toAnthropicTool(tool, canonicalToProvider));
     body.tool_choice = { type: "auto" };
   }
-  const thinkingBudget = thinkingBudgetForLevel(request.reasoningEffort);
-  if (thinkingBudget !== undefined) {
-    body.thinking = { type: "enabled", budget_tokens: thinkingBudget };
+  const thinking = anthropicThinkingConfig(model, request.reasoningEffort, capabilities);
+  if (thinking !== undefined) {
+    body.thinking = thinking.thinking;
+    if (thinking.outputConfig !== undefined) {
+      body.output_config = thinking.outputConfig;
+    }
   }
   return body;
 }
@@ -288,7 +305,7 @@ async function parseAnthropicSseResponse(
         toolBlocks.set(index, {
           id: block.id,
           name: providerToCanonical.get(block.name) ?? block.name,
-          inputText: block.input === undefined ? "" : JSON.stringify(block.input),
+          inputText: initialToolInputText(block.input),
           order: nextOrder,
         });
         nextOrder += 1;
@@ -363,15 +380,73 @@ function normalizeJsonText(value: string): string {
   }
 }
 
+function initialToolInputText(input: unknown): string {
+  if (input === undefined) {
+    return "";
+  }
+  if (isJsonObject(input) && Object.keys(input).length === 0) {
+    return "";
+  }
+  return JSON.stringify(input);
+}
+
 function thinkingBudgetForLevel(level: ThinkingLevel | undefined): number | undefined {
   if (level === undefined || level === "off") {
     return undefined;
   }
   if (level === "minimal") return 1024;
   if (level === "low") return 2048;
-  if (level === "medium") return 4096;
-  if (level === "high") return 8192;
+  if (level === "medium") return 8192;
   return 16_384;
+}
+
+function anthropicThinkingConfig(
+  model: string,
+  level: ThinkingLevel | undefined,
+  capabilities: ModelCapabilities,
+): { thinking: JsonObject; outputConfig?: JsonObject } | undefined {
+  if (level === undefined || !capabilities.reasoning) {
+    return undefined;
+  }
+
+  if (level === "off") {
+    return { thinking: { type: "disabled" } };
+  }
+
+  if (usesAdaptiveThinking(model)) {
+    return {
+      thinking: { type: "adaptive", display: ANTHROPIC_THINKING_DISPLAY },
+      outputConfig: { effort: mapThinkingLevelToEffort(capabilities, level) },
+    };
+  }
+
+  return {
+    thinking: {
+      type: "enabled",
+      budget_tokens: thinkingBudgetForLevel(level) ?? 1024,
+      display: ANTHROPIC_THINKING_DISPLAY,
+    },
+  };
+}
+
+function usesAdaptiveThinking(model: string): boolean {
+  return /(?:opus[-.]4[-.][678]|sonnet[-.]4[-.]6)/i.test(model);
+}
+
+function mapThinkingLevelToEffort(
+  capabilities: ModelCapabilities,
+  level: ThinkingLevel,
+): AnthropicEffort {
+  const mapped = mapThinkingLevel(capabilities, level);
+  if (typeof mapped === "string") return mapped as AnthropicEffort;
+
+  if (level === "minimal" || level === "low") {
+    return "low";
+  }
+  if (level === "medium") {
+    return "medium";
+  }
+  return "high";
 }
 
 function maxTokensForReasoning(level: ThinkingLevel | undefined): number {

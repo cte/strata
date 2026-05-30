@@ -76,6 +76,11 @@ export interface ModelAdapter {
   readonly name: string;
   /** Model context window in tokens, when known. Used for shared auto-compaction. */
   readonly contextWindow?: number;
+  /** Whether/how this model supports Pi-style thinking levels. */
+  readonly capabilities?: {
+    reasoning: boolean;
+    thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
+  };
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 
@@ -89,18 +94,19 @@ export interface AgentRunConfig {
   reasoningEffort?: ThinkingLevel;
   /** Optional image (and future: audio/file) attachments for this user turn. */
   attachments?: AgentAttachment[];
-  /**
-   * If set, this run continues an existing session: prior assistant/user/tool
-   * messages are loaded from the session DB and seeded into the model context.
-   * The system prompt and run-context (memory/todos/skills) are rebuilt fresh
-   * each run, so they always reflect current state.
-   */
+  // If set, this run continues an existing session from its current transcript.
+  // The run appends `question` as the next user turn unless the caller already
+  // persisted an identical trailing user message. After that, Pi-compatible
+  // continuation requires the context to end in a user or tool message;
+  // otherwise the run is rejected before calling the model.
   continueSessionId?: string;
+
   /**
    * Retry transient model transport failures before marking the run failed.
    * Attempts are total attempts, including the first request.
    */
   modelRetryPolicy?: ModelRetryPolicy;
+
   /**
    * Enables Pi-style auto-compaction after successful over-threshold turns,
    * before continuing sessions whose previous turn crossed the threshold, and

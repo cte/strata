@@ -10,6 +10,7 @@ export interface JobRunContext {
   env: Record<string, string | undefined>;
   now: Date;
   sessionId: string;
+  runJob(input: JobRunChildInput): Promise<JobExecutionResult>;
 }
 
 export interface JobRunOutput extends JsonObject {
@@ -45,24 +46,32 @@ export interface JobExecutionResult extends JsonObject {
   errorMessage: string | null;
 }
 
-export interface IntervalScheduleTrigger extends JsonObject {
+export interface JobRunChildInput {
+  jobName: string;
+  input?: JsonObject;
+  title?: string;
+}
+
+export interface IntervalCadence extends JsonObject {
   type: "interval";
   seconds: number;
 }
 
-export interface CronScheduleTrigger extends JsonObject {
+export interface CronCadence extends JsonObject {
   type: "cron";
   expression: string;
 }
 
-export type JobScheduleTrigger = IntervalScheduleTrigger | CronScheduleTrigger;
+/** A Routine trigger's recurring cadence. Stored verbatim as `trigger_json`. */
+export type RoutineTriggerCadence = IntervalCadence | CronCadence;
 
-export interface JobScheduleRecord extends JsonObject {
+/** A Routine's recurring trigger: a cadence + input that fires `routine.run`. */
+export interface RoutineTriggerRecord extends JsonObject {
   id: string;
-  name: string;
-  jobName: string;
+  routineId: string;
+  name: string | null;
   input: JsonObject;
-  trigger: JobScheduleTrigger;
+  trigger: RoutineTriggerCadence;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -74,35 +83,34 @@ export interface JobScheduleRecord extends JsonObject {
   lockedAt: string | null;
 }
 
-export interface CreateJobScheduleInput {
-  name: string;
-  jobName: string;
+export interface CreateRoutineTriggerInput {
+  routineId: string;
+  name?: string | null;
   input?: JsonObject;
-  trigger: JobScheduleTrigger;
+  trigger: RoutineTriggerCadence;
   enabled?: boolean;
   now?: Date;
 }
 
-export interface UpdateJobScheduleInput {
+export interface UpdateRoutineTriggerInput {
   id: string;
-  name?: string;
-  jobName?: string;
+  name?: string | null;
   input?: JsonObject;
-  trigger?: JobScheduleTrigger;
+  trigger?: RoutineTriggerCadence;
   enabled?: boolean;
   now?: Date;
 }
 
-export interface RunDueSchedulesResult extends JsonObject {
+export interface RunDueTriggersResult extends JsonObject {
   checkedAt: string;
   claimed: number;
-  results: JobScheduleRunResult[];
+  results: RoutineTriggerRunResult[];
 }
 
-export interface JobScheduleRunResult extends JsonObject {
-  scheduleId: string;
-  scheduleName: string;
-  jobName: string;
+export interface RoutineTriggerRunResult extends JsonObject {
+  triggerId: string;
+  triggerName: string | null;
+  routineId: string;
   sessionId: string;
   status: JobExecutionStatus;
   summary: string;

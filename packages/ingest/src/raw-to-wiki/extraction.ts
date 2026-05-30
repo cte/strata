@@ -1,11 +1,5 @@
 import type { CandidateLine } from "./types.js";
 
-const ACTION_PATTERNS = [
-  /^\s*[-*]\s+\[[ x]\]\s+/i,
-  /\b(action item|todo|follow[- ]?up|next step|owner:|due:)\b/i,
-  /\b(I|we|they|[A-Z][a-z]+)\s+(will|should|need to|needs to|must)\b/,
-];
-
 const DECISION_PATTERNS = [
   /\b(decision|decided|agreed|approved|greenlit|settled)\b/i,
   /\b(we will|we're going to|going forward|the plan is)\b/i,
@@ -13,16 +7,6 @@ const DECISION_PATTERNS = [
 
 export function candidateLines(body: string, patterns: RegExp[], limit: number): CandidateLine[] {
   return collectCandidateLines(body, patterns, limit);
-}
-
-export function actionCandidateLines(body: string, limit: number): CandidateLine[] {
-  return collectCandidateLines(
-    body,
-    ACTION_PATTERNS,
-    limit,
-    isExplicitActionCandidate,
-    cleanActionCandidateText,
-  );
 }
 
 export function decisionCandidateLines(body: string, limit: number): CandidateLine[] {
@@ -100,39 +84,11 @@ function collectCandidateLines(
   return candidates;
 }
 
-function cleanActionCandidateText(text: string): string {
-  return text
-    .replace(/^(?:action item|todo|follow[- ]?up|next step)\s*:\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function cleanDecisionCandidateText(text: string): string {
   return text
     .replace(/^(?:decision|outcome)\s*:\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function isExplicitActionCandidate(text: string, rawLine: string): boolean {
-  if (isOpenQuestionLike(text) || /\b(should we|need to decide|decision needed)\b/i.test(text)) {
-    return false;
-  }
-  if (/^(?:ok|okay|sure|thanks|thank you)\s+(?:will|should|need to|needs to|must)\b/i.test(text)) {
-    return false;
-  }
-  if (/^\s*[-*]\s+\[[ x]\]\s+/i.test(rawLine)) {
-    return true;
-  }
-  if (/\b(?:owner|assignee)\s*:\s*\S+/i.test(text)) {
-    return true;
-  }
-  if (/\bdue\s*:\s*\S+/i.test(text)) {
-    return true;
-  }
-  return /^(?:I|I'll|I’ll|They|[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3})\s+(?:will|must|needs? to|owns?|is responsible for|is going to)\b/i.test(
-    text,
-  );
 }
 
 function isExplicitDecisionCandidate(text: string, rawLine: string): boolean {

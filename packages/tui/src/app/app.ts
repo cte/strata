@@ -14,6 +14,7 @@ import {
   getStrataPaths,
   listSkills,
   readSkill,
+  type SessionKind,
   type SessionRecord,
   SessionStore,
 } from "@strata/core";
@@ -42,8 +43,9 @@ import {
   listModels,
   loadAuthStatus,
 } from "./modelFactory.js";
-import { ModelSelector } from "./modelSelector.js";
+import { type ModelOption, ModelSelector } from "./modelSelector.js";
 import { loadPreferences, savePreferences } from "./preferences.js";
+
 import { SessionSelector, sessionDisplayTitle } from "./sessionSelector.js";
 import {
   type AppState,
@@ -62,7 +64,7 @@ import {
   startSession,
 } from "./state.js";
 import { Transcript } from "./transcript.js";
-import { resetTokenUsage } from "./usage.js";
+import { resetTokenUsage, supportedThinkingLevels, type TokenUsageTotals } from "./usage.js";
 
 export interface StrataAppOptions {
   repoRoot: string;
@@ -88,6 +90,14 @@ interface RetryCountdown {
   maxAttempts: number;
   deadlineMs: number;
 }
+
+const RESUMABLE_SESSION_KINDS: readonly SessionKind[] = ["chat", "query"];
+
+const MODEL_PROVIDERS: readonly ProviderName[] = [
+  "openai-codex",
+  "openai-compatible",
+  "anthropic-claude",
+];
 
 export class StrataApp implements Component {
   private readonly state: AppState;
@@ -159,6 +169,17 @@ export class StrataApp implements Component {
     return !this.exitRequested;
   }
 
+  exitMessage(commandBase = "bun run strata tui"): string {
+    return buildTuiExitMessage(
+      {
+        currentSessionId: this.state.currentSessionId,
+        usage: this.state.usage,
+        contextWindow: this.state.contextWindow,
+      },
+      commandBase,
+    );
+  }
+
   startInitialSession(): void {
     if (this.initialSessionStarted) {
       return;
@@ -211,6 +232,7 @@ export class StrataApp implements Component {
   private activeBlockingOverlay(): Component | undefined {
     if (this.sessionSelector.active) return this.sessionSelector;
     if (this.modelSelector.active) return this.modelSelector;
+
     if (this.authDialog.active) return this.authDialog;
     return undefined;
   }
@@ -427,17 +449,17 @@ export class StrataApp implements Component {
 
     this.registry.register({
       name: "model",
-      description: "pick a model for the current provider",
+      description: "pick a model from any provider",
       run: () => {
-        const provider = this.state.provider;
         this.modelSelector.open(
+          this.state.provider,
           this.state.model,
           (model) => {
-            setModelSelection(this.state, this.state.provider, model.id);
+            setModelSelection(this.state, model.provider, model.id);
             this.persistPreferences();
             appendTranscript(this.state, {
               kind: "status",
-              content: `model set to ${model.id}`,
+              content: `model set to ${model.provider}/${model.id}`,
             });
             this.modelSelector.close();
             this.invalidate();
@@ -448,7 +470,7 @@ export class StrataApp implements Component {
           },
         );
         this.invalidate();
-        void listModels(provider).then(
+        void listAllModelOptions(this.repoRoot).then(
           (results) => {
             this.modelSelector.setModels(results);
             this.invalidate();
@@ -460,32 +482,7 @@ export class StrataApp implements Component {
         );
       },
     });
-    this.registry.register({
-      name: "provider",
-      description: "switch provider (openai-codex|openai-compatible|anthropic-claude)",
-      run: (args) => {
-        const value = args.trim();
-        if (
-          value !== "openai-codex" &&
-          value !== "openai-compatible" &&
-          value !== "anthropic-claude"
-        ) {
-          appendTranscript(this.state, {
-            kind: "error",
-            content: `unknown provider: ${value || "(none)"}`,
-          });
-        } else {
-          const model = defaultModel(value);
-          setModelSelection(this.state, value, model);
-          this.persistPreferences();
-          appendTranscript(this.state, {
-            kind: "status",
-            content: `provider set to ${value} (model ${model})`,
-          });
-        }
-        this.invalidate();
-      },
-    });
+
     this.registry.register({
       name: "think",
       description: "set reasoning effort (off|minimal|low|medium|high|xhigh)",
@@ -945,7 +942,10 @@ export class StrataApp implements Component {
   }
 
   private cycleThinkingLevel(): void {
-    this.state.reasoningEffort = nextThinkingLevel(this.state.reasoningEffort);
+    this.state.reasoningEffort = nextThinkingLevel(
+      this.state.reasoningEffort,
+      supportedThinkingLevels(this.state.provider, this.state.model),
+    );
     this.persistPreferences();
     this.invalidate();
   }
@@ -979,7 +979,7 @@ export class StrataApp implements Component {
   private async openSessionPicker(action: "resume"): Promise<void> {
     const store = await SessionStore.open(this.repoRoot);
     try {
-      const sessions = store.listSessions(30);
+      const sessions = store.listSessions(30, RESUMABLE_SESSION_KINDS);
       this.sessionSelector.open(
         sessions,
         (session) => {
@@ -1043,7 +1043,7 @@ export class StrataApp implements Component {
     const store = await SessionStore.open(this.repoRoot);
     try {
       if (action.type === "continue") {
-        const session = store.listSessions(1)[0];
+        const session = store.listSessions(1, RESUMABLE_SESSION_KINDS)[0];
         if (session === undefined) {
           throw new Error("No sessions found to continue");
         }
@@ -1065,10 +1065,15 @@ export class StrataApp implements Component {
   private resolveSessionSelector(store: SessionStore, selector: string): SessionRecord {
     const exact = store.getSession(selector);
     if (exact !== undefined) {
+      if (!isResumableSessionKind(exact.kind)) {
+        throw new Error(`Session is not resumable in the TUI: ${selector}`);
+      }
       return exact;
     }
 
-    const matches = store.findSessionsByIdPrefix(selector, 20);
+    const matches = store
+      .findSessionsByIdPrefix(selector, 20)
+      .filter((session) => isResumableSessionKind(session.kind));
     if (matches.length === 0) {
       throw new Error(`No session found matching '${selector}'`);
     }
@@ -1344,6 +1349,10 @@ function sanitizeDisplayText(value: string): string {
   return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
 }
 
+function isResumableSessionKind(kind: SessionKind): boolean {
+  return RESUMABLE_SESSION_KINDS.includes(kind);
+}
+
 function modelSelectionFromStoredModel(
   storedModel: string,
   fallbackProvider: ProviderName,
@@ -1399,6 +1408,38 @@ export async function buildAppOptions(repoRoot: string): Promise<{
   return { options, authStatus };
 }
 
+async function listAllModelOptions(repoRoot: string): Promise<ModelOption[]> {
+  const settled = await Promise.allSettled(
+    MODEL_PROVIDERS.map(async (provider) => ({
+      provider,
+      models: await listModels(provider, { repoRoot }),
+    })),
+  );
+  const models: ModelOption[] = [];
+  const errors: string[] = [];
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      for (const model of result.value.models) {
+        models.push({
+          id: model.id,
+          description: model.description,
+          provider: result.value.provider,
+        });
+      }
+    } else {
+      errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+    }
+  }
+  if (models.length === 0 && errors.length > 0) {
+    throw new Error(errors.join("; "));
+  }
+  models.sort((a, b) => {
+    const provider = a.provider.localeCompare(b.provider);
+    return provider === 0 ? a.id.localeCompare(b.id) : provider;
+  });
+  return models;
+}
+
 function parseProviderEnv(): ProviderName | undefined {
   const value = Bun.env.STRATA_PROVIDER;
   if (value === undefined || value === "") {
@@ -1408,10 +1449,84 @@ function parseProviderEnv(): ProviderName | undefined {
 }
 
 function parseProviderName(value: string): ProviderName | undefined {
-  if (value === "openai-codex" || value === "openai-compatible" || value === "anthropic-claude") {
-    return value;
+  return MODEL_PROVIDERS.includes(value as ProviderName) ? (value as ProviderName) : undefined;
+}
+
+export interface TuiExitMessageInput {
+  currentSessionId: string | undefined;
+  usage: TokenUsageTotals;
+  contextWindow: number | undefined;
+}
+
+export function buildTuiExitMessage(
+  input: TuiExitMessageInput,
+  commandBase = "bun run strata tui",
+): string {
+  const lines: string[] = [];
+  const tokenUsage = formatExitTokenUsage(input);
+  if (tokenUsage !== undefined) {
+    lines.push(`Token usage: ${tokenUsage}`);
   }
-  return undefined;
+  if (input.currentSessionId !== undefined) {
+    lines.push(`Resume: ${commandBase} -r ${abbreviateSessionId(input.currentSessionId)}`);
+  }
+  return lines.join("\n");
+}
+
+function abbreviateSessionId(sessionId: string): string {
+  return sessionId.slice(0, 12);
+}
+
+function formatExitTokenUsage(input: TuiExitMessageInput): string | undefined {
+  const usage = input.usage;
+  if (!hasExitTokenUsage(usage)) {
+    return undefined;
+  }
+  const parts = [
+    `input ${formatExactTokenCount(usage.input)}`,
+    `output ${formatExactTokenCount(usage.output)}`,
+    `cache read ${formatExactTokenCount(usage.cacheRead)}`,
+    `cache write ${formatExactTokenCount(usage.cacheWrite)}`,
+    `total ${formatExactTokenCount(usage.total)}`,
+  ];
+  if (usage.cost > 0) {
+    parts.push(`cost $${usage.cost.toFixed(3)}`);
+  }
+
+  const context = formatExitContextUsage(usage, input.contextWindow);
+  if (context !== undefined) {
+    parts.push(context);
+  }
+  return parts.join(" · ");
+}
+
+function formatExitContextUsage(
+  usage: TokenUsageTotals,
+  contextWindow: number | undefined,
+): string | undefined {
+  if (contextWindow === undefined) {
+    return undefined;
+  }
+  if (usage.latestContextTokens === undefined) {
+    return `context window ${formatExactTokenCount(contextWindow)}`;
+  }
+  const percent = (usage.latestContextTokens / contextWindow) * 100;
+  return `last context ${formatExactTokenCount(usage.latestContextTokens)}/${formatExactTokenCount(contextWindow)} (${percent.toFixed(1)}%)`;
+}
+
+function hasExitTokenUsage(usage: TokenUsageTotals): boolean {
+  return (
+    usage.input > 0 ||
+    usage.output > 0 ||
+    usage.cacheRead > 0 ||
+    usage.cacheWrite > 0 ||
+    usage.total > 0 ||
+    usage.cost > 0
+  );
+}
+
+function formatExactTokenCount(count: number): string {
+  return Math.max(0, Math.round(count)).toLocaleString("en-US");
 }
 
 export function shutdownOnExit(runtime: TuiRuntime): void {

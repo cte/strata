@@ -25,7 +25,10 @@ export default defineConfig({
     host: process.env.STRATA_WEB_HOST ?? "127.0.0.1",
     port: 5173,
     proxy: {
-      "/api": "http://127.0.0.1:4174",
+      "/api": {
+        target: "http://127.0.0.1:4174",
+        ws: true,
+      },
     },
   },
 });

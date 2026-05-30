@@ -58,16 +58,6 @@ export type WikiActionOwnerFilter = NonNullable<RouterInput["wiki"]["actions"]["
 export type WikiActionStatusFilter = NonNullable<RouterInput["wiki"]["actions"]["list"]["status"]>;
 export type WikiActionAddInput = RouterInput["wiki"]["actions"]["add"];
 export type WikiActionUpdateInput = RouterInput["wiki"]["actions"]["update"];
-export type DailyTodoRunSummary =
-  RouterOutput["extraction"]["dailyTodos"]["runs"]["list"]["runs"][number];
-export type DailyTodoCandidate =
-  RouterOutput["extraction"]["dailyTodos"]["candidates"]["list"]["candidates"][number];
-export type DailyTodoCandidateListInput =
-  RouterInput["extraction"]["dailyTodos"]["candidates"]["list"];
-export type DailyTodoCandidateAcceptInput =
-  RouterInput["extraction"]["dailyTodos"]["candidates"]["accept"];
-export type DailyTodoCandidateResult =
-  RouterOutput["extraction"]["dailyTodos"]["candidates"]["accept"];
 export type IngestActivityRun = RouterOutput["activity"]["list"]["runs"][number];
 export type IngestActivityDetail = NonNullable<RouterOutput["activity"]["get"]>;
 export type IngestActivityItem = IngestActivityDetail["items"][number];
@@ -75,26 +65,33 @@ export type IngestActivitySource = RouterInput["activity"]["list"]["source"];
 export type IngestActivityResultFilter = NonNullable<
   RouterInput["activity"]["list"]["resultFilters"]
 >[number];
-export type IngestTaxonomyResult = RouterOutput["ingest"]["taxonomy"]["get"];
-export type IngestTaxonomy = IngestTaxonomyResult["taxonomy"];
-export type IngestTaxonomyProjectAliasInput = RouterInput["ingest"]["taxonomy"]["addProjectAlias"];
-export type IngestTaxonomySelfNameInput = RouterInput["ingest"]["taxonomy"]["addSelfName"];
-export type IngestTaxonomySlackPatternInput = RouterInput["ingest"]["taxonomy"]["addSlackPattern"];
-export type IngestTaxonomyMutationResult = RouterOutput["ingest"]["taxonomy"]["addProjectAlias"];
 export type ProposalSummary = RouterOutput["proposals"]["list"]["proposals"][number];
 export type ProposalDetail = NonNullable<RouterOutput["proposals"]["get"]>;
 export type ProposalStatusFilter = RouterInput["proposals"]["list"]["status"];
 export type ProposalKindFilter = RouterInput["proposals"]["list"]["kind"];
 export type ProposalActionResult = RouterOutput["proposals"]["accept"];
 export type ProposalStatusResult = RouterOutput["proposals"]["defer"];
+export type RoutineSummary = RouterOutput["routines"]["list"]["routines"][number];
+export type RoutineDetail = NonNullable<RouterOutput["routines"]["get"]["routine"]>;
+export type RoutineRunRecord = RouterOutput["routines"]["runs"]["list"]["runs"][number];
+export type RoutineArtifactRecord =
+  RouterOutput["routines"]["artifacts"]["list"]["artifacts"][number];
+export type RoutineRunResult = RouterOutput["routines"]["run"];
+export type RoutineStatusFilter = RouterInput["routines"]["list"]["status"];
+export type RoutineRunInput = RouterInput["routines"]["run"];
+export type RoutineCreateInput = RouterInput["routines"]["create"];
+export type RoutineUpdateInput = RouterInput["routines"]["update"];
+export type RoutineStatus = RouterInput["routines"]["setStatus"]["status"];
+export type RoutineTemplateSummary =
+  RouterOutput["routines"]["templates"]["list"]["templates"][number];
 export type JobMetadata = RouterOutput["jobs"]["list"]["jobs"][number];
-export type JobSchedule = RouterOutput["schedules"]["list"]["schedules"][number];
-export type JobScheduleCreateInput = RouterInput["schedules"]["create"];
-export type JobScheduleUpdateInput = RouterInput["schedules"]["update"];
-export type JobScheduleRunResult = RouterOutput["schedules"]["runNow"];
-export type ScheduledConnectorName = RouterInput["connectors"]["schedules"]["status"]["connector"];
-export type ConnectorScheduleStatus = RouterOutput["connectors"]["schedules"]["status"];
-export type ConnectorSchedulePreset = ConnectorScheduleStatus["presets"][number];
+export type RoutineTrigger = RouterOutput["routines"]["triggers"]["list"]["triggers"][number];
+export type RoutineTriggerCreateInput = RouterInput["routines"]["triggers"]["create"];
+export type RoutineTriggerUpdateInput = RouterInput["routines"]["triggers"]["update"];
+export type RoutineTriggerRunResult = RouterOutput["routines"]["triggers"]["runNow"];
+export type RetrievalIndexStatus = RouterOutput["system"]["retrievalIndex"]["status"];
+export type RetrievalIndexRefreshInput = RouterInput["system"]["retrievalIndex"]["refresh"];
+export type RetrievalIndexRefreshResult = RouterOutput["system"]["retrievalIndex"]["refresh"];
 
 export interface ChatImageAttachment {
   kind: "image";
@@ -184,33 +181,6 @@ export async function configureGranola(input: GranolaConfigureInput): Promise<Gr
 
 export async function disconnectGranola(): Promise<GranolaStatus> {
   return trpc.connectors.granola.disconnect.mutate();
-}
-
-export async function getConnectorScheduleStatus(
-  connector: ScheduledConnectorName,
-): Promise<ConnectorScheduleStatus> {
-  return trpc.connectors.schedules.status.query({ connector });
-}
-
-export async function applyConnectorSchedulePreset(input: {
-  connector: ScheduledConnectorName;
-  presetId: string;
-  enabled?: boolean;
-}): Promise<ConnectorScheduleStatus> {
-  return trpc.connectors.schedules.applyPreset.mutate(input);
-}
-
-export async function setConnectorScheduleEnabled(input: {
-  connector: ScheduledConnectorName;
-  enabled: boolean;
-}): Promise<ConnectorScheduleStatus> {
-  return trpc.connectors.schedules.setEnabled.mutate(input);
-}
-
-export async function runConnectorScheduleNow(
-  connector: ScheduledConnectorName,
-): Promise<ConnectorScheduleStatus> {
-  return trpc.connectors.schedules.runNow.mutate({ connector });
 }
 
 export async function getModelAuthStatus(): Promise<ModelAuthStatus> {
@@ -377,35 +347,8 @@ export async function addWikiAction(input: WikiActionAddInput): Promise<WikiActi
   return body.action;
 }
 
-export async function listDailyTodoRuns(input: {
-  day?: string;
-  limit?: number;
-}): Promise<DailyTodoRunSummary[]> {
-  const body = await trpc.extraction.dailyTodos.runs.list.query(input);
-  return body.runs;
-}
-
-export async function listDailyTodoCandidates(
-  input: DailyTodoCandidateListInput,
-): Promise<DailyTodoCandidate[]> {
-  const body = await trpc.extraction.dailyTodos.candidates.list.query(input);
-  return body.candidates;
-}
-
-export async function acceptDailyTodoCandidate(
-  input: DailyTodoCandidateAcceptInput,
-): Promise<DailyTodoCandidateResult> {
-  return trpc.extraction.dailyTodos.candidates.accept.mutate(input);
-}
-
-export async function rejectDailyTodoCandidate(
-  id: string,
-  reason?: string,
-): Promise<RouterOutput["extraction"]["dailyTodos"]["candidates"]["reject"]> {
-  return trpc.extraction.dailyTodos.candidates.reject.mutate({
-    id,
-    ...(reason === undefined || reason.trim().length === 0 ? {} : { reason: reason.trim() }),
-  });
+export async function deleteWikiAction(id: string): Promise<{ deleted: boolean }> {
+  return trpc.wiki.actions.delete.mutate({ id });
 }
 
 export async function listIngestActivity(input: {
@@ -426,26 +369,22 @@ export async function getIngestActivity(
   return trpc.activity.get.query({ sessionId, itemLimit, resultFilters });
 }
 
-export async function getIngestTaxonomy(): Promise<IngestTaxonomyResult> {
-  return trpc.ingest.taxonomy.get.query();
+export type TaxonomyReviewItem =
+  RouterOutput["ingest"]["taxonomy"]["review"]["list"]["items"][number];
+export type TaxonomyReviewCorrectInput = RouterInput["ingest"]["taxonomy"]["review"]["correct"];
+
+export async function listTaxonomyReview(input: {
+  source?: "all" | "granola" | "slack" | "notion";
+  limit?: number;
+}): Promise<TaxonomyReviewItem[]> {
+  const body = await trpc.ingest.taxonomy.review.list.query(input);
+  return body.items;
 }
 
-export async function addIngestTaxonomyProjectAlias(
-  input: IngestTaxonomyProjectAliasInput,
-): Promise<IngestTaxonomyMutationResult> {
-  return trpc.ingest.taxonomy.addProjectAlias.mutate(input);
-}
-
-export async function addIngestTaxonomySelfName(
-  input: IngestTaxonomySelfNameInput,
-): Promise<RouterOutput["ingest"]["taxonomy"]["addSelfName"]> {
-  return trpc.ingest.taxonomy.addSelfName.mutate(input);
-}
-
-export async function addIngestTaxonomySlackPattern(
-  input: IngestTaxonomySlackPatternInput,
-): Promise<RouterOutput["ingest"]["taxonomy"]["addSlackPattern"]> {
-  return trpc.ingest.taxonomy.addSlackPattern.mutate(input);
+export async function correctTaxonomyReview(
+  input: TaxonomyReviewCorrectInput,
+): Promise<RouterOutput["ingest"]["taxonomy"]["review"]["correct"]> {
+  return trpc.ingest.taxonomy.review.correct.mutate(input);
 }
 
 export async function listProposals(input: {
@@ -487,31 +426,107 @@ export async function deferProposal(id: string, reason?: string): Promise<Propos
   });
 }
 
+export async function listRoutines(
+  input: { status?: RoutineStatusFilter; limit?: number } = {},
+): Promise<RoutineSummary[]> {
+  const body = await trpc.routines.list.query(input);
+  return body.routines;
+}
+
+export async function getRoutine(id: string): Promise<RoutineDetail | null> {
+  const body = await trpc.routines.get.query({ id });
+  return body.routine;
+}
+
+export async function runRoutine(input: RoutineRunInput): Promise<RoutineRunResult> {
+  return trpc.routines.run.mutate(input);
+}
+
+export async function createRoutine(input: RoutineCreateInput): Promise<RoutineDetail> {
+  const body = await trpc.routines.create.mutate(input);
+  return body.routine;
+}
+
+export async function listRoutineTemplates(): Promise<RoutineTemplateSummary[]> {
+  const body = await trpc.routines.templates.list.query();
+  return body.templates;
+}
+
+export async function createRoutineFromTemplate(key: string): Promise<RoutineDetail> {
+  const body = await trpc.routines.templates.create.mutate({ key });
+  return body.routine;
+}
+
+export async function updateRoutine(input: RoutineUpdateInput): Promise<RoutineDetail> {
+  const body = await trpc.routines.update.mutate(input);
+  return body.routine;
+}
+
+export async function setRoutineStatus(id: string, status: RoutineStatus): Promise<RoutineDetail> {
+  const body = await trpc.routines.setStatus.mutate({ id, status });
+  return body.routine;
+}
+
+export async function deleteRoutine(id: string): Promise<boolean> {
+  const body = await trpc.routines.delete.mutate({ id });
+  return body.deleted;
+}
+
+export async function listRoutineRuns(
+  input: { routineId?: string; limit?: number } = {},
+): Promise<RoutineRunRecord[]> {
+  const body = await trpc.routines.runs.list.query(input);
+  return body.runs;
+}
+
+export async function listRoutineArtifacts(
+  input: { routineId?: string; routineRunId?: string; limit?: number } = {},
+): Promise<RoutineArtifactRecord[]> {
+  const body = await trpc.routines.artifacts.list.query(input);
+  return body.artifacts;
+}
+
 export async function listJobs(): Promise<JobMetadata[]> {
   const body = await trpc.jobs.list.query();
   return body.jobs;
 }
 
-export async function listSchedules(): Promise<JobSchedule[]> {
-  const body = await trpc.schedules.list.query();
-  return body.schedules;
+export async function listRoutineTriggers(routineId: string): Promise<RoutineTrigger[]> {
+  const body = await trpc.routines.triggers.list.query({ routineId });
+  return body.triggers;
 }
 
-export async function createSchedule(input: JobScheduleCreateInput): Promise<JobSchedule> {
-  return trpc.schedules.create.mutate(input);
+export async function createRoutineTrigger(
+  input: RoutineTriggerCreateInput,
+): Promise<RoutineTrigger> {
+  const body = await trpc.routines.triggers.create.mutate(input);
+  return body.trigger;
 }
 
-export async function updateSchedule(input: JobScheduleUpdateInput): Promise<JobSchedule> {
-  return trpc.schedules.update.mutate(input);
+export async function updateRoutineTrigger(
+  input: RoutineTriggerUpdateInput,
+): Promise<RoutineTrigger> {
+  const body = await trpc.routines.triggers.update.mutate(input);
+  return body.trigger;
 }
 
-export async function deleteSchedule(id: string): Promise<boolean> {
-  const body = await trpc.schedules.delete.mutate({ id });
+export async function deleteRoutineTrigger(id: string): Promise<boolean> {
+  const body = await trpc.routines.triggers.delete.mutate({ id });
   return body.deleted;
 }
 
-export async function runScheduleNow(id: string): Promise<JobScheduleRunResult> {
-  return trpc.schedules.runNow.mutate({ id });
+export async function runRoutineTriggerNow(id: string): Promise<RoutineTriggerRunResult> {
+  return trpc.routines.triggers.runNow.mutate({ id });
+}
+
+export async function getRetrievalIndexStatus(): Promise<RetrievalIndexStatus> {
+  return trpc.system.retrievalIndex.status.query();
+}
+
+export async function refreshRetrievalIndex(
+  input: RetrievalIndexRefreshInput,
+): Promise<RetrievalIndexRefreshResult> {
+  return trpc.system.retrievalIndex.refresh.mutate(input);
 }
 
 export async function startChatRun(

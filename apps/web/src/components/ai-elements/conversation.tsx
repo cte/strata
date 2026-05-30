@@ -18,7 +18,7 @@ export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
 export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
-    className={cn("relative flex-1 overflow-hidden bg-[var(--bg)]", className)}
+    className={cn("relative flex-1 overflow-hidden bg-bg", className)}
     initial="smooth"
     resize="smooth"
     role="log"
@@ -58,12 +58,10 @@ export const ConversationEmptyState = ({
   >
     {children ?? (
       <EmptyHeader>
-        {icon ? <EmptyMedia className="mb-1 text-[var(--fg-mute)]">{icon}</EmptyMedia> : null}
-        <EmptyTitle className="text-[13px] font-medium tracking-tight text-[var(--fg)]">
-          {title}
-        </EmptyTitle>
+        {icon ? <EmptyMedia className="mb-1 text-fg-mute">{icon}</EmptyMedia> : null}
+        <EmptyTitle className="text-sm font-medium tracking-tight text-fg">{title}</EmptyTitle>
         {description ? (
-          <EmptyDescription className="text-[12px] leading-normal text-[var(--fg-mute)]">
+          <EmptyDescription className="text-xs leading-normal text-fg-mute">
             {description}
           </EmptyDescription>
         ) : null}
@@ -95,7 +93,7 @@ export const ConversationScrollButton = ({
       onClick={handleScrollToBottom}
       aria-label="Scroll to latest"
       className={cn(
-        "absolute bottom-24 left-1/2 z-10 h-8 w-8 -translate-x-1/2 rounded-full border-[var(--hairline-strong)] bg-[var(--bg-elev)] text-[var(--fg-dim)] shadow-md shadow-black/30 hover:bg-[var(--surface-2)] hover:text-[var(--fg)] [&>svg]:!size-3.5",
+        "absolute bottom-24 left-1/2 z-10 h-8 w-8 -translate-x-1/2 rounded-full border-hairline-strong bg-bg-elev text-fg-dim shadow-md shadow-black/30 hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5",
         className,
       )}
       {...props}

@@ -2,6 +2,11 @@ import type { JsonObject, JsonValue } from "@strata/core";
 import type { ToolMetadata } from "@strata/tools";
 import type { ChatGptCredentials } from "./authStore.js";
 import { ModelAdapterError } from "./model.js";
+import {
+  getModelCapabilities,
+  type ModelCapabilities,
+  mapThinkingLevel,
+} from "./modelCapabilities.js";
 import { createProviderToolNameMap } from "./providerToolNames.js";
 import { parseSseEvents } from "./sse.js";
 import type {
@@ -19,6 +24,7 @@ export interface OpenAICodexModelOptions {
   baseUrl?: string;
   name?: string;
   fetchImpl?: typeof fetch;
+  capabilities?: ModelCapabilities;
   retryPolicy?: OpenAICodexRetryPolicy;
 }
 
@@ -53,6 +59,7 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly retryPolicy: Required<OpenAICodexRetryPolicy>;
+  readonly capabilities: ModelCapabilities;
 
   constructor(options: OpenAICodexModelOptions) {
     this.credentials = options.credentials;
@@ -61,11 +68,17 @@ export class OpenAICodexModelAdapter implements ModelAdapter {
     this.baseUrl = (options.baseUrl ?? DEFAULT_CODEX_BASE_URL).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.retryPolicy = normalizeCodexRetryPolicy(options.retryPolicy);
+    this.capabilities = options.capabilities ?? getModelCapabilities("openai-codex", options.model);
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const toolNameMap = createProviderToolNameMap(request.tools);
-    const body = buildCodexRequestBody(this.model, request, toolNameMap.canonicalToProvider);
+    const body = buildCodexRequestBody(
+      this.model,
+      request,
+      toolNameMap.canonicalToProvider,
+      this.capabilities,
+    );
     const init: RequestInit = {
       method: "POST",
       headers: {
@@ -271,6 +284,7 @@ function buildCodexRequestBody(
   model: string,
   request: ModelRequest,
   canonicalToProvider: Map<string, string>,
+  capabilities: ModelCapabilities,
 ): JsonObject {
   const instructions = request.messages
     .filter((message) => message.role === "system")
@@ -295,16 +309,24 @@ function buildCodexRequestBody(
     body.tools = request.tools.map((tool) => toResponsesTool(tool, canonicalToProvider));
     body.tool_choice = "auto";
   }
-  if (request.reasoningEffort !== undefined && request.reasoningEffort !== "off") {
-    body.reasoning = { effort: mapResponsesEffort(request.reasoningEffort) };
+  if (
+    capabilities.reasoning &&
+    request.reasoningEffort !== undefined &&
+    request.reasoningEffort !== "off"
+  ) {
+    const effort = mapResponsesEffort(capabilities, request.reasoningEffort);
+    if (effort !== null) {
+      body.reasoning = { effort, summary: "auto" };
+    }
   }
   return body;
 }
 
-function mapResponsesEffort(level: Exclude<ThinkingLevel, "off">): string {
-  // The OpenAI responses API accepts minimal|low|medium|high. Pi exposes an
-  // additional "xhigh" tier that providers map to their highest setting.
-  return level === "xhigh" ? "high" : level;
+function mapResponsesEffort(
+  capabilities: ModelCapabilities,
+  level: Exclude<ThinkingLevel, "off">,
+): string | null {
+  return mapThinkingLevel(capabilities, level) ?? level;
 }
 
 function toResponsesInputItems(

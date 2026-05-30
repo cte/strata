@@ -1,10 +1,14 @@
 import type { JsonObject } from "@strata/core";
 import { createDefaultJobRegistry, type JobRegistry } from "./registry.js";
+import { RoutineTriggerStore } from "./routineTriggerStore.js";
 import { runJob } from "./runner.js";
-import { ScheduleStore } from "./scheduleStore.js";
-import type { JobScheduleRecord, JobScheduleRunResult, RunDueSchedulesResult } from "./types.js";
+import type {
+  RoutineTriggerRecord,
+  RoutineTriggerRunResult,
+  RunDueTriggersResult,
+} from "./types.js";
 
-export interface RunDueSchedulesOptions {
+export interface RunDueTriggersOptions {
   repoRoot?: string;
   env?: Record<string, string | undefined>;
   now?: Date;
@@ -12,8 +16,8 @@ export interface RunDueSchedulesOptions {
   registry?: JobRegistry;
 }
 
-export interface RunScheduleNowOptions {
-  scheduleId: string;
+export interface RunTriggerNowOptions {
+  triggerId: string;
   repoRoot?: string;
   env?: Record<string, string | undefined>;
   now?: Date;
@@ -29,21 +33,21 @@ export interface SchedulerLoopOptions {
   onStatus?: (message: string) => void;
 }
 
-export async function runDueSchedulesOnce(
-  options: RunDueSchedulesOptions = {},
-): Promise<RunDueSchedulesResult> {
+export async function runDueTriggersOnce(
+  options: RunDueTriggersOptions = {},
+): Promise<RunDueTriggersResult> {
   const now = options.now ?? new Date();
   const registry = options.registry ?? createDefaultJobRegistry();
-  const store = await ScheduleStore.open(
+  const store = await RoutineTriggerStore.open(
     options.repoRoot === undefined ? {} : { repoRoot: options.repoRoot },
   );
   try {
     const claimed = store.claimDue(
       options.limit === undefined ? { now } : { now, limit: options.limit },
     );
-    const results: JobScheduleRunResult[] = [];
-    for (const schedule of claimed) {
-      results.push(await runClaimedSchedule(schedule, store, registry, options.env, now));
+    const results: RoutineTriggerRunResult[] = [];
+    for (const trigger of claimed) {
+      results.push(await runClaimedTrigger(trigger, store, registry, options.env, now));
     }
     return {
       checkedAt: now.toISOString(),
@@ -55,20 +59,20 @@ export async function runDueSchedulesOnce(
   }
 }
 
-export async function runScheduleNow(
-  options: RunScheduleNowOptions,
-): Promise<JobScheduleRunResult> {
+export async function runTriggerNow(
+  options: RunTriggerNowOptions,
+): Promise<RoutineTriggerRunResult> {
   const now = options.now ?? new Date();
   const registry = options.registry ?? createDefaultJobRegistry();
-  const store = await ScheduleStore.open(
+  const store = await RoutineTriggerStore.open(
     options.repoRoot === undefined ? {} : { repoRoot: options.repoRoot },
   );
   try {
-    const schedule = store.get(options.scheduleId);
-    if (schedule === null) {
-      throw new Error(`Schedule not found: ${options.scheduleId}`);
+    const trigger = store.get(options.triggerId);
+    if (trigger === null) {
+      throw new Error(`Routine trigger not found: ${options.triggerId}`);
     }
-    return await runClaimedSchedule(schedule, store, registry, options.env, now);
+    return await runClaimedTrigger(trigger, store, registry, options.env, now);
   } finally {
     store.close();
   }
@@ -79,45 +83,46 @@ export async function runSchedulerLoop(options: SchedulerLoopOptions = {}): Prom
   const registry = options.registry ?? createDefaultJobRegistry();
   options.onStatus?.(`scheduler loop started; polling every ${pollMs}ms`);
   while (!options.signal?.aborted) {
-    const result = await runDueSchedulesOnce({
+    const result = await runDueTriggersOnce({
       ...(options.repoRoot === undefined ? {} : { repoRoot: options.repoRoot }),
       ...(options.env === undefined ? {} : { env: options.env }),
       registry,
     });
     if (result.claimed > 0) {
       options.onStatus?.(
-        `scheduler ran ${result.claimed} schedule${result.claimed === 1 ? "" : "s"}`,
+        `scheduler ran ${result.claimed} trigger${result.claimed === 1 ? "" : "s"}`,
       );
     }
     await sleep(pollMs, options.signal);
   }
 }
 
-async function runClaimedSchedule(
-  schedule: JobScheduleRecord,
-  store: ScheduleStore,
+async function runClaimedTrigger(
+  trigger: RoutineTriggerRecord,
+  store: RoutineTriggerStore,
   registry: JobRegistry,
   env: Record<string, string | undefined> | undefined,
   now: Date,
-): Promise<JobScheduleRunResult> {
+): Promise<RoutineTriggerRunResult> {
+  const triggerLabel = trigger.name ?? trigger.routineId;
   const result = await runJob({
-    jobName: schedule.jobName,
-    input: schedule.input as JsonObject,
+    jobName: "routine.run",
+    input: { routineId: trigger.routineId, input: trigger.input } as JsonObject,
     repoRoot: store.repoRoot,
     ...(env === undefined ? {} : { env }),
     now,
     registry,
     schedule: {
-      id: schedule.id,
-      name: schedule.name,
+      id: trigger.id,
+      name: triggerLabel,
     },
-    title: `Scheduled job: ${schedule.name}`,
+    title: `Routine trigger: ${triggerLabel}`,
   });
-  store.markRun(schedule.id, result, now);
+  store.markRun(trigger.id, result, now);
   return {
-    scheduleId: schedule.id,
-    scheduleName: schedule.name,
-    jobName: schedule.jobName,
+    triggerId: trigger.id,
+    triggerName: trigger.name,
+    routineId: trigger.routineId,
     sessionId: result.sessionId,
     status: result.status,
     summary: result.summary,

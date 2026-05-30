@@ -17,6 +17,74 @@ function makeSseResponse(chunks: object[]): Response {
 }
 
 describe("OpenAICompatibleChatModelAdapter", () => {
+  test("uses OpenAI-style reasoning only for reasoning-capable models", async () => {
+    const captured: JsonObject[] = [];
+    const fetchImpl = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        captured.push(JSON.parse(String(args[1]?.body)) as JsonObject);
+        return makeSseResponse([
+          { id: "x", choices: [{ delta: { content: "ok" } }] },
+          { id: "x", choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]);
+      },
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+
+    const reasoning = new OpenAICompatibleChatModelAdapter({
+      apiKey: "k",
+      model: "gpt-5.5",
+      fetchImpl,
+    });
+    await reasoning.complete({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      reasoningEffort: "xhigh",
+    });
+
+    const nonReasoning = new OpenAICompatibleChatModelAdapter({
+      apiKey: "k",
+      model: "gpt-4o-mini",
+      fetchImpl,
+    });
+    await nonReasoning.complete({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      reasoningEffort: "high",
+    });
+
+    expect(captured[0]?.reasoning_effort).toBe("xhigh");
+    expect(captured[1]?.reasoning_effort).toBeUndefined();
+  });
+
+  test("uses OpenRouter's nested reasoning shape", async () => {
+    let capturedBody: JsonObject | undefined;
+    const fetchImpl = Object.assign(
+      async (...args: Parameters<typeof fetch>) => {
+        capturedBody = JSON.parse(String(args[1]?.body)) as JsonObject;
+        return makeSseResponse([
+          { id: "x", choices: [{ delta: { content: "ok" } }] },
+          { id: "x", choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]);
+      },
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+
+    const adapter = new OpenAICompatibleChatModelAdapter({
+      apiKey: "k",
+      model: "gpt-5.5",
+      baseUrl: "https://openrouter.ai/api/v1",
+      fetchImpl,
+    });
+    await adapter.complete({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      reasoningEffort: "high",
+    });
+
+    expect(capturedBody?.reasoning).toEqual({ effort: "high" });
+    expect(capturedBody?.reasoning_effort).toBeUndefined();
+  });
+
   test("streams text deltas, accumulates content, and reports usage", async () => {
     const fetchImpl = Object.assign(
       async () =>

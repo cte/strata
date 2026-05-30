@@ -10,8 +10,8 @@ export function Tool({ status = "running", className, ...props }: ToolProps): Re
   return (
     <details
       className={cn(
-        "group/tool border border-[var(--hairline)] bg-[var(--bg)] text-[12px]",
-        status === "running" && "border-[var(--warn)]/35",
+        "group/tool border border-hairline bg-bg text-xs",
+        status === "running" && "border-warn/35",
         className,
       )}
       {...props}
@@ -27,7 +27,7 @@ export function ToolHeader({
   return (
     <summary
       className={cn(
-        "flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-[var(--fg-dim)] marker:hidden",
+        "flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-fg-dim marker:hidden",
         className,
       )}
       {...props}
@@ -49,7 +49,7 @@ export function ToolContent({
   return (
     <div
       className={cn(
-        "border-t border-[var(--hairline)] px-3 py-2 font-mono text-[11.5px] leading-5 text-[var(--fg-dim)]",
+        "border-t border-hairline px-3 py-2 font-mono text-xs leading-5 text-fg-dim",
         className,
       )}
       {...props}

@@ -18,11 +18,11 @@ export function LiveClock(): React.ReactElement {
 
   return (
     <span
-      className="label-eyebrow font-mono tabular-nums tracking-[0.14em] text-[var(--fg-dim)]"
+      className="label-eyebrow font-mono tabular-nums tracking-[0.14em] text-fg-dim"
       aria-label="Coordinated Universal Time"
     >
       {format(now)}
-      <span className="ml-1 text-[var(--fg-mute)]">UTC</span>
+      <span className="ml-1 text-fg-mute">UTC</span>
     </span>
   );
 }

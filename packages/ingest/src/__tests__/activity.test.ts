@@ -107,7 +107,6 @@ describe("ingest activity", () => {
         projectPaths: ["wiki/projects/roadmap.md"],
         decisionPaths: ["wiki/decisions/2026-05-27-ship-roadmap.md"],
         threadPaths: [],
-        actionCount: 1,
         writtenPaths: ["wiki/meetings/2026-05-27-roadmap-sync.md", "wiki/projects/roadmap.md"],
         classificationReasons: [
           {

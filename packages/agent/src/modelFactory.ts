@@ -2,11 +2,14 @@ import { AnthropicModelAdapter } from "./anthropic.js";
 import { getValidAnthropicCredentials } from "./anthropicOAuth.js";
 import { getAnthropicCredentials, getChatGptCredentials, getModelApiKey } from "./authStore.js";
 import { getValidChatGptCredentials } from "./chatgptOAuth.js";
+import { getModelCapabilities, type ModelCapabilities } from "./modelCapabilities.js";
 import { OpenAICodexModelAdapter } from "./openaiCodex.js";
 import { OpenAICompatibleChatModelAdapter } from "./openaiCompatible.js";
 import type { ModelAdapter } from "./types.js";
 
-export type ModelProviderName = "openai-codex" | "openai-compatible" | "anthropic-claude";
+export const MODEL_PROVIDERS = ["openai-codex", "openai-compatible", "anthropic-claude"] as const;
+
+export type ModelProviderName = (typeof MODEL_PROVIDERS)[number];
 
 export interface CreateModelAdapterOptions {
   provider?: ModelProviderName;
@@ -23,6 +26,8 @@ export interface ModelEnvironmentOptions {
 export interface ModelInfo {
   id: string;
   description: string;
+  provider?: ModelProviderName;
+  capabilities?: ModelCapabilities;
 }
 
 export interface ListModelsOptions extends ModelEnvironmentOptions {
@@ -33,10 +38,18 @@ export function parseModelProvider(value: string | undefined): ModelProviderName
   if (value === undefined || value === "") {
     return undefined;
   }
-  if (value === "openai-codex" || value === "openai-compatible" || value === "anthropic-claude") {
+  if (isModelProviderName(value)) {
     return value;
   }
-  throw new Error("STRATA_PROVIDER must be openai-codex, openai-compatible, or anthropic-claude");
+  throw new Error(`STRATA_PROVIDER must be ${formatModelProviderList()}`);
+}
+
+export function isModelProviderName(value: string): value is ModelProviderName {
+  return (MODEL_PROVIDERS as readonly string[]).includes(value);
+}
+
+export function formatModelProviderList(): string {
+  return MODEL_PROVIDERS.join(", ");
 }
 
 export async function inferDefaultProvider(
@@ -76,6 +89,13 @@ export function defaultModel(
   return env.STRATA_MODEL ?? env.OPENAI_MODEL ?? "gpt-4o-mini";
 }
 
+export function modelCapabilitiesForModel(
+  provider: ModelProviderName,
+  model: string,
+): ModelCapabilities {
+  return getModelCapabilities(provider, model);
+}
+
 export function contextWindowForModel(
   provider: ModelProviderName,
   model: string,
@@ -90,7 +110,14 @@ export function contextWindowForModel(
   }
 
   if (provider === "anthropic-claude") {
-    if (model.includes("opus-4-7") || model.includes("sonnet-4-6")) {
+    // Anthropic models that ship a native 1M context window (no beta header
+    // opt-in required), matching Pi's model registry.
+    if (
+      model.includes("opus-4-6") ||
+      model.includes("opus-4-7") ||
+      model.includes("opus-4-8") ||
+      model.includes("sonnet-4-6")
+    ) {
       return 1_000_000;
     }
     return 200_000;
@@ -153,9 +180,11 @@ export async function createModelAdapter(
 
   if (provider === "openai-codex") {
     const credentials = await getValidChatGptCredentials(options.repoRoot);
+    const model = options.model ?? env.STRATA_MODEL ?? "gpt-5.5";
     const codexOptions = {
       credentials,
-      model: options.model ?? env.STRATA_MODEL ?? "gpt-5.5",
+      model,
+      capabilities: modelCapabilitiesForModel(provider, model),
     };
     if (env.STRATA_CODEX_BASE_URL !== undefined) {
       return withContextWindow(
@@ -193,6 +222,7 @@ export async function createModelAdapter(
       new AnthropicModelAdapter({
         ...auth,
         model,
+        capabilities: modelCapabilitiesForModel(provider, model),
         ...(baseUrl !== undefined ? { baseUrl } : {}),
       }),
       contextWindowForModel(provider, model, { env }),
@@ -216,6 +246,7 @@ export async function createModelAdapter(
   const adapterOptions = {
     apiKey,
     model,
+    capabilities: modelCapabilitiesForModel(provider, model),
   };
   if (baseUrl !== undefined) {
     return withContextWindow(
@@ -295,6 +326,8 @@ async function listCodexModels(options: ListModelsOptions): Promise<ModelInfo[]>
     out.push({
       id: entry.slug,
       description: typeof entry.display_name === "string" ? entry.display_name : "",
+      provider: "openai-codex",
+      capabilities: modelCapabilitiesForModel("openai-codex", entry.slug),
     });
   }
   out.sort((a, b) => a.id.localeCompare(b.id));
@@ -351,6 +384,8 @@ async function listAnthropicModels(options: ListModelsOptions): Promise<ModelInf
     models.push({
       id: entry.id,
       description: typeof entry.display_name === "string" ? entry.display_name : "",
+      provider: "anthropic-claude",
+      capabilities: modelCapabilitiesForModel("anthropic-claude", entry.id),
     });
   }
   models.sort((a, b) => a.id.localeCompare(b.id));
@@ -397,6 +432,8 @@ async function listCompatibleModels(options: ListModelsOptions): Promise<ModelIn
     models.push({
       id: entry.id,
       description: typeof entry.owned_by === "string" ? entry.owned_by : "",
+      provider: "openai-compatible",
+      capabilities: modelCapabilitiesForModel("openai-compatible", entry.id),
     });
   }
   models.sort((a, b) => a.id.localeCompare(b.id));

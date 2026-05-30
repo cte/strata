@@ -7,13 +7,15 @@ import {
   Check,
   Copy,
   FileText,
-  History,
   ListTodo,
   LoaderCircle,
   MessageSquare,
+  MoreHorizontal,
   PencilLine,
+  Plus,
   Search,
   Terminal as TerminalIcon,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -96,10 +98,31 @@ import {
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool";
 import { AutocompletePopover } from "@/components/autocomplete-popover";
 import { ChatModelPicker } from "@/components/chat-model-picker";
-import { ChatSessionListBody, useDeleteChatSession } from "@/components/chat-session-list";
+import { ChatSessionDeleteConfirm, useDeleteChatSession } from "@/components/chat-session-list";
+import { TerminalPanel } from "@/components/terminal-panel";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Command, CommandList } from "@/components/ui/command";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import {
   addChatQueuedMessage,
   type ChatQueueTarget,
@@ -109,6 +132,7 @@ import {
   removeChatQueuedMessage,
 } from "@/lib/api";
 import { chatComposerSubmitState } from "@/lib/chatComposer";
+import { writeLastChatSessionId } from "@/lib/chatLastSession";
 import {
   type QueuedChatMessage,
   queuedChatMessageDescription,
@@ -159,6 +183,8 @@ export function ChatPage(): React.ReactElement {
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [showCommandHelp, setShowCommandHelp] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const autocompleteProviders = useMemo(
     () => [createSkillCommandProvider(), createSlashCommandProvider(), createFileMentionProvider()],
@@ -188,6 +214,12 @@ export function ChatPage(): React.ReactElement {
       replace: true,
     });
   }, [legacySessionId, navigate, routeSessionId]);
+
+  useEffect(() => {
+    if (urlSessionId !== null) {
+      writeLastChatSessionId(urlSessionId);
+    }
+  }, [urlSessionId]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -447,8 +479,14 @@ export function ChatPage(): React.ReactElement {
 
   // Below this point: the original return JSX is preserved verbatim.
   return (
-    <div className="chat-surface -mx-6 -my-8 flex h-[calc(100dvh-2.75rem)] flex-col overflow-hidden bg-[var(--bg)] md:-mx-10 md:-my-10">
+    <div className="chat-surface -mx-6 -my-8 flex h-[calc(100dvh-2.75rem)] overflow-hidden bg-bg md:-mx-10 md:-my-10">
       <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <ChatSessionToolbar
+          sessionId={urlSessionId}
+          terminalOpen={terminalOpen}
+          onToggleTerminal={() => setTerminalOpen((open) => !open)}
+        />
+
         {error === null ? null : <InlineError message={error} />}
         {showCommandHelp ? <CommandHelp onClose={() => setShowCommandHelp(false)} /> : null}
 
@@ -458,7 +496,7 @@ export function ChatPage(): React.ReactElement {
           >
             {transcript.length === 0 ? (
               urlSessionId === null ? (
-                <InlineChatHistory />
+                <InlineChatEmptyState />
               ) : (
                 <ConversationEmptyState
                   title="Ready."
@@ -489,7 +527,7 @@ export function ChatPage(): React.ReactElement {
               multiple
               onError={handlePromptInputError}
               onSubmit={handleSubmit}
-              className="rounded-md bg-[var(--bg-elev)] [&_[data-slot=input-group]]:rounded-md [&_[data-slot=input-group]]:border-[var(--hairline)] [&_[data-slot=input-group]]:bg-[var(--bg-elev)] [&_[data-slot=input-group]]:shadow-none"
+              className="rounded-md bg-bg-elev [&_[data-slot=input-group]]:rounded-md [&_[data-slot=input-group]]:border-hairline [&_[data-slot=input-group]]:bg-bg-elev [&_[data-slot=input-group]]:shadow-none"
             >
               <AutocompletePopover
                 open={autocomplete.open}
@@ -511,7 +549,7 @@ export function ChatPage(): React.ReactElement {
                   onFocus={autocomplete.refresh}
                   onKeyDown={handlePromptUnhandledKeyDown}
                   disabled={composerDisabled}
-                  className="min-h-12 text-[13px] leading-5 md:text-[13px]"
+                  className="min-h-12 text-sm leading-5 md:text-sm"
                 />
               </PromptInputBody>
               <PromptInputFooter>
@@ -547,6 +585,7 @@ export function ChatPage(): React.ReactElement {
           </div>
         </div>
       </section>
+      {terminalOpen ? <TerminalPanel onClose={() => setTerminalOpen(false)} /> : null}
     </div>
   );
 }
@@ -580,52 +619,165 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Recent-chats list shown on a fresh chat surface in place of "Ready.". Reuses
- * the same session rows as the ⌘K palette and disappears once a transcript
- * starts. Brand-new users (no sessions yet) get a simple ready affordance.
+ * Floating top-right toolbar over the chat surface. Provides a "New Chat"
+ * shortcut plus an overflow menu whose only action (for now) deletes the
+ * session currently being viewed. The delete affordance is hidden on a fresh
+ * surface (no session yet) and disabled while the session is running.
  */
-function InlineChatHistory(): React.ReactElement {
+function ChatSessionToolbar({
+  sessionId,
+  terminalOpen,
+  onToggleTerminal,
+}: {
+  sessionId: string | null;
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
+}): React.ReactElement {
   const navigate = useNavigate();
-  const { sessions, isLoaded, error } = useChatSessions();
-  const handleDelete = useDeleteChatSession();
-  const handleSelect = useCallback(
-    (sessionId: string) => {
-      void navigate({ to: "/chat/$sessionId", params: { sessionId } });
+  const { sessions } = useChatSessions();
+  const deleteSession = useDeleteChatSession();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const session = useMemo(
+    () => (sessionId === null ? null : (sessions.find((entry) => entry.id === sessionId) ?? null)),
+    [sessionId, sessions],
+  );
+  const canDelete = session !== null && session.status !== "running";
+
+  const handleNewChat = useCallback(() => {
+    void navigate({ to: "/chat" });
+  }, [navigate]);
+
+  const handleConfirmOpenChange = useCallback(
+    (next: boolean) => {
+      if (deleting) {
+        return;
+      }
+      setConfirmOpen(next);
+      if (!next) {
+        setDeleteError(null);
+      }
     },
-    [navigate],
+    [deleting],
   );
 
-  if (isLoaded && !error && sessions.length === 0) {
-    return (
-      <ConversationEmptyState
-        title="Ready."
-        description="Start a new chat below."
-        icon={<MessageSquare size={14} strokeWidth={1.75} />}
-      />
+  const confirmDelete = useCallback(() => {
+    if (session === null || !canDelete || deleting) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    void deleteSession(session).then(
+      () => {
+        setDeleting(false);
+        setConfirmOpen(false);
+      },
+      (cause: unknown) => {
+        setDeleteError(cause instanceof Error ? cause.message : String(cause));
+        setDeleting(false);
+      },
     );
-  }
+  }, [canDelete, deleteSession, deleting, session]);
 
   return (
-    <div className="mx-auto w-full max-w-2xl px-1 py-8">
-      <p className="mb-2 flex items-center gap-1.5 px-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--fg-mute)]">
-        <History size={12} strokeWidth={1.75} />
-        Recent Sessions
-      </p>
-      <Command
-        shouldFilter={false}
-        className="rounded-lg border border-[var(--hairline)] bg-[var(--bg-elev)]"
+    <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-1.5 md:right-6">
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
+        title={terminalOpen ? "Close terminal" : "Open terminal"}
+        onClick={onToggleTerminal}
+        className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
       >
-        <CommandList className="max-h-[min(60dvh,32rem)]">
-          <ChatSessionListBody
-            sessions={sessions}
-            isLoaded={isLoaded}
-            error={Boolean(error)}
-            onSelect={handleSelect}
-            onDelete={handleDelete}
+        <TerminalIcon size={13} strokeWidth={1.75} />
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        aria-label="New chat"
+        title="New chat"
+        onClick={handleNewChat}
+        className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
+      >
+        <Plus size={13} strokeWidth={1.75} />
+      </Button>
+
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="Session options"
+            title="Session options"
+            className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
+          >
+            <MoreHorizontal size={14} strokeWidth={1.75} />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44 border-hairline bg-bg-elev text-fg">
+          <DropdownMenuItem
+            disabled={!canDelete}
+            onSelect={(event) => {
+              event.preventDefault();
+              setMenuOpen(false);
+              setConfirmOpen(true);
+            }}
+            className="gap-2 text-xs text-bad focus:bg-bad/10 focus:text-bad"
+          >
+            <Trash2 size={13} strokeWidth={1.75} />
+            Delete session
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog open={confirmOpen} onOpenChange={handleConfirmOpenChange}>
+        <DialogContent className="pointer-events-auto max-w-sm border-hairline bg-bg-elev p-4 text-fg">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Delete session?</DialogTitle>
+            <DialogDescription>
+              This permanently removes the chat session you are viewing.
+            </DialogDescription>
+          </DialogHeader>
+          <ChatSessionDeleteConfirm
+            title={session === null ? "this session" : session.title}
+            deleting={deleting}
+            error={deleteError}
+            onCancel={() => handleConfirmOpenChange(false)}
+            onConfirm={confirmDelete}
           />
-        </CommandList>
-      </Command>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+function InlineChatEmptyState(): React.ReactElement {
+  return (
+    <Empty className="min-h-[280px] border-0 bg-transparent px-4 py-10 text-center">
+      <EmptyHeader>
+        <EmptyMedia className="mb-1 text-fg-mute">
+          <MessageSquare size={14} strokeWidth={1.75} />
+        </EmptyMedia>
+        <EmptyTitle className="text-sm font-medium tracking-tight text-fg">Ready.</EmptyTitle>
+        <EmptyDescription className="text-xs leading-normal text-fg-mute">
+          Start a new chat below, or use <KeyboardShortcut>Cmd-K</KeyboardShortcut> to open the
+          session picker.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+function KeyboardShortcut({ children }: { children: React.ReactNode }): React.ReactElement {
+  return (
+    <kbd className="rounded border border-hairline px-1 py-px font-mono text-2xs leading-none tracking-tight text-fg-mute">
+      {children}
+    </kbd>
   );
 }
 
@@ -671,9 +823,9 @@ function QueuedPromptMessages({
   onRemoveMessage(id: string): void;
 }): React.ReactElement {
   return (
-    <Queue className="w-full rounded-md border-[var(--hairline)] bg-transparent px-2 py-1.5 shadow-none">
+    <Queue className="w-full rounded-md border-hairline bg-transparent px-2 py-1.5 shadow-none">
       <QueueSection defaultOpen>
-        <QueueSectionTrigger className="bg-transparent px-1.5 py-1 text-[12px] font-medium text-[var(--fg-mute)] hover:bg-[var(--surface-2)]">
+        <QueueSectionTrigger className="bg-transparent px-1.5 py-1 text-xs font-medium text-fg-mute hover:bg-surface-2">
           <QueueSectionLabel count={messages.length} label="Queued" />
         </QueueSectionTrigger>
         <QueueSectionContent>
@@ -701,10 +853,10 @@ function QueuedPromptMessage({
 }): React.ReactElement {
   const description = queuedChatMessageDescription(message);
   return (
-    <QueueItem className="px-1.5 py-1.5 text-[12px] hover:bg-[var(--surface-2)]">
+    <QueueItem className="px-1.5 py-1.5 text-xs hover:bg-surface-2">
       <div className="flex min-w-0 items-start gap-2">
-        <QueueItemIndicator className="mt-[0.45rem] size-2 shrink-0 border-[var(--fg-mute)]/60" />
-        <QueueItemContent className="min-w-0 text-[12px] leading-5 text-[var(--fg)]">
+        <QueueItemIndicator className="mt-[0.45rem] size-2 shrink-0 border-fg-mute/60" />
+        <QueueItemContent className="min-w-0 text-xs leading-5 text-fg">
           {queuedChatMessageLabel(message)}
         </QueueItemContent>
         <QueueItemActions className="ml-auto shrink-0">
@@ -718,7 +870,7 @@ function QueuedPromptMessage({
         </QueueItemActions>
       </div>
       {description === null ? null : (
-        <QueueItemDescription className="ml-4 text-[11.5px] leading-4 text-[var(--fg-mute)]">
+        <QueueItemDescription className="ml-4 text-xs leading-4 text-fg-mute">
           {description}
         </QueueItemDescription>
       )}
@@ -747,17 +899,13 @@ function QueuedPromptAttachment({
     return (
       <QueueItemImage
         alt={label}
-        className="size-7 rounded-sm border-[var(--hairline)]"
+        className="size-7 rounded-sm border-hairline"
         src={attachment.url}
       />
     );
   }
 
-  return (
-    <QueueItemFile className="border-[var(--hairline)] bg-[var(--surface)] text-[11.5px]">
-      {label}
-    </QueueItemFile>
-  );
+  return <QueueItemFile className="border-hairline bg-surface text-xs">{label}</QueueItemFile>;
 }
 
 function ChatPromptSubmit({
@@ -860,7 +1008,7 @@ function MessageUsageBadge({ usage }: { usage: TokenUsage }): React.ReactElement
   return (
     <span
       title={full}
-      className="ml-1 inline-flex items-center gap-1 font-mono text-[10.5px] leading-4 text-[var(--fg-mute)]"
+      className="ml-1 inline-flex items-center gap-1 font-mono text-2xs leading-4 text-fg-mute"
     >
       {compact}
     </span>
@@ -878,7 +1026,7 @@ function CopyMessageAction({ text }: { text: string }): React.ReactElement {
   return (
     <MessageAction label={copied ? "Copied" : "Copy message"} onClick={handleCopy}>
       {copied ? (
-        <Check size={13} strokeWidth={1.75} className="text-[var(--good)]" />
+        <Check size={13} strokeWidth={1.75} className="text-good" />
       ) : (
         <Copy size={13} strokeWidth={1.75} />
       )}
@@ -892,23 +1040,21 @@ function ToolPanel({ tool }: { tool: ChatToolCallView }): React.ReactElement {
   const summary = toolSummary(tool, args, execution);
 
   return (
-    <Tool status={tool.status} open={tool.status !== "complete"}>
+    <Tool status={tool.status}>
       <ToolHeader>
         <span className="flex min-w-0 items-center gap-2">
           <ToolIcon name={tool.name} />
-          <span className="truncate font-mono text-[11.5px] text-[var(--fg)]">{tool.name}</span>
+          <span className="truncate font-mono text-xs text-fg">{tool.name}</span>
           {summary === null ? null : (
-            <span className="hidden truncate text-[11.5px] text-[var(--fg-mute)] sm:inline">
-              {summary}
-            </span>
+            <span className="hidden truncate text-xs text-fg-mute sm:inline">{summary}</span>
           )}
         </span>
         <span
           className={cn(
             "label-eyebrow ml-auto",
-            tool.status === "running" && "!text-[var(--warn)]",
-            tool.status === "complete" && "!text-[var(--good)]",
-            tool.status === "error" && "!text-[var(--bad)]",
+            tool.status === "running" && "!text-warn",
+            tool.status === "complete" && "!text-good",
+            tool.status === "error" && "!text-bad",
           )}
         >
           {tool.status}
@@ -922,7 +1068,7 @@ function ToolPanel({ tool }: { tool: ChatToolCallView }): React.ReactElement {
 }
 
 function ToolIcon({ name }: { name: string }): React.ReactElement {
-  const className = "shrink-0 text-[var(--accent)]";
+  const className = "shrink-0 text-accent";
   if (name === "shell.run") {
     return <TerminalIcon size={13} strokeWidth={1.75} className={className} />;
   }
@@ -1050,14 +1196,14 @@ function SearchToolView({
         />
       </ToolMetricGrid>
       {matches.length === 0 ? (
-        <p className="text-[12px] text-[var(--fg-mute)]">No matches returned.</p>
+        <p className="text-xs text-fg-mute">No matches returned.</p>
       ) : (
-        <div className="overflow-hidden border border-[var(--hairline)]">
+        <div className="overflow-hidden border border-hairline">
           {matches.slice(0, 8).map((entry, index) => (
             <SearchMatchRow key={searchMatchKey(entry, index)} entry={entry} />
           ))}
           {matches.length > 8 ? (
-            <div className="border-t border-[var(--hairline)] px-2 py-1.5 text-[11.5px] text-[var(--fg-mute)]">
+            <div className="border-t border-hairline px-2 py-1.5 text-xs text-fg-mute">
               {matches.length - 8} more match(es) omitted from the panel.
             </div>
           ) : null}
@@ -1073,14 +1219,14 @@ function SearchMatchRow({ entry }: { entry: unknown }): React.ReactElement {
   const line = numberValue(record.line);
   const preview = stringValue(record.preview) ?? formatValue(entry);
   return (
-    <div className="border-t border-[var(--hairline)] px-2 py-2 first:border-t-0">
+    <div className="border-t border-hairline px-2 py-2 first:border-t-0">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="truncate font-mono text-[11.5px] text-[var(--fg)]">{path}</span>
+        <span className="truncate font-mono text-xs text-fg">{path}</span>
         {line === null ? null : (
-          <span className="shrink-0 font-mono text-[11.5px] text-[var(--fg-mute)]">:{line}</span>
+          <span className="shrink-0 font-mono text-xs text-fg-mute">:{line}</span>
         )}
       </div>
-      <p className="mt-1 line-clamp-2 text-[11.5px] leading-5 text-[var(--fg-dim)]">{preview}</p>
+      <p className="mt-1 line-clamp-2 text-xs leading-5 text-fg-dim">{preview}</p>
     </div>
   );
 }
@@ -1201,7 +1347,7 @@ function ShellToolView({
         <ShellOutputTerminal label="stderr" output={stderr.text} truncated={stderr.truncated} />
       )}
       {stdout.text === "" && stderr.text === "" ? (
-        <p className="text-[12px] text-[var(--fg-mute)]">No stdout or stderr output.</p>
+        <p className="text-xs text-fg-mute">No stdout or stderr output.</p>
       ) : null}
     </div>
   );
@@ -1223,13 +1369,13 @@ function ShellOutputTerminal({
       autoScroll={streaming}
       isStreaming={streaming}
       output={output}
-      className="rounded-md border-[var(--hairline)] bg-zinc-950 text-zinc-100"
+      className="rounded-md border-hairline bg-zinc-950 text-zinc-100"
     >
       <TerminalHeader className="border-zinc-800 px-3 py-1.5">
         <div className="flex min-w-0 items-center gap-2">
           <TerminalTitle>{label}</TerminalTitle>
           {truncated ? (
-            <span className="font-mono text-[10.5px] leading-4 text-[var(--bad)]">truncated</span>
+            <span className="font-mono text-2xs leading-4 text-bad">truncated</span>
           ) : null}
         </div>
         <TerminalActions>
@@ -1261,9 +1407,7 @@ function RunningShellView({
       {stderr === "" ? null : (
         <ShellOutputTerminal label="stderr" output={stderr} truncated={false} streaming />
       )}
-      {stdout === "" && stderr === "" ? (
-        <p className="text-[12px] text-[var(--fg-mute)]">Running…</p>
-      ) : null}
+      {stdout === "" && stderr === "" ? <p className="text-xs text-fg-mute">Running…</p> : null}
     </div>
   );
 }
@@ -1352,14 +1496,14 @@ function SkillsListToolView({
         <ToolMetric label="truncated" value={truncated ? "yes" : "no"} />
       </ToolMetricGrid>
       {skills.length === 0 ? (
-        <p className="text-[12px] text-[var(--fg-mute)]">No skills returned.</p>
+        <p className="text-xs text-fg-mute">No skills returned.</p>
       ) : (
-        <div className="overflow-hidden border border-[var(--hairline)]">
+        <div className="overflow-hidden border border-hairline">
           {skills.slice(0, 10).map((entry, index) => (
             <SkillRow key={skillRowKey(entry, index)} entry={entry} />
           ))}
           {skills.length > 10 ? (
-            <div className="border-t border-[var(--hairline)] px-2 py-1.5 text-[11.5px] text-[var(--fg-mute)]">
+            <div className="border-t border-hairline px-2 py-1.5 text-xs text-fg-mute">
               {skills.length - 10} more skill(s) omitted from the panel.
             </div>
           ) : null}
@@ -1407,18 +1551,16 @@ function SkillRow({ entry }: { entry: unknown }): React.ReactElement {
   const status = stringValue(record.status) ?? "";
   const description = stringValue(record.description) ?? "";
   return (
-    <div className="border-t border-[var(--hairline)] px-2 py-2 first:border-t-0">
+    <div className="border-t border-hairline px-2 py-2 first:border-t-0">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="truncate font-mono text-[11.5px] text-[var(--fg)]">{name}</span>
-        <span className="shrink-0 font-mono text-[11.5px] text-[var(--fg-mute)]">
+        <span className="truncate font-mono text-xs text-fg">{name}</span>
+        <span className="shrink-0 font-mono text-xs text-fg-mute">
           {source}
           {status === "" ? "" : `/${status}`}
         </span>
       </div>
       {description === "" ? null : (
-        <p className="mt-1 line-clamp-2 text-[11.5px] leading-5 text-[var(--fg-dim)]">
-          {description}
-        </p>
+        <p className="mt-1 line-clamp-2 text-xs leading-5 text-fg-dim">{description}</p>
       )}
     </div>
   );
@@ -1438,14 +1580,14 @@ function ToolMetric({
   tone?: "default" | "good" | "bad";
 }): React.ReactElement {
   return (
-    <div className="min-w-0 border border-[var(--hairline)] bg-[var(--surface)] px-2 py-1.5">
-      <div className="label-eyebrow text-[var(--fg-mute)]">{label}</div>
+    <div className="min-w-0 border border-hairline bg-surface px-2 py-1.5">
+      <div className="label-eyebrow text-fg-mute">{label}</div>
       <div
         className={cn(
-          "mt-0.5 truncate font-mono text-[11.5px]",
-          tone === "good" && "text-[var(--good)]",
-          tone === "bad" && "text-[var(--bad)]",
-          tone === "default" && "text-[var(--fg)]",
+          "mt-0.5 truncate font-mono text-xs",
+          tone === "good" && "text-good",
+          tone === "bad" && "text-bad",
+          tone === "default" && "text-fg",
         )}
         title={value}
       >
@@ -1458,8 +1600,8 @@ function ToolMetric({
 function PreviewBlock({ label, value }: { label: string; value: string }): React.ReactElement {
   return (
     <div className="min-w-0">
-      <div className="label-eyebrow mb-1 text-[var(--fg-mute)]">{label}</div>
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-[var(--surface)] p-2 text-[11.5px] leading-5 text-[var(--fg-dim)]">
+      <div className="label-eyebrow mb-1 text-fg-mute">{label}</div>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-surface p-2 text-xs leading-5 text-fg-dim">
         {value}
       </pre>
     </div>
@@ -1485,19 +1627,16 @@ function ContextUsageIndicator({
     <Context maxTokens={contextWindow} usedTokens={usedTokens} usage={toLanguageModelUsage(usage)}>
       <ContextTrigger
         className={cn(
-          "h-7 gap-1.5 rounded-md border border-[var(--hairline)] bg-[var(--surface)] px-2 py-0 font-mono text-[11.5px]",
+          "h-7 gap-1.5 rounded-md border border-hairline bg-surface px-2 py-0 font-mono text-xs",
           contextPercent !== undefined &&
             contextPercent > 70 &&
-            "border-[var(--warn)]/45 text-[var(--warn)] hover:text-[var(--warn)]",
+            "border-warn/45 text-warn hover:text-warn",
           contextPercent !== undefined &&
             contextPercent > 90 &&
-            "border-[var(--bad)]/45 text-[var(--bad)] hover:text-[var(--bad)]",
+            "border-bad/45 text-bad hover:text-bad",
         )}
       />
-      <ContextContent
-        align="end"
-        className="w-72 border-[var(--hairline-strong)] bg-[var(--surface)] text-[var(--fg)]"
-      >
+      <ContextContent align="end" className="w-72 border-hairline-strong bg-surface text-fg">
         <ContextContentHeader />
         {hasBreakdown ? (
           <ContextContentBody className="space-y-2">
@@ -1522,8 +1661,8 @@ function ContextUsageIndicator({
           </ContextContentBody>
         ) : null}
         {usage.cost > 0 ? (
-          <ContextContentFooter className="bg-[var(--surface-2)]">
-            <span className="text-[var(--fg-mute)]">Total cost</span>
+          <ContextContentFooter className="bg-surface-2">
+            <span className="text-fg-mute">Total cost</span>
             <span>${usage.cost.toFixed(3)}</span>
           </ContextContentFooter>
         ) : null}
@@ -1534,9 +1673,9 @@ function ContextUsageIndicator({
 
 function ContextUsageRow({ label, value }: { label: string; value: string }): React.ReactElement {
   return (
-    <div className="flex items-center justify-between gap-3 text-[12px]">
-      <span className="text-[var(--fg-mute)]">{label}</span>
-      <span className="font-mono text-[var(--fg)]">{value}</span>
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="text-fg-mute">{label}</span>
+      <span className="font-mono text-fg">{value}</span>
     </div>
   );
 }
@@ -1575,12 +1714,8 @@ function RunStatusBadge({
           className="inline-flex items-center gap-2"
           title="Advanced by the CLI, TUI, or another tab"
         >
-          <LoaderCircle
-            size={13}
-            strokeWidth={1.75}
-            className="animate-spin text-[var(--accent)]"
-          />
-          <span className="label-eyebrow text-[var(--fg-dim)]">running elsewhere</span>
+          <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-accent" />
+          <span className="label-eyebrow text-fg-dim">running elsewhere</span>
         </span>
       );
     }
@@ -1589,13 +1724,13 @@ function RunStatusBadge({
   return (
     <span className="inline-flex items-center gap-2">
       {runState === "cancelling" ? (
-        <AlertCircle size={13} strokeWidth={1.75} className="text-[var(--warn)]" />
+        <AlertCircle size={13} strokeWidth={1.75} className="text-warn" />
       ) : runState === "disconnected" ? (
-        <AlertCircle size={13} strokeWidth={1.75} className="text-[var(--warn)]" />
+        <AlertCircle size={13} strokeWidth={1.75} className="text-warn" />
       ) : (
-        <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-[var(--accent)]" />
+        <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-accent" />
       )}
-      <span className="label-eyebrow text-[var(--fg-dim)]">
+      <span className="label-eyebrow text-fg-dim">
         {runState === "starting" ? "starting" : runState}
         {runId === null ? "" : ` ${runId.slice(0, 8)}`}
       </span>
@@ -1605,8 +1740,8 @@ function RunStatusBadge({
 
 function InlineError({ message }: { message: string }): React.ReactElement {
   return (
-    <div className="flex items-start gap-2 border-b border-[var(--bad)]/35 bg-[var(--bad)]/[0.06] px-4 py-2 text-[12px] text-[var(--fg-dim)]">
-      <AlertCircle size={13} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--bad)]" />
+    <div className="flex items-start gap-2 border-b border-bad/35 bg-bad/[0.06] px-4 py-2 text-xs text-fg-dim">
+      <AlertCircle size={13} strokeWidth={1.75} className="mt-0.5 shrink-0 text-bad" />
       <span className="min-w-0 break-words">{message}</span>
     </div>
   );
@@ -1614,23 +1749,19 @@ function InlineError({ message }: { message: string }): React.ReactElement {
 
 function CommandHelp({ onClose }: { onClose(): void }): React.ReactElement {
   return (
-    <div className="border-b border-[var(--hairline)] bg-[var(--surface)] px-4 py-3">
+    <div className="border-b border-hairline bg-surface px-4 py-3">
       <div className="mx-auto flex max-w-3xl items-start gap-3">
-        <TerminalIcon
-          size={13}
-          strokeWidth={1.75}
-          className="mt-0.5 shrink-0 text-[var(--accent)]"
-        />
+        <TerminalIcon size={13} strokeWidth={1.75} className="mt-0.5 shrink-0 text-accent" />
         <div className="min-w-0 flex-1">
-          <div className="mb-2 text-[12px] font-medium text-[var(--fg)]">Chat commands</div>
+          <div className="mb-2 text-xs font-medium text-fg">Chat commands</div>
           <div className="grid gap-1.5 sm:grid-cols-2">
             {slashCommandDefinitions().map((command) => (
               <div
                 key={command.name}
-                className="grid min-w-0 grid-cols-[4.75rem_minmax(0,1fr)] gap-2 text-[11.5px]"
+                className="grid min-w-0 grid-cols-[4.75rem_minmax(0,1fr)] gap-2 text-xs"
               >
-                <span className="font-mono text-[var(--fg)]">/{command.name}</span>
-                <span className="min-w-0 text-[var(--fg-mute)]">{command.description}</span>
+                <span className="font-mono text-fg">/{command.name}</span>
+                <span className="min-w-0 text-fg-mute">{command.description}</span>
               </div>
             ))}
           </div>

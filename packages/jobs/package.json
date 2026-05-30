@@ -16,6 +16,7 @@
     "@strata/agent": "workspace:*",
     "@strata/core": "workspace:*",
     "@strata/ingest": "workspace:*",
+    "@strata/routines": "workspace:*",
     "@strata/tools": "workspace:*"
   },
   "scripts": {
