@@ -334,6 +334,8 @@ const wikiWritePageTool: ToolDefinition<WikiWritePageArgs> = {
   name: "wiki.writePage",
   description: "Create or explicitly overwrite a Markdown page inside the Strata wiki.",
   mode: "write",
+  promptSnippet: "Create or overwrite wiki Markdown pages",
+  promptGuidelines: ["Use wiki.writePage only for new wiki pages or complete rewrites."],
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -378,6 +380,11 @@ const wikiPatchPageTool: ToolDefinition<WikiPatchPageArgs> = {
   description:
     "Apply a targeted text replacement to a Markdown page. Ambiguous matches fail unless replaceAll is true.",
   mode: "write",
+  promptSnippet: "Patch wiki pages with targeted exact text replacement",
+  promptGuidelines: [
+    "Use wiki.patchPage for precise wiki-page changes; oldText must match the original page text.",
+    "Keep wiki.patchPage oldText as small as possible while still unique in the page. Do not pad with large unchanged regions.",
+  ],
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -396,7 +403,7 @@ const wikiPatchPageTool: ToolDefinition<WikiPatchPageArgs> = {
   maxResultChars: 32_000,
   async handler(args, context) {
     const requestedPath = requiredString(args.path, "path");
-    const oldText = requiredNonEmptyString(args.oldText, "oldText");
+    const oldText = requiredNonEmptyText(args.oldText, "oldText");
     const newText = requiredString(args.newText, "newText");
     const replaceAll = optionalBoolean(args.replaceAll, false, "replaceAll");
     const maxFileBytes = optionalPositiveInteger(
@@ -831,6 +838,14 @@ function requiredString(value: JsonValue | undefined, name: string): string {
 function requiredNonEmptyString(value: JsonValue | undefined, name: string): string {
   const stringValue = requiredString(value, name).trim();
   if (stringValue === "") {
+    throw new PolicyViolationError("invalid_args", `${name} cannot be empty`);
+  }
+  return stringValue;
+}
+
+function requiredNonEmptyText(value: JsonValue | undefined, name: string): string {
+  const stringValue = requiredString(value, name);
+  if (stringValue.length === 0) {
     throw new PolicyViolationError("invalid_args", `${name} cannot be empty`);
   }
   return stringValue;

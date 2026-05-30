@@ -20,6 +20,7 @@ Patterns worth adapting:
 - Runtime ownership: one `TuiRuntime` owns the terminal, render scheduling, focus, overlays, input dispatch, resize handling, and shutdown cleanup.
 - Differential rendering: render the full component tree into logical lines, compare with the previous frame, then only redraw changed regions.
 - Editor behavior: multiline prompt, history navigation, bracketed paste, sane submit/newline behavior, autocomplete, and large-paste markers.
+- Streaming input behavior: Enter while the agent is running queues a steering message, Alt+Enter queues a follow-up, Alt+Up restores queued messages to the editor, and Escape restores queued messages before aborting. Steering must be delivered through the shared agent loop's mid-run drain point, not by waiting for the run to finish.
 - Overlay/dialog behavior: selectors, auth dialogs, and planned `user.ask` question prompts are focusable components that temporarily replace or overlay the editor and then restore focus.
 - Event-driven agent UI: the agent emits message/tool/status lifecycle events; the UI maps those events into components and invalidates render state.
 

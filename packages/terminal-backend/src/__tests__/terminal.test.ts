@@ -23,6 +23,44 @@ describe("TerminalHttpBridge", () => {
       await rm(repoRoot, { force: true, recursive: true });
     }
   });
+
+  test("publishes resize frames", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
+    const bridge = new TerminalHttpBridge(new TerminalSessionManager(repoRoot, testShellEnv()));
+    const session = bridge.create({ cols: 80, rows: 24 });
+    try {
+      const response = bridge.stream(session.id, new AbortController().signal);
+      expect(response).toBeDefined();
+      const reader = response!.body!.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+
+      expect(bridge.resize(session.id, { cols: 120, rows: 40 })).toBe(true);
+      const text = await readUntil(reader, "resized");
+      expect(text).toContain('"cols":120');
+      expect(text).toContain('"rows":40');
+    } finally {
+      await bridge.close(session.id);
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("propagates resize to the child PTY", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
+    const bridge = new TerminalHttpBridge(new TerminalSessionManager(repoRoot, testShellEnv()));
+    const session = bridge.create({ cols: 80, rows: 24 });
+    try {
+      const response = bridge.stream(session.id, new AbortController().signal);
+      expect(response).toBeDefined();
+      const reader = response!.body!.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+
+      expect(bridge.resize(session.id, { cols: 111, rows: 33 })).toBe(true);
+      bridge.write(session.id, "stty size\nexit\n");
+      const text = await readUntil(reader, "33 111");
+      expect(text).toContain("33 111");
+    } finally {
+      await bridge.close(session.id);
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
 });
 
 describe("TerminalSessionManager", () => {
@@ -42,6 +80,22 @@ describe("TerminalSessionManager", () => {
     }
   });
 
+  test("terminates shell process on close", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
+    const manager = new TerminalSessionManager(repoRoot, testShellEnv());
+    const session = manager.create();
+    try {
+      await manager.close(session.id);
+      const exited = await Promise.race([
+        session.process.exited.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
+      ]);
+      expect(exited).toBe(true);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("starts a shell process that accepts LF-terminated commands", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
     const manager = new TerminalSessionManager(repoRoot, testShellEnv());
@@ -57,7 +111,38 @@ describe("TerminalSessionManager", () => {
     }
   });
 
-  test("normalizes browser CR input to shell LF commands", async () => {
+  test("runs the shell inside a PTY with initial dimensions", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
+    const manager = new TerminalSessionManager(repoRoot, testShellEnv());
+    const session = manager.create({ cols: 111, rows: 33 });
+    try {
+      session.write("test -t 0; echo TTY:$?; stty size; exit\n");
+      const output = await readProcessOutput(session.process.stdout);
+      expect(output).toContain("TTY:0");
+      expect(output).toContain("33 111");
+    } finally {
+      await manager.close(session.id);
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("tracks requested terminal dimensions", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
+    const manager = new TerminalSessionManager(repoRoot, testShellEnv());
+    const session = manager.create({ cols: 100, rows: 30 });
+    try {
+      expect(session.cols).toBe(100);
+      expect(session.rows).toBe(30);
+      expect(manager.resize(session.id, 132, 43)).toBe(true);
+      expect(session.cols).toBe(132);
+      expect(session.rows).toBe(43);
+    } finally {
+      await manager.close(session.id);
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("accepts browser CR input as shell commands", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
     const manager = new TerminalSessionManager(repoRoot, testShellEnv());
     const session = manager.create();
@@ -91,4 +176,13 @@ async function readUntil(
 
 function testShellEnv(): Record<string, string | undefined> {
   return { ...Bun.env, SHELL: "/bin/sh" };
+}
+
+async function readProcessOutput(stream: ReadableStream<Uint8Array>): Promise<string> {
+  return await Promise.race([
+    new Response(stream).text(),
+    new Promise<string>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("Timed out waiting for PTY output.")), 5_000),
+    ),
+  ]);
 }

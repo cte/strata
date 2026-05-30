@@ -2,7 +2,7 @@
 
 Status: canonical top-level planning document.
 
-This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [extraction-framework-plan.md](./extraction-framework-plan.md), [routines-plan.md](./routines-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md), [tui-plan.md](./tui-plan.md), [web-chat-plan.md](./web-chat-plan.md), [web-feature-parity-plan.md](./web-feature-parity-plan.md), [web-control-plane-plan.md](./web-control-plane-plan.md), [ingest-activity-log-plan.md](./ingest-activity-log-plan.md), [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md), and [extensions-plan.md](./extensions-plan.md). Those documents contain implementation details. This document defines what Strata is, what we are building first, and how the pieces fit together.
+This document coordinates the lower-level plans in [wiki-plan.md](./wiki-plan.md), [extraction-framework-plan.md](./extraction-framework-plan.md), [routines-plan.md](./routines-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md), [tui-plan.md](./tui-plan.md), [web-chat-plan.md](./web-chat-plan.md), [web-feature-parity-plan.md](./web-feature-parity-plan.md), [web-control-plane-plan.md](./web-control-plane-plan.md), [web-terminal-plan.md](./web-terminal-plan.md), [ingest-activity-log-plan.md](./ingest-activity-log-plan.md), [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md), and [extensions-plan.md](./extensions-plan.md). Those documents contain implementation details. This document defines what Strata is, what we are building first, and how the pieces fit together.
 
 Current implementation status: [status.md](./status.md).
 
@@ -241,6 +241,7 @@ Scheduled maintenance should be treated as a first-class product feature. The po
 - [web-chat-plan.md](./web-chat-plan.md): local browser chat over the shared agent loop, using `packages/web-api` streaming endpoints and AI Elements UI components.
 - [web-feature-parity-plan.md](./web-feature-parity-plan.md): porting TUI composer features (file `@`-mentions, model picker, slash commands, prompt history) to the web chat by sharing data sources between the two surfaces.
 - [web-control-plane-plan.md](./web-control-plane-plan.md): local web UI for connector setup, operational status, Routine triggers, and proposal review.
+- [web-terminal-plan.md](./web-terminal-plan.md): clean-room chat-side browser terminal surface and local shell transport.
 - [ingest-activity-log-plan.md](./ingest-activity-log-plan.md): trace-backed activity log for source ingestion and raw-to-wiki organization.
 - [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md): external third-party tool-pack architecture and Notion MCP agent-tool plan.
 - [extensions-plan.md](./extensions-plan.md): Pi-style trusted local extension runtime for tools, commands, hooks, providers, UI affordances, and subagent-style workflows.

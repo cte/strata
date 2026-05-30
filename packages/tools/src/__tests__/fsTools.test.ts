@@ -198,6 +198,162 @@ describe("filesystem tools", () => {
     }
   });
 
+  test("fs.edit advertises Pi-style edits array instead of legacy scalar fields", () => {
+    const registry = createDefaultToolRegistry({ profile: "maintenance" });
+    const tool = registry.list().find((entry) => entry.name === "fs.edit");
+    const schema = tool?.inputSchema as
+      | { required?: string[]; properties?: Record<string, unknown> }
+      | undefined;
+
+    expect(schema?.required).toEqual(["path", "edits"]);
+    expect(schema?.properties).toHaveProperty("edits");
+    expect(schema?.properties).not.toHaveProperty("oldText");
+    expect(schema?.properties).not.toHaveProperty("newText");
+  });
+
+  test("fs.edit preserves leading whitespace in exact replacement text", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      await writeFile(path.join(repoRoot, "doc.txt"), "  foo\n", "utf8");
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = { repoRoot };
+
+      await expect(
+        registry.execute(
+          "fs.edit",
+          { path: "doc.txt", oldText: "  foo\n", newText: "  bar\n" },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "doc.txt",
+        replacements: 1,
+      });
+
+      expect(await readFile(path.join(repoRoot, "doc.txt"), "utf8")).toBe("  bar\n");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("fs.edit matches LF edit text against CRLF files while preserving BOM and line endings", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      await writeFile(path.join(repoRoot, "doc.txt"), "\uFEFFfirst\r\nsecond\r\nthird\r\n", "utf8");
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = { repoRoot };
+
+      await expect(
+        registry.execute(
+          "fs.edit",
+          {
+            path: "doc.txt",
+            edits: [
+              { oldText: "second\n", newText: "SECOND\n" },
+              { oldText: "third\n", newText: "THIRD\n" },
+            ],
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "doc.txt",
+        replacements: 2,
+      });
+
+      expect(await readFile(path.join(repoRoot, "doc.txt"), "utf8")).toBe(
+        "\uFEFFfirst\r\nSECOND\r\nTHIRD\r\n",
+      );
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("fs.edit supports Pi-style fuzzy matching for common model text differences", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      await writeFile(
+        path.join(repoRoot, "doc.txt"),
+        "console.log(\u2018hello\u2019);\nhello\u00A0world  \n",
+        "utf8",
+      );
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = { repoRoot };
+
+      await expect(
+        registry.execute(
+          "fs.edit",
+          {
+            path: "doc.txt",
+            edits: [
+              { oldText: "console.log('hello');\n", newText: "console.log('world');\n" },
+              { oldText: "hello world\n", newText: "hello universe\n" },
+            ],
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "doc.txt",
+        replacements: 2,
+      });
+
+      expect(await readFile(path.join(repoRoot, "doc.txt"), "utf8")).toBe(
+        "console.log('world');\nhello universe\n",
+      );
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("fs.edit accepts Pi-style stringified edits and legacy scalar edits together", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      await writeFile(path.join(repoRoot, "doc.txt"), "alpha\nbeta\ngamma\n", "utf8");
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = { repoRoot };
+
+      await expect(
+        registry.execute(
+          "fs.edit",
+          {
+            path: "doc.txt",
+            edits: JSON.stringify([{ oldText: "alpha\n", newText: "ALPHA\n" }]),
+            oldText: "gamma\n",
+            newText: "GAMMA\n",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "doc.txt",
+        replacements: 2,
+      });
+
+      expect(await readFile(path.join(repoRoot, "doc.txt"), "utf8")).toBe("ALPHA\nbeta\nGAMMA\n");
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("fs.edit detects ambiguous matches after fuzzy normalization", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      await writeFile(path.join(repoRoot, "doc.txt"), "hello world   \nhello world\n", "utf8");
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = { repoRoot };
+
+      const result = await registry.safeExecute(
+        "fs.edit",
+        { path: "doc.txt", oldText: "hello world", newText: "hello universe" },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("ambiguous_match");
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("fs.edit rejects overlapping edits", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
     try {
@@ -220,6 +376,38 @@ describe("filesystem tools", () => {
       if (!result.ok) {
         expect(result.error.code).toBe("edit_overlap");
       }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("wiki.patchPage preserves leading whitespace in exact replacement text", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-tools-"));
+    try {
+      await mkdir(path.join(repoRoot, "wiki", "notes"), { recursive: true });
+      await writeFile(path.join(repoRoot, "wiki", "notes", "today.md"), "  - old\n", "utf8");
+      const registry = createDefaultToolRegistry({ profile: "maintenance" });
+      const context = { repoRoot };
+
+      await expect(
+        registry.execute(
+          "wiki.patchPage",
+          {
+            path: "notes/today.md",
+            oldText: "  - old\n",
+            newText: "  - new\n",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        path: "notes/today.md",
+        repoPath: "wiki/notes/today.md",
+        replacements: 1,
+      });
+
+      expect(await readFile(path.join(repoRoot, "wiki", "notes", "today.md"), "utf8")).toBe(
+        "  - new\n",
+      );
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

@@ -51,6 +51,11 @@ export type TranscriptItem =
    */
   | { kind: "notice"; lines: string[] };
 
+export interface QueuedUserMessage {
+  content: string;
+  attachments: AgentAttachment[];
+}
+
 export interface AppState {
   provider: ProviderName;
   model: string;
@@ -65,11 +70,17 @@ export interface AppState {
   /** Attachments queued for the next user submission (cleared after submit). */
   pendingAttachments: AgentAttachment[];
   /**
-   * Messages queued via alt+enter while the agent was running. Sent in order
-   * after the current run finishes; shared-loop auto-compaction has already
-   * completed by then if it was needed.
+   * Pi-style steering messages queued via Enter while the agent is running.
+   * The shared loop drains these after the current assistant turn/tool batch
+   * and before the next model request.
    */
-  queuedMessages: string[];
+  steeringMessages: QueuedUserMessage[];
+  /**
+   * Pi-style follow-up messages queued via Alt+Enter while the agent is
+   * running. The shared loop drains these only once the agent would otherwise
+   * stop.
+   */
+  followUpMessages: QueuedUserMessage[];
 }
 
 export function initialAppState(
@@ -89,7 +100,8 @@ export function initialAppState(
     usage: createTokenUsageTotals(),
     transcript: [],
     pendingAttachments: [],
-    queuedMessages: [],
+    steeringMessages: [],
+    followUpMessages: [],
   };
 }
 

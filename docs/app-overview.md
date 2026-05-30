@@ -37,13 +37,15 @@ Core packages:
 - `packages/jobs`: `JobRegistry`, `runJob()`, `RoutineTriggerStore`, and the scheduler loop. Registered jobs currently wrap connector pulls, raw-to-wiki indexing, wiki retrieval-index refresh, maintenance jobs, the safe `wiki.hygiene` proposal-plus-index job, and `routine.run` as the trigger/execution wrapper for Routines.
 - `packages/core/src/wikiSearchIndex.ts`: rebuildable SQLite retrieval state over `wiki/`, including curated/source/raw document rows, chunk-level FTS rows, extracted wiki links, status inspection, and a native hybrid retrieval surface used by `wiki.search` and `wiki.retrieve`.
 - `packages/routines`: Routine definition store, Routine Run/artifact persistence, run-time input/output validation, prompt envelope rendering, per-run structured output submission, and shared runner. CLI commands, web tRPC procedures, and the browser `/routines` route can author (create/edit/enable-disable/delete), inspect, and run routines; the planned next piece is built-in routines such as Granola daily TODO discovery (see [routines-plan.md](./routines-plan.md)).
-- `packages/terminal-web`: browser terminal emulator API and renderer for the experimental chat-side terminal panel.
-- `packages/terminal-backend`: local shell session management and HTTP/SSE terminal bridge used by `packages/web-api` routes.
+- `packages/terminal-web`: browser terminal emulator API, parser/screen model, DOM renderer, and input mapper for the experimental chat-side terminal panel.
+- `packages/terminal-backend`: local PTY-backed shell session management and HTTP/SSE plus POST input/resize terminal bridge used by `packages/web-api` routes.
 - Planned `packages/extensions`: extension loader, trust/config handling, lifecycle hooks, extension command/resource registries, and surface adapters.
 
 Key invariant:
 
 `runAgentLoopEvents()` in `packages/agent/src/agentLoop.ts` is the source of truth for agent runs. It creates or continues sessions, builds run context, calls the model adapter, executes tools, persists messages/events, emits streaming lifecycle events, and honors cancellation through both model requests and `ToolContext.signal`. Interfaces should consume these events rather than reimplementing the loop. Human clarification should follow the planned [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md): a normal trace-backed `user.ask` tool over a shared UI adapter, with TUI/web adapters and explicit unavailable behavior for non-interactive runs.
+
+The loop also owns Pi-style mid-run steering. Interactive surfaces may supply `getSteeringMessages` and `getFollowUpMessages`; steering is injected after the current assistant turn/tool batch before the next model request, while follow-ups run only after the agent would otherwise stop.
 
 ## Runtime State
 

@@ -116,7 +116,7 @@ packages/
   jobs/        Registered jobs, job runner, durable routine triggers, and scheduler loop
   routines/    Structured Routine definitions, runs, artifacts, triggers, and routine.run orchestration
   terminal-web/      Browser terminal emulator API and renderer
-  terminal-backend/  Local shell session and HTTP/SSE terminal bridge
+  terminal-backend/  Local PTY shell session and HTTP/SSE terminal bridge
   web-api/     Local HTTP API for chat, connector setup, routines, activity, and operations
   e2e/         End-to-end TUI/agent tests driven through FakeTerminal
   extensions/  Planned Pi-style local extension runtime
@@ -133,6 +133,8 @@ Workspace dependencies use `workspace:*`. Cross-package imports use `@strata/<pk
 The agent loop is the source of truth. `runAgentLoopEvents()` in `packages/agent/src/agentLoop.ts` drives a single run, owns session creation, seeds messages, counts iterations/tool calls, honors abort signals, emits lifecycle events, and persists state. `runAgentLoop()` is a thin consumer. Do not duplicate loop logic.
 
 Cancellation is end-to-end. `AgentRunConfig.signal` flows into `ModelRequest.signal` for model adapters and `ToolContext.signal` for tools, and is checked by the loop at iteration and tool-call boundaries. Cancelled runs should end as `interrupted` with `stoppedReason: "cancelled"`.
+
+Mid-run steering is owned by the shared loop, not by a TUI-only after-run queue. `AgentRunConfig.getSteeringMessages` is drained after the current assistant response and any tool calls from that response finish, before the next model request. `AgentRunConfig.getFollowUpMessages` is drained only when the agent has no more tool calls and no steering messages. The TUI mirrors Pi: Enter while running queues steering, Alt+Enter queues follow-up, Alt+Up restores queued messages to the editor, and Escape restores queued messages before aborting the run. Do not reintroduce "send everything only after the run finishes" behavior.
 
 Session storage is centralized. Use `SessionStore.open(repoRoot?)`; runs persist to `.strata/state.sqlite` and `.strata/traces/<sessionId>.jsonl`. Delete sessions through `SessionStore.deleteSession()` so SQLite state and the matching trace file are removed together.
 
@@ -176,7 +178,7 @@ Run context includes durable local guidance. `packages/agent/src/runContext.ts` 
 
 Auto-compaction is owned by the shared agent loop and is append-only. `packages/agent/src/compaction.ts` appends `compaction.completed` checkpoint events instead of deleting historical messages; continued runs rebuild model context through `buildCompactedMessageRecords()` as fresh system context, the latest summary checkpoint, and kept recent messages. Threshold compaction uses Pi's `contextWindow - reserveTokens` rule, overflow errors compact and retry once, and stale pre-compaction usage must not immediately retrigger compaction.
 
-Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), optional `maxResultChars`, optional `executionMode` (`parallel` or `sequential`), and the run `ToolContext.signal` for cancellation. The agent loop executes multiple tool calls in Pi-style `parallel` mode by default: starts are emitted in assistant source order, completions are emitted as tools finish, and persisted tool-result messages remain in assistant source order. Any called tool with `executionMode: "sequential"` forces the whole batch sequential. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values. Native human-interaction tools such as planned `user.ask` should be normal trace-backed tools over a shared agent UI adapter; TUI and web may provide interactive adapters, while CLI print and scheduled jobs must return explicit unavailable/cancelled results instead of blocking indefinitely.
+Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), optional `maxResultChars`, optional prompt-facing `promptSnippet`/`promptGuidelines`, optional `executionMode` (`parallel` or `sequential`), and the run `ToolContext.signal` for cancellation. `ToolRegistry.list()` exposes active tool prompt guidance, and `packages/agent/src/runContext.ts` injects that guidance into every run so model-facing tool discipline stays with the tool definition. The agent loop executes multiple tool calls in Pi-style `parallel` mode by default: starts are emitted in assistant source order, completions are emitted as tools finish, and persisted tool-result messages remain in assistant source order. Any called tool with `executionMode: "sequential"` forces the whole batch sequential. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values. Native human-interaction tools such as planned `user.ask` should be normal trace-backed tools over a shared agent UI adapter; TUI and web may provide interactive adapters, while CLI print and scheduled jobs must return explicit unavailable/cancelled results instead of blocking indefinitely.
 
 TUI rendering is pi-style scrollback, not alt-screen. `TuiRuntime` writes to the main terminal buffer and must not enable alt-screen. Width/height changes clear the visible viewport but must not wipe terminal scrollback.
 

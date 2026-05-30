@@ -115,7 +115,7 @@ export interface EditTextFileResult extends JsonObject {
   replacements: number;
   bytes: number;
   hash: string;
-  /** Unified-diff hunk for the first changed region, or "" if no diff. */
+  /** Unified-diff hunks for changed regions, or "" if no diff. */
   diff: string;
 }
 
@@ -156,6 +156,7 @@ const fsListTool: ToolDefinition<FsListArgs> = {
   description:
     "List files and directories inside the Strata repo without following symlinks. Raw sources require includeRaw.",
   mode: "read",
+  promptSnippet: "List files and directories",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -202,6 +203,8 @@ const fsReadTool: ToolDefinition<FsReadArgs> = {
   description:
     "Read a UTF-8 text file inside the Strata repo without following symlinks. Use offset/limit to read a slice of large files. Raw sources require includeRaw.",
   mode: "read",
+  promptSnippet: "Read file contents",
+  promptGuidelines: ["Use fs.read to examine files instead of shell commands like cat or sed."],
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -289,6 +292,7 @@ const fsFindTool: ToolDefinition<FsFindArgs> = {
   description:
     "Find repo paths by case-insensitive substring or '*' wildcard pattern without searching blocked runtime/build directories.",
   mode: "read",
+  promptSnippet: "Find files by glob pattern",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -350,6 +354,7 @@ const fsGrepTool: ToolDefinition<FsGrepArgs> = {
   description:
     "Search UTF-8 text files in the Strata repo. Pattern is a JavaScript regex by default; pass `literal: true` for substring search. Skips blocked directories and binary files.",
   mode: "read",
+  promptSnippet: "Search file contents for patterns",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -448,6 +453,8 @@ const fsWriteTool: ToolDefinition<FsWriteArgs> = {
   description:
     "Create or overwrite a UTF-8 text file inside the Strata repo. Missing parent directories are created automatically. Writes under raw sources are forbidden.",
   mode: "write",
+  promptSnippet: "Create or overwrite files",
+  promptGuidelines: ["Use fs.write only for new files or complete rewrites."],
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -502,18 +509,26 @@ const fsWriteTool: ToolDefinition<FsWriteArgs> = {
 const fsEditTool: ToolDefinition<FsEditArgs> = {
   name: "fs.edit",
   description:
-    "Apply one or more targeted UTF-8 text replacements to an existing repo file. Each edit is matched against the ORIGINAL file (not incrementally); overlapping or nested edits must be merged into a single edit. Pass `edits: [{oldText, newText}, ...]` for multi-edit calls, or scalar `oldText`/`newText` for a single edit.",
+    "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
   mode: "write",
+  promptSnippet:
+    "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+  promptGuidelines: [
+    "Use fs.edit for precise changes (edits[].oldText must match exactly)",
+    "When changing multiple separate locations in one file, use one fs.edit call with multiple entries in edits[] instead of multiple fs.edit calls",
+    "Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
+    "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+  ],
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["path"],
+    required: ["path", "edits"],
     properties: {
       path: { type: "string", description: "Repo-relative file path to edit." },
       edits: {
         type: "array",
         description:
-          "One or more replacements applied to the original file. Use this OR oldText/newText.",
+          "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
         items: {
           type: "object",
           additionalProperties: false,
@@ -524,8 +539,6 @@ const fsEditTool: ToolDefinition<FsEditArgs> = {
           },
         },
       },
-      oldText: { type: "string", description: "Single-edit shortcut. Pi accepts this too." },
-      newText: { type: "string", description: "Single-edit shortcut. Pi accepts this too." },
       replaceAll: {
         type: "boolean",
         description:
@@ -556,36 +569,70 @@ const fsEditTool: ToolDefinition<FsEditArgs> = {
 };
 
 function parseEditArgs(args: FsEditArgs): EditTextFileEdit[] {
-  if (Array.isArray(args.edits)) {
-    if (args.edits.length === 0) {
-      throw new PolicyViolationError("invalid_args", "edits must be a non-empty array");
-    }
+  const editsValue = parseStringifiedEdits(args.edits);
+  const parsedEdits = Array.isArray(editsValue) ? parseEditArray(editsValue) : undefined;
+  const hasLegacyEdit = typeof args.oldText === "string" && typeof args.newText === "string";
+  if (parsedEdits !== undefined || hasLegacyEdit) {
     const out: EditTextFileEdit[] = [];
-    for (let i = 0; i < args.edits.length; i += 1) {
-      const entry = args.edits[i];
-      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-        throw new PolicyViolationError("invalid_args", `edits[${i}] must be an object`);
-      }
-      const e = entry as Record<string, JsonValue>;
-      const oldText = requiredNonEmptyString(e.oldText, `edits[${i}].oldText`);
-      const newText = requiredString(e.newText, `edits[${i}].newText`);
+    if (parsedEdits !== undefined) {
+      out.push(...parsedEdits);
+    }
+    if (hasLegacyEdit) {
+      const oldText = requiredNonEmptyText(args.oldText, "oldText");
+      const newText = requiredString(args.newText, "newText");
       if (oldText === newText) {
-        throw new PolicyViolationError(
-          "invalid_args",
-          `edits[${i}]: oldText and newText must differ`,
-        );
+        throw new PolicyViolationError("invalid_args", "oldText and newText must differ");
       }
       out.push({ oldText, newText });
     }
+    if (out.length === 0) {
+      throw new PolicyViolationError("invalid_args", "edits must be a non-empty array");
+    }
     return out;
   }
+  if (args.edits !== undefined) {
+    throw new PolicyViolationError("invalid_args", "edits must be an array");
+  }
   // Scalar fallback (single edit) — mirrors pi's legacy oldText/newText path.
-  const oldText = requiredNonEmptyString(args.oldText, "oldText");
+  const oldText = requiredNonEmptyText(args.oldText, "oldText");
   const newText = requiredString(args.newText, "newText");
   if (oldText === newText) {
     throw new PolicyViolationError("invalid_args", "oldText and newText must differ");
   }
   return [{ oldText, newText }];
+}
+
+function parseStringifiedEdits(value: JsonValue | undefined): JsonValue | undefined {
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed as JsonValue;
+  } catch {
+    return value;
+  }
+}
+
+function parseEditArray(edits: JsonValue[]): EditTextFileEdit[] {
+  const out: EditTextFileEdit[] = [];
+  for (let i = 0; i < edits.length; i += 1) {
+    const entry = edits[i];
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new PolicyViolationError("invalid_args", `edits[${i}] must be an object`);
+    }
+    const e = entry as Record<string, JsonValue>;
+    const oldText = requiredNonEmptyText(e.oldText, `edits[${i}].oldText`);
+    const newText = requiredString(e.newText, `edits[${i}].newText`);
+    if (oldText === newText) {
+      throw new PolicyViolationError(
+        "invalid_args",
+        `edits[${i}]: oldText and newText must differ`,
+      );
+    }
+    out.push({ oldText, newText });
+  }
+  return out;
 }
 
 export async function writeTextFile(
@@ -657,56 +704,11 @@ export async function editTextFile(
       maxFileBytes: input.maxFileBytes,
     });
 
-    // Pi's semantics: each edit matches against the ORIGINAL content. Pre-compute
-    // every match position, validate (no overlap, exactly one match per edit
-    // unless replaceAll), then apply right-to-left so positions don't shift.
-    type EditMatch = { editIndex: number; start: number; end: number };
-    const allMatches: EditMatch[] = [];
-    let totalReplacements = 0;
-    for (let editIndex = 0; editIndex < input.edits.length; editIndex += 1) {
-      const edit = input.edits[editIndex];
-      if (edit === undefined) continue;
-      const positions = findAllOccurrences(before, edit.oldText);
-      if (positions.length === 0) {
-        throw new PolicyViolationError(
-          "no_match",
-          `edits[${editIndex}].oldText was not found in ${resolved.relativePath}`,
-        );
-      }
-      if (positions.length > 1 && !input.replaceAll) {
-        throw new PolicyViolationError(
-          "ambiguous_match",
-          `edits[${editIndex}].oldText matched ${positions.length} times; set replaceAll: true or use a more specific oldText`,
-        );
-      }
-      for (const start of positions) {
-        allMatches.push({ editIndex, start, end: start + edit.oldText.length });
-        totalReplacements += 1;
-      }
-    }
-
-    // Detect overlapping match regions across edits.
-    const sorted = allMatches.slice().sort((a, b) => a.start - b.start);
-    for (let i = 1; i < sorted.length; i += 1) {
-      const prev = sorted[i - 1];
-      const cur = sorted[i];
-      if (prev !== undefined && cur !== undefined && cur.start < prev.end) {
-        throw new PolicyViolationError(
-          "edit_overlap",
-          `edits[${prev.editIndex}] and edits[${cur.editIndex}] match overlapping regions; merge them into a single edit`,
-        );
-      }
-    }
-
-    // Apply right-to-left so left-side positions remain valid.
-    let after = before;
-    for (let i = sorted.length - 1; i >= 0; i -= 1) {
-      const m = sorted[i];
-      if (m === undefined) continue;
-      const edit = input.edits[m.editIndex];
-      if (edit === undefined) continue;
-      after = after.slice(0, m.start) + edit.newText + after.slice(m.end);
-    }
+    const applied = applyEditsToFileContent(before, input.edits, {
+      path: resolved.relativePath,
+      replaceAll: input.replaceAll,
+    });
+    const after = applied.finalContent;
     await writeFile(resolved.absolutePath, after, "utf8");
     const change = await recordTextFileChange(context, {
       path: resolved.relativePath,
@@ -715,28 +717,187 @@ export async function editTextFile(
       after,
     });
 
-    // Generate a unified-diff hunk per edit (first match only) and concatenate.
-    // Keeps the LLM's view tidy while showing what changed.
-    const firstEdit = input.edits[0];
-    const diff =
-      firstEdit === undefined
-        ? ""
-        : buildEditDiffString({
-            before,
-            oldText: firstEdit.oldText,
-            newText: firstEdit.newText,
-            path: resolved.relativePath,
-          });
-
     return {
       path: resolved.relativePath,
       changeType: "update",
-      replacements: totalReplacements,
+      replacements: applied.replacements,
       bytes: change.afterBytes,
       hash: change.afterHash,
-      diff,
+      diff: applied.diff,
     };
   });
+}
+
+interface ApplyEditsOptions {
+  path: string;
+  replaceAll: boolean;
+}
+
+interface MatchedEdit {
+  editIndex: number;
+  matchIndex: number;
+  matchLength: number;
+  newText: string;
+}
+
+interface AppliedFileEdits {
+  finalContent: string;
+  replacements: number;
+  diff: string;
+}
+
+function applyEditsToFileContent(
+  rawContent: string,
+  edits: EditTextFileEdit[],
+  options: ApplyEditsOptions,
+): AppliedFileEdits {
+  const { bom, text: content } = stripBom(rawContent);
+  const originalEnding = detectLineEnding(content);
+  const normalizedContent = normalizeToLF(content);
+  const normalizedEdits = edits.map((edit) => ({
+    oldText: normalizeToLF(edit.oldText),
+    newText: normalizeToLF(edit.newText),
+  }));
+
+  for (let i = 0; i < normalizedEdits.length; i += 1) {
+    if (normalizedEdits[i]?.oldText.length === 0) {
+      throw new PolicyViolationError("invalid_args", `edits[${i}].oldText cannot be empty`);
+    }
+  }
+
+  const initialMatches = normalizedEdits.map((edit) =>
+    fuzzyFindText(normalizedContent, edit.oldText),
+  );
+  const baseContent = initialMatches.some((match) => match.usedFuzzyMatch)
+    ? normalizeForFuzzyMatch(normalizedContent)
+    : normalizedContent;
+
+  const matchedEdits: MatchedEdit[] = [];
+  for (let editIndex = 0; editIndex < normalizedEdits.length; editIndex += 1) {
+    const edit = normalizedEdits[editIndex];
+    if (edit === undefined) continue;
+    const matches = matchEditInBaseContent(baseContent, edit, {
+      ...options,
+      editIndex,
+      totalEdits: normalizedEdits.length,
+    });
+    matchedEdits.push(...matches);
+  }
+
+  matchedEdits.sort((left, right) => left.matchIndex - right.matchIndex);
+  for (let i = 1; i < matchedEdits.length; i += 1) {
+    const previous = matchedEdits[i - 1];
+    const current = matchedEdits[i];
+    if (
+      previous !== undefined &&
+      current !== undefined &&
+      previous.matchIndex + previous.matchLength > current.matchIndex
+    ) {
+      throw new PolicyViolationError(
+        "edit_overlap",
+        `edits[${previous.editIndex}] and edits[${current.editIndex}] match overlapping regions; merge them into a single edit`,
+      );
+    }
+  }
+
+  let newContent = baseContent;
+  for (let i = matchedEdits.length - 1; i >= 0; i -= 1) {
+    const edit = matchedEdits[i];
+    if (edit === undefined) continue;
+    newContent =
+      newContent.slice(0, edit.matchIndex) +
+      edit.newText +
+      newContent.slice(edit.matchIndex + edit.matchLength);
+  }
+
+  if (baseContent === newContent) {
+    throw new PolicyViolationError(
+      "no_change",
+      `No changes made to ${options.path}. The replacement produced identical content.`,
+    );
+  }
+
+  return {
+    finalContent: bom + restoreLineEndings(newContent, originalEnding),
+    replacements: matchedEdits.length,
+    diff: buildEditDiffString({ before: baseContent, matches: matchedEdits, path: options.path }),
+  };
+}
+
+interface MatchEditOptions extends ApplyEditsOptions {
+  editIndex: number;
+  totalEdits: number;
+}
+
+function matchEditInBaseContent(
+  baseContent: string,
+  edit: EditTextFileEdit,
+  options: MatchEditOptions,
+): MatchedEdit[] {
+  if (options.replaceAll) {
+    const occurrences = findAllEditOccurrences(baseContent, edit.oldText);
+    if (occurrences.length === 0) {
+      throwNoMatch(options.path, options.editIndex, options.totalEdits);
+    }
+    return occurrences.map((occurrence) => ({
+      editIndex: options.editIndex,
+      matchIndex: occurrence.index,
+      matchLength: occurrence.length,
+      newText: edit.newText,
+    }));
+  }
+
+  const match = fuzzyFindText(baseContent, edit.oldText);
+  if (!match.found) {
+    throwNoMatch(options.path, options.editIndex, options.totalEdits);
+  }
+
+  const occurrences = countOccurrences(baseContent, edit.oldText);
+  if (occurrences > 1) {
+    throw new PolicyViolationError(
+      "ambiguous_match",
+      matchErrorPrefix(options.editIndex, options.totalEdits, options.path) +
+        ` matched ${occurrences} times; set replaceAll: true or use a more specific oldText`,
+    );
+  }
+
+  return [
+    {
+      editIndex: options.editIndex,
+      matchIndex: match.index,
+      matchLength: match.matchLength,
+      newText: edit.newText,
+    },
+  ];
+}
+
+interface TextMatch {
+  index: number;
+  length: number;
+}
+
+function findAllEditOccurrences(content: string, oldText: string): TextMatch[] {
+  const exactPositions = findAllOccurrences(content, oldText);
+  if (exactPositions.length > 0) {
+    return exactPositions.map((index) => ({ index, length: oldText.length }));
+  }
+  const fuzzyContent = normalizeForFuzzyMatch(content);
+  const fuzzyOldText = normalizeForFuzzyMatch(oldText);
+  return findAllOccurrences(fuzzyContent, fuzzyOldText).map((index) => ({
+    index,
+    length: fuzzyOldText.length,
+  }));
+}
+
+function throwNoMatch(path: string, editIndex: number, totalEdits: number): never {
+  throw new PolicyViolationError(
+    "no_match",
+    `${matchErrorPrefix(editIndex, totalEdits, path)} was not found`,
+  );
+}
+
+function matchErrorPrefix(editIndex: number, totalEdits: number, path: string): string {
+  return totalEdits === 1 ? `oldText in ${path}` : `edits[${editIndex}].oldText in ${path}`;
 }
 
 function findAllOccurrences(haystack: string, needle: string): number[] {
@@ -752,10 +913,87 @@ function findAllOccurrences(haystack: string, needle: string): number[] {
   return out;
 }
 
+interface FuzzyMatchResult {
+  found: boolean;
+  index: number;
+  matchLength: number;
+  usedFuzzyMatch: boolean;
+}
+
+function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+  const exactIndex = content.indexOf(oldText);
+  if (exactIndex !== -1) {
+    return {
+      found: true,
+      index: exactIndex,
+      matchLength: oldText.length,
+      usedFuzzyMatch: false,
+    };
+  }
+
+  const fuzzyContent = normalizeForFuzzyMatch(content);
+  const fuzzyOldText = normalizeForFuzzyMatch(oldText);
+  const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
+  if (fuzzyIndex === -1) {
+    return {
+      found: false,
+      index: -1,
+      matchLength: 0,
+      usedFuzzyMatch: false,
+    };
+  }
+
+  return {
+    found: true,
+    index: fuzzyIndex,
+    matchLength: fuzzyOldText.length,
+    usedFuzzyMatch: true,
+  };
+}
+
+function countOccurrences(content: string, oldText: string): number {
+  const fuzzyContent = normalizeForFuzzyMatch(content);
+  const fuzzyOldText = normalizeForFuzzyMatch(oldText);
+  return findAllOccurrences(fuzzyContent, fuzzyOldText).length;
+}
+
+function normalizeForFuzzyMatch(text: string): string {
+  return text
+    .normalize("NFKC")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
+    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ");
+}
+
+function stripBom(content: string): { bom: string; text: string } {
+  return content.startsWith("\uFEFF")
+    ? { bom: "\uFEFF", text: content.slice(1) }
+    : { bom: "", text: content };
+}
+
+function detectLineEnding(content: string): "\r\n" | "\n" {
+  const crlfIndex = content.indexOf("\r\n");
+  const lfIndex = content.indexOf("\n");
+  if (lfIndex === -1) return "\n";
+  if (crlfIndex === -1) return "\n";
+  return crlfIndex < lfIndex ? "\r\n" : "\n";
+}
+
+function normalizeToLF(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
+  return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
+}
+
 interface BuildEditDiffOptions {
   before: string;
-  oldText: string;
-  newText: string;
+  matches: MatchedEdit[];
   path?: string;
 }
 
@@ -763,10 +1001,42 @@ const DIFF_CONTEXT_LINES = 3;
 const DIFF_MAX_LINES = 200;
 
 function buildEditDiffString(options: BuildEditDiffOptions): string {
-  const idx = options.before.indexOf(options.oldText);
-  if (idx === -1) return "";
-  const beforePrefix = options.before.slice(0, idx);
-  const beforeSuffix = options.before.slice(idx + options.oldText.length);
+  const out: string[] = [];
+  for (const match of options.matches) {
+    const oldText = options.before.slice(match.matchIndex, match.matchIndex + match.matchLength);
+    const hunkOptions: BuildEditDiffHunkOptions = {
+      before: options.before,
+      matchIndex: match.matchIndex,
+      oldText,
+      newText: match.newText,
+    };
+    if (options.path !== undefined) {
+      hunkOptions.path = options.path;
+    }
+    const hunk = buildEditDiffHunk(hunkOptions);
+    if (hunk.length === 0) continue;
+    if (out.length > 0) {
+      out.push("");
+    }
+    out.push(...hunk);
+    if (out.length > DIFF_MAX_LINES) {
+      return [...out.slice(0, DIFF_MAX_LINES), "@@ truncated @@"].join("\n");
+    }
+  }
+  return out.join("\n");
+}
+
+interface BuildEditDiffHunkOptions {
+  before: string;
+  matchIndex: number;
+  oldText: string;
+  newText: string;
+  path?: string;
+}
+
+function buildEditDiffHunk(options: BuildEditDiffHunkOptions): string[] {
+  const beforePrefix = options.before.slice(0, options.matchIndex);
+  const beforeSuffix = options.before.slice(options.matchIndex + options.oldText.length);
 
   const prefixLines = beforePrefix === "" ? [] : beforePrefix.split("\n");
   const suffixLines = beforeSuffix === "" ? [] : beforeSuffix.split("\n");
@@ -790,12 +1060,7 @@ function buildEditDiffString(options: BuildEditDiffOptions): string {
   for (const line of newTextLines) out.push(`+${line}`);
   for (const line of contextAfter) out.push(` ${line}`);
 
-  if (out.length > DIFF_MAX_LINES) {
-    const head = out.slice(0, DIFF_MAX_LINES);
-    head.push("@@ truncated @@");
-    return head.join("\n");
-  }
-  return out.join("\n");
+  return out;
 }
 
 interface RipgrepSearchOptions {
@@ -1230,7 +1495,7 @@ function decodeText(buffer: Buffer, relativePath: string): string {
     throw new PolicyViolationError("binary_file", `Refusing to read binary file: ${relativePath}`);
   }
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
   } catch {
     throw new PolicyViolationError("binary_file", `Refusing to read binary file: ${relativePath}`);
   }
@@ -1317,6 +1582,14 @@ function requiredString(value: JsonValue | undefined, name: string): string {
 function requiredNonEmptyString(value: JsonValue | undefined, name: string): string {
   const stringValue = requiredString(value, name).trim();
   if (stringValue === "") {
+    throw new PolicyViolationError("invalid_args", `${name} cannot be empty`);
+  }
+  return stringValue;
+}
+
+function requiredNonEmptyText(value: JsonValue | undefined, name: string): string {
+  const stringValue = requiredString(value, name);
+  if (stringValue.length === 0) {
     throw new PolicyViolationError("invalid_args", `${name} cannot be empty`);
   }
   return stringValue;

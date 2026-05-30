@@ -1,6 +1,6 @@
 import path from "node:path";
 import process from "node:process";
-import type { ThinkingLevel } from "@strata/agent";
+import type { AgentMessage, ThinkingLevel } from "@strata/agent";
 import {
   type AgentAttachment,
   type AgentRunEvent,
@@ -56,6 +56,7 @@ import {
   initialAppState,
   nextThinkingLevel,
   type ProviderName,
+  type QueuedUserMessage,
   recordCompletion,
   recordModelUsage,
   recordToolResult,
@@ -162,6 +163,8 @@ export class StrataApp implements Component {
           this.cycleThinkingLevel();
         } else if (event.key === "alt+enter") {
           this.handleAltEnter();
+        } else if (event.key === "alt+up") {
+          this.handleDequeue();
         }
       }
     });
@@ -618,16 +621,7 @@ export class StrataApp implements Component {
       return;
     }
     if (this.state.running) {
-      // Queue the message to be sent after the current run finishes — same
-      // behavior as alt+enter while streaming. Pi treats Enter and Alt+Enter
-      // identically when streaming.
-      this.state.queuedMessages.push(trimmed);
-      const preview = trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed;
-      appendTranscript(this.state, {
-        kind: "status",
-        content: `queued (${this.state.queuedMessages.length}): ${preview}`,
-      });
-      this.invalidate();
+      this.queueSteeringMessage(trimmed);
       return;
     }
     await this.runAgent(trimmed);
@@ -646,7 +640,7 @@ export class StrataApp implements Component {
     });
   }
 
-  private async runAgent(question: string): Promise<void> {
+  private async runAgent(question: string, queuedAttachments?: AgentAttachment[]): Promise<void> {
     let model: ModelAdapter;
     try {
       if (this.state.provider === "openai-codex") {
@@ -664,17 +658,18 @@ export class StrataApp implements Component {
 
     this.state.running = true;
     this.state.status = undefined;
-    appendTranscript(this.state, { kind: "user", content: question });
     // Note: we do NOT disable the editor while the agent is running. The user
-    // can keep typing, browse history with up/down, and submit via Enter or
-    // alt+enter — both paths queue the message until the current run finishes.
+    // can keep typing, browse history with up/down, and submit via Enter for
+    // steering or Alt+Enter for a follow-up, matching Pi.
     this.invalidate();
 
     this.currentRun = new AbortController();
     const signal = this.currentRun.signal;
 
-    const attachments = this.state.pendingAttachments.slice();
-    this.state.pendingAttachments = [];
+    const attachments = queuedAttachments ?? this.state.pendingAttachments.slice();
+    if (queuedAttachments === undefined) {
+      this.state.pendingAttachments = [];
+    }
     if (attachments.length > 0) {
       const names = attachments
         .map((attachment) => attachment.name ?? attachment.mimeType)
@@ -692,6 +687,8 @@ export class StrataApp implements Component {
         signal,
         tools: await this.createToolRegistry(signal),
         reasoningEffort: this.state.reasoningEffort,
+        getSteeringMessages: () => this.drainQueuedMessages(this.state.steeringMessages),
+        getFollowUpMessages: () => this.drainQueuedMessages(this.state.followUpMessages),
 
         ...(attachments.length > 0 ? { attachments } : {}),
         ...(this.state.currentSessionId !== undefined
@@ -716,14 +713,12 @@ export class StrataApp implements Component {
   }
 
   private async afterRun(): Promise<void> {
-    await this.drainQueuedMessages();
+    await this.drainRemainingQueuedMessages();
   }
 
-  // Pi-style alt+enter: when the agent is running, queue the editor's text
-  // to be sent after the current run finishes. When the agent isn't running,
-  // alt+enter behaves like enter. Plain enter while running also queues now,
-  // so this path is mostly redundant — but kept so users with both habits get
-  // the same result either way.
+  // Pi-style alt+enter: when the agent is running, queue the editor's text as a
+  // follow-up that waits until the agent would otherwise stop. When the agent
+  // isn't running, alt+enter behaves like enter.
   private handleAltEnter(): void {
     const text = this.editor.text;
     if (text.trim() === "") {
@@ -733,21 +728,103 @@ export class StrataApp implements Component {
     this.editor.historyIndex = undefined;
     this.editor.text = "";
     this.editor.cursor = 0;
+    if (this.state.running) {
+      this.queueFollowUpMessage(text.trim());
+      return;
+    }
     void this.onSubmit(text);
   }
 
-  private async drainQueuedMessages(): Promise<void> {
-    if (this.state.queuedMessages.length === 0 || this.state.running) {
+  private queueSteeringMessage(content: string): void {
+    this.queueUserMessage(this.state.steeringMessages, "steering", content);
+  }
+
+  private queueFollowUpMessage(content: string): void {
+    this.queueUserMessage(this.state.followUpMessages, "follow-up", content);
+  }
+
+  private queueUserMessage(
+    queue: QueuedUserMessage[],
+    label: "steering" | "follow-up",
+    content: string,
+  ): void {
+    const attachments = this.state.pendingAttachments.slice();
+    this.state.pendingAttachments = [];
+    queue.push({ content, attachments });
+    const preview = content.length > 60 ? `${content.slice(0, 57)}...` : content;
+    const attachmentSuffix = attachments.length > 0 ? ` with ${attachments.length} image(s)` : "";
+    appendTranscript(this.state, {
+      kind: "status",
+      content: `queued ${label} (${queue.length})${attachmentSuffix}: ${preview}`,
+    });
+    this.invalidate();
+  }
+
+  private drainQueuedMessages(queue: QueuedUserMessage[]): AgentMessage[] {
+    const next = queue.shift();
+    if (next === undefined) {
+      return [];
+    }
+    const message: AgentMessage = {
+      role: "user",
+      content: next.content,
+    };
+    if (next.attachments.length > 0) {
+      message.attachments = next.attachments;
+    }
+    return [message];
+  }
+
+  private async drainRemainingQueuedMessages(): Promise<void> {
+    if (this.state.running) {
       return;
     }
-    const next = this.state.queuedMessages.shift();
+    const next = this.state.steeringMessages.shift() ?? this.state.followUpMessages.shift();
     if (next === undefined) return;
     appendTranscript(this.state, {
       kind: "status",
-      content: `▸ sending queued message`,
+      content: `sending queued message`,
     });
     this.invalidate();
-    await this.onSubmit(next);
+    await this.runAgent(next.content, next.attachments);
+  }
+
+  private clearAllQueuedMessages(): QueuedUserMessage[] {
+    const queued = [...this.state.steeringMessages, ...this.state.followUpMessages];
+    this.state.steeringMessages = [];
+    this.state.followUpMessages = [];
+    return queued;
+  }
+
+  private restoreQueuedMessagesToEditor(): number {
+    const queued = this.clearAllQueuedMessages();
+    if (queued.length === 0) {
+      return 0;
+    }
+    const queuedText = queued.map((message) => message.content).join("\n\n");
+    const currentText = this.editor.text;
+    const combinedText = [queuedText, currentText]
+      .filter((text) => text.trim() !== "")
+      .join("\n\n");
+    this.editor.setText(combinedText);
+    const attachments = queued.flatMap((message) => message.attachments);
+    if (attachments.length > 0) {
+      this.state.pendingAttachments.push(...attachments);
+    }
+    this.invalidate();
+    return queued.length;
+  }
+
+  private handleDequeue(): void {
+    const restored = this.restoreQueuedMessagesToEditor();
+    appendTranscript(this.state, {
+      kind: "status",
+      content:
+        restored === 0
+          ? "no queued messages to restore"
+          : `restored ${restored} queued message${restored === 1 ? "" : "s"} to editor`,
+    });
+    this.invalidate();
   }
 
   private applyAgentEvent(event: AgentRunEvent): void {
@@ -755,6 +832,9 @@ export class StrataApp implements Component {
       case "session.started":
         startSession(this.state, event.sessionId);
         this.state.status = `session ${event.sessionId.slice(0, 12)} · ${sanitizeDisplayText(event.title)}`;
+        return;
+      case "message.user":
+        appendTranscript(this.state, { kind: "user", content: event.content });
         return;
       case "model.request":
         this.clearRetryCountdown();
@@ -842,6 +922,7 @@ export class StrataApp implements Component {
     }
     const retrying = this.retryCountdown !== undefined;
     this.clearRetryCountdown();
+    this.restoreQueuedMessagesToEditor();
     if (!currentRun.signal.aborted) {
       currentRun.abort({
         source: "tui.interrupt",
@@ -943,11 +1024,9 @@ export class StrataApp implements Component {
   }
 
   // Pi-aligned escape handler. Mirrors `interactive-mode.ts:onEscape`:
-  // a single Esc during an active run aborts the run (and queued messages);
-  // double-Esc on an empty/idle editor opens the resume picker. Esc with
-  // text in the editor is a no-op (the editor itself handled completion
-  // dismissal before reaching us). We only get called when the editor has
-  // no completion list to close.
+  // a single Esc during an active run restores queued messages to the editor
+  // and aborts the run; double-Esc on an empty/idle editor opens the resume
+  // picker. We only get called when the editor has no completion list to close.
   private lastEscapeAt = 0;
   private static readonly DOUBLE_ESCAPE_MS = 500;
 

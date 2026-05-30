@@ -44,7 +44,7 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
     cors({
       origin: ["http://127.0.0.1:5173", "http://localhost:5173"],
       allowHeaders: ["Content-Type"],
-      allowMethods: ["GET", "POST", "OPTIONS"],
+      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
     }),
   );
 
@@ -154,7 +154,19 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
     ),
   );
 
-  app.post("/api/terminal/sessions", (c) => c.json(terminals.create()));
+  app.post("/api/terminal/sessions", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      cols?: unknown;
+      rows?: unknown;
+    } | null;
+    if (body === null) return c.json(terminals.create());
+
+    const size = parseTerminalSize(body);
+    if (size === undefined) {
+      return c.json(errorResponse("bad_request", "Terminal size must include cols and rows."), 400);
+    }
+    return c.json(terminals.create(size));
+  });
 
   app.get("/api/terminal/sessions/:sessionId/stream", (c) => {
     const response = terminals.stream(c.req.param("sessionId"), c.req.raw.signal);
@@ -173,6 +185,21 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
       return c.json(errorResponse("not_found", "No terminal session."), 404);
     }
     return c.json({ ok: true });
+  });
+
+  app.post("/api/terminal/sessions/:sessionId/resize", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      cols?: unknown;
+      rows?: unknown;
+    } | null;
+    const size = parseTerminalSize(body);
+    if (size === undefined) {
+      return c.json(errorResponse("bad_request", "Terminal size must include cols and rows."), 400);
+    }
+    if (!terminals.resize(c.req.param("sessionId"), size)) {
+      return c.json(errorResponse("not_found", "No terminal session."), 404);
+    }
+    return c.json({ ok: true, ...size });
   });
 
   app.delete("/api/terminal/sessions/:sessionId", async (c) => {
@@ -227,6 +254,22 @@ function positiveInt(value: string | undefined, fallback: number): number {
 
 function positiveNumber(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function parseTerminalSize(
+  body: { cols?: unknown; rows?: unknown } | null,
+): { cols: number; rows: number } | undefined {
+  if (body === null) return undefined;
+  const cols = terminalDimension(body.cols);
+  const rows = terminalDimension(body.rows);
+  if (cols === undefined || rows === undefined) return undefined;
+  return { cols, rows };
+}
+
+function terminalDimension(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const dimension = Math.floor(value);
+  return dimension > 0 && dimension <= 1_000 ? dimension : undefined;
 }
 
 function lastEventId(request: Request): number {
