@@ -215,6 +215,7 @@ Current execution constraints:
 - `AgentRunConfig.toolExecution` can force `"sequential"`, but defaults to `"parallel"`.
 - A called `ToolDefinition` with `executionMode: "sequential"` forces the whole batch sequential.
 - In parallel mode, `tool.call.started` events emit in assistant source order, `tool.call.completed` events emit as tools finish, and persisted tool messages remain in assistant source order.
+- The active run abort signal is forwarded to tools as `ToolContext.signal`; cancellable tools should stop external work and return explicit cancelled output rather than waiting for a later loop boundary.
 - Tools may stream incremental output while running: `ToolContext.onOutput(chunk)` (e.g. `shell.run` stdout/stderr) is surfaced as interleaved `tool.output` run events. The batch generators merge these callback-driven events into the yield sequence via an async channel, so live output reaches UIs without disturbing the started/completed/result ordering above. `tool.output` is an ephemeral event, not a persisted tool message; the full output still lands in the final `tool.call.completed` result.
 - Continued sessions repair incomplete prior tool turns before the next model request. If a previous run recorded an assistant tool call but stopped before recording the matching tool result, the rebuilt model transcript inserts a synthetic failed `tool` message immediately after that assistant call and records an `agent.loop.transcript_repaired` trace event. This keeps OpenAI/Anthropic-style provider transcripts valid while preserving the fact that the tool did not complete.
 - Tools may request bounded human input only through the planned shared interaction adapter in [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md). The native `user.ask` tool should force sequential execution, persist bounded request/response trace events, respect cancellation, and return explicit unavailable/cancelled results when no TUI/web adapter is present.
@@ -256,6 +257,7 @@ Each tool has:
 - `maxResultChars`
 - optional `executionMode`: `parallel` or `sequential`
 - optional `available()`
+- access to `ToolContext.signal` for run cancellation
 - optional access to `ToolContext.ui` for bounded human interaction
 
 The registry must:

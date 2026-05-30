@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@strata/core";
+import type { JsonObject } from "@strata/core";
 
 export type RoutineStatus = "enabled" | "disabled" | "archived";
 export type RoutineOutputMode = "required" | "optional" | "none";

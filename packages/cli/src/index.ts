@@ -2582,12 +2582,6 @@ function ensureNoExtraArgs(args: string[], command: string): void {
   }
 }
 
-function assertIsoDate(value: string, flag: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new Error(`${flag} must be YYYY-MM-DD`);
-  }
-}
-
 function parsePositiveIntegerArg(value: string | undefined, message: string): number {
   const raw = requireArgValue(value, message);
   const parsed = Number.parseInt(raw, 10);

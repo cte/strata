@@ -4,7 +4,6 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import { SessionStore, writeLearningProposal } from "@strata/core";
-import { frontmatter } from "@strata/ingest/common";
 import { RoutineStore } from "@strata/routines";
 import { parseQueryOptions, parseTuiOptions } from "../index.js";
 

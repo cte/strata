@@ -34,7 +34,6 @@ import type {
 import type { ReviewQueueItem } from "@strata/ingest/review-queue";
 import type {
   JobExecutionResult,
-  JobMetadata,
   RoutineTriggerCadence,
   RoutineTriggerRecord,
   RoutineTriggerRunResult,
@@ -290,14 +289,37 @@ export interface ChatMessageSummary {
   content: string;
   ts: string;
   toolCallId: string | null;
-  toolCalls: BrowserJsonValue | null;
+  toolCalls: ChatToolCallSummary[] | null;
   attachments: BrowserJsonValue | null;
   usage: TokenUsage | null;
+}
+
+export type ChatToolStatus = "running" | "complete" | "error";
+
+export interface ChatToolCallSummary {
+  id: string;
+  name: string;
+  argumentsText: string;
+  status: ChatToolStatus;
+  summary: string | null;
+  resultAvailable: boolean;
 }
 
 export interface ChatSessionDetail {
   session: ChatSessionSummary;
   messages: ChatMessageSummary[];
+  messagePage: {
+    hasMoreBefore: boolean;
+    oldestDisplayMessageId: number | null;
+  };
+}
+
+export interface ChatToolResultDetail {
+  sessionId: string;
+  toolCallId: string;
+  content: string;
+  status: ChatToolStatus;
+  summary: string | null;
 }
 
 export interface ChatSessionDeleteResult {
@@ -406,9 +428,18 @@ export type ChatSessionsListInput = z.output<typeof chatSessionsListInput>;
 
 export const chatSessionGetInput = z.object({
   sessionId: z.string().min(1),
+  messageLimit: z.number().int().min(1).max(500).optional(),
+  beforeMessageId: z.number().int().positive().optional(),
 });
 
 export type ChatSessionGetInput = z.output<typeof chatSessionGetInput>;
+
+export const chatToolResultGetInput = z.object({
+  sessionId: z.string().min(1),
+  toolCallId: z.string().min(1),
+});
+
+export type ChatToolResultGetInput = z.output<typeof chatToolResultGetInput>;
 
 export const chatSessionForkInput = z.object({
   sessionId: z.string().min(1),
@@ -521,7 +552,7 @@ export const modelApiKeySetInput = modelApiKeyTargetInput.extend({
 
 export type ModelApiKeySetInput = z.output<typeof modelApiKeySetInput>;
 
-export const mcpServerInput = z.object({
+const mcpServerInput = z.object({
   slug: z.string().min(1),
 });
 
@@ -538,7 +569,7 @@ export const mcpSettingsUpdateInput = mcpServerInput.extend({
 
 export type McpSettingsUpdateInput = z.output<typeof mcpSettingsUpdateInput>;
 
-export const mcpSettingsDeleteInput = mcpServerInput;
+const mcpSettingsDeleteInput = mcpServerInput;
 
 export type McpSettingsDeleteInput = z.output<typeof mcpSettingsDeleteInput>;
 
@@ -717,7 +748,7 @@ export type RoutineListRpcInput = z.output<typeof routineListInput> & {
   status: RoutineStatus | "all";
 };
 
-export const routineGetInput = z.object({
+const routineGetInput = z.object({
   id: z.string().min(1),
 });
 
@@ -795,7 +826,7 @@ export const routineSetStatusInput = routineGetInput.extend({
 
 export type RoutineSetStatusRpcInput = z.output<typeof routineSetStatusInput>;
 
-export const routineDeleteInput = routineGetInput;
+const routineDeleteInput = routineGetInput;
 
 export type RoutineDeleteRpcInput = z.output<typeof routineDeleteInput>;
 
@@ -885,6 +916,7 @@ export interface WebApiServices {
   clearChatQueuedMessages(input: ChatQueueTargetInput): Promise<{ removed: number }>;
   listChatSessions(input: ChatSessionsListInput): Promise<{ sessions: ChatSessionSummary[] }>;
   getChatSession(input: ChatSessionGetInput): Promise<ChatSessionDetail | null>;
+  getChatToolResult(input: ChatToolResultGetInput): Promise<ChatToolResultDetail | null>;
   forkChatSession(input: ChatSessionForkInput): Promise<ChatSessionDetail>;
   deleteChatSession(input: ChatSessionDeleteInput): Promise<ChatSessionDeleteResult>;
   searchChatSessions(input: ChatSessionsSearchInput): Promise<{ sessions: ChatSessionSummary[] }>;
@@ -927,7 +959,6 @@ export interface WebApiServices {
   deleteRoutineTrigger(input: RoutineTriggerDeleteRpcInput): Promise<{ deleted: boolean }>;
   runRoutineTriggerNow(input: RoutineTriggerRunNowRpcInput): Promise<RoutineTriggerRunResult>;
 
-  listJobs(): { jobs: JobMetadata[] };
   retrievalIndexStatus(): Promise<WikiSearchIndexStatus>;
   refreshRetrievalIndex(input: RetrievalIndexRefreshRpcInput): Promise<RetrievalIndexRefreshResult>;
 
@@ -1027,6 +1058,9 @@ export const appRouter = t.router({
       get: t.procedure
         .input(chatSessionGetInput)
         .query(({ ctx, input }) => ctx.services.getChatSession(input)),
+      toolResult: t.procedure
+        .input(chatToolResultGetInput)
+        .query(({ ctx, input }) => ctx.services.getChatToolResult(input)),
       fork: t.procedure
         .input(chatSessionForkInput)
         .mutation(({ ctx, input }) => ctx.services.forkChatSession(input)),
@@ -1158,9 +1192,6 @@ export const appRouter = t.router({
         .input(routineTriggerIdInput)
         .mutation(({ ctx, input }) => ctx.services.runRoutineTriggerNow(input)),
     }),
-  }),
-  jobs: t.router({
-    list: t.procedure.query(({ ctx }) => ctx.services.listJobs()),
   }),
   system: t.router({
     retrievalIndex: t.router({

@@ -2,7 +2,7 @@ import { TAXONOMY_SUGGESTIONS_OUTPUT_SCHEMA } from "@strata/ingest/taxonomy-sugg
 import { type CreateRoutineInput, RoutineStore } from "@strata/routines";
 
 export const TAXONOMY_SUGGESTIONS_ROUTINE_ID = "routine_taxonomy_suggestions";
-export const TAXONOMY_EVIDENCE_JOB_NAME = "ingest.taxonomy.evidence";
+const TAXONOMY_EVIDENCE_JOB_NAME = "ingest.taxonomy.evidence";
 
 const TAXONOMY_SUGGESTIONS_PROMPT = `You curate the local ingest taxonomy — the vocabulary that teaches raw-to-wiki ingestion how to read this workspace (projects and their aliases, the user's self-names, and Slack noise patterns).
 
@@ -25,7 +25,7 @@ For every suggestion give a one-sentence \`rationale\`, a \`confidence\` from 0 
 When done, call routine.output.submit exactly once with { "suggestions": [ ... ] }. If nothing is worth proposing, submit { "suggestions": [] }. Prefer proposing nothing over proposing noise.`;
 
 /** The seedable taxonomy-suggestion Routine (docs/taxonomy-suggestion-plan.md, Slice 2). */
-export function taxonomySuggestionsRoutineDefinition(): CreateRoutineInput {
+function taxonomySuggestionsRoutineDefinition(): CreateRoutineInput {
   return {
     id: TAXONOMY_SUGGESTIONS_ROUTINE_ID,
     name: "Taxonomy suggestions",

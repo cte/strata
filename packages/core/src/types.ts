@@ -82,6 +82,22 @@ export interface MessageRecord {
   ts: string;
 }
 
+export interface MessagePageOptions {
+  /**
+   * Counts display transcript rows (`user` and `assistant` messages), not raw
+   * rows. Matching `tool` rows are included with the selected display window.
+   */
+  displayLimit?: number;
+  /** Exclusive raw message id cursor for loading display rows before a page. */
+  beforeMessageId?: number;
+}
+
+export interface MessagePage {
+  messages: MessageRecord[];
+  hasMoreBefore: boolean;
+  oldestDisplayMessageId: number | null;
+}
+
 /**
  * Per-turn token usage produced by a single model call.
  *

@@ -1,3 +1,7 @@
+import { spawn as spawnChild } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { appendFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@strata/core";
 import { PolicyViolationError } from "./policy.js";
@@ -17,11 +21,12 @@ interface OutputPreview extends JsonObject {
   bytes: number;
   chars: number;
   truncated: boolean;
+  fullOutputPath?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 20_000;
-const KILL_GRACE_MS = 1_000;
+const STDIO_CLOSE_GRACE_MS = 100;
 
 export function registerShellTools(registry: ToolRegistry): ToolRegistry {
   for (const tool of createShellTools()) {
@@ -79,30 +84,59 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
     );
 
     const startedAt = Date.now();
+    if (context.signal?.aborted) {
+      return {
+        command,
+        cwd,
+        shell,
+        exitCode: null,
+        signalCode: null,
+        timedOut: false,
+        cancelled: true,
+        durationMs: 0,
+        stdout: emptyOutput(),
+        stderr: emptyOutput(),
+      };
+    }
+
     let timedOut = false;
-    let forceKillTimer: Timer | undefined;
+    let cancelled = false;
     const proc = Bun.spawn([shell, "-lc", command], {
       cwd,
+      detached: process.platform !== "win32",
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
       env: Bun.env,
     });
 
+    const stdioCloseController = new AbortController();
+    let stdioCloseTimer: Timer | undefined;
+    const onAbort = () => {
+      cancelled = true;
+      killProcessTree(proc.pid);
+    };
     const timeout = setTimeout(() => {
       timedOut = true;
-      proc.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => {
-        proc.kill("SIGKILL");
-      }, KILL_GRACE_MS);
+      killProcessTree(proc.pid);
     }, timeoutMs);
 
     try {
+      if (context.signal !== undefined) {
+        if (context.signal.aborted) {
+          onAbort();
+        } else {
+          context.signal.addEventListener("abort", onAbort, { once: true });
+        }
+      }
+
       // Stream stdout/stderr to the run as it arrives (capped at the same
       // budget as the returned preview) while still collecting the full text
       // for the final result.
       let stdoutEmitted = 0;
       let stderrEmitted = 0;
+      const stdoutOutput = new OutputCollector(maxOutputChars, "strata-shell-stdout");
+      const stderrOutput = new OutputCollector(maxOutputChars, "strata-shell-stderr");
       const emit = (stream: "stdout" | "stderr", text: string): void => {
         if (context.onOutput === undefined) {
           return;
@@ -120,10 +154,27 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
         }
         context.onOutput({ stream, text: slice });
       };
-      const [stdoutText, stderrText, exitCode] = await Promise.all([
-        readStreamText(proc.stdout, (text) => emit("stdout", text)),
-        readStreamText(proc.stderr, (text) => emit("stderr", text)),
-        proc.exited,
+      const stdoutTextPromise = readStreamText(
+        proc.stdout,
+        stdoutOutput,
+        (text) => emit("stdout", text),
+        stdioCloseController.signal,
+      );
+      const stderrTextPromise = readStreamText(
+        proc.stderr,
+        stderrOutput,
+        (text) => emit("stderr", text),
+        stdioCloseController.signal,
+      );
+      const exitCode = await proc.exited;
+      clearTimeout(timeout);
+      stdioCloseTimer = setTimeout(() => {
+        stdioCloseController.abort();
+      }, STDIO_CLOSE_GRACE_MS);
+      await Promise.all([stdoutTextPromise, stderrTextPromise]);
+      const [stdout, stderr] = await Promise.all([
+        stdoutOutput.snapshot(),
+        stderrOutput.snapshot(),
       ]);
       return {
         command,
@@ -132,14 +183,18 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
         exitCode,
         signalCode: proc.signalCode ?? null,
         timedOut,
+        cancelled,
         durationMs: Date.now() - startedAt,
-        stdout: previewOutput(stdoutText, maxOutputChars),
-        stderr: previewOutput(stderrText, maxOutputChars),
+        stdout,
+        stderr,
       };
     } finally {
       clearTimeout(timeout);
-      if (forceKillTimer !== undefined) {
-        clearTimeout(forceKillTimer);
+      if (context.signal !== undefined) {
+        context.signal.removeEventListener("abort", onAbort);
+      }
+      if (stdioCloseTimer !== undefined) {
+        clearTimeout(stdioCloseTimer);
       }
     }
   },
@@ -147,45 +202,178 @@ const shellRunTool: ToolDefinition<ShellRunArgs> = {
 
 async function readStreamText(
   stream: ReadableStream<Uint8Array>,
+  output: OutputCollector,
   onChunk?: (text: string) => void,
-): Promise<string> {
-  if (onChunk === undefined) {
-    return await new Response(stream).text();
-  }
+  signal?: AbortSignal,
+): Promise<void> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  let full = "";
+  let removeAbortListener: (() => void) | undefined;
+  const abortPromise =
+    signal === undefined
+      ? undefined
+      : new Promise<"aborted">((resolve) => {
+          const onAbort = (): void => {
+            void reader.cancel().catch(() => {});
+            resolve("aborted");
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+        });
+
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const readPromise = reader.read().catch((error: unknown) => {
+        if (signal?.aborted) {
+          return "aborted" as const;
+        }
+        throw error;
+      });
+      const readResult =
+        abortPromise === undefined
+          ? await readPromise
+          : await Promise.race([readPromise, abortPromise]);
+      if (readResult === "aborted") {
+        break;
+      }
+      const { done, value } = readResult;
       if (done) {
         break;
       }
       const text = decoder.decode(value, { stream: true });
       if (text.length > 0) {
-        full += text;
-        onChunk(text);
+        output.append(text);
+        onChunk?.(text);
       }
     }
     const tail = decoder.decode();
     if (tail.length > 0) {
-      full += tail;
-      onChunk(tail);
+      output.append(tail);
+      onChunk?.(tail);
     }
+  } catch (error) {
+    if (signal?.aborted) {
+      return;
+    }
+    throw error;
   } finally {
-    reader.releaseLock();
+    removeAbortListener?.();
+    try {
+      reader.releaseLock();
+    } catch {
+      // The stream may already be closed or cancelled.
+    }
   }
-  return full;
 }
 
-function previewOutput(text: string, maxChars: number): OutputPreview {
-  const truncated = text.length > maxChars;
+class OutputCollector {
+  private chunks: string[] = [];
+  private previewChars = 0;
+  private totalChars = 0;
+  private totalBytes = 0;
+  private fullOutputPath: string | undefined;
+  private writeChain: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly maxChars: number,
+    private readonly tempFilePrefix: string,
+  ) {}
+
+  append(text: string): void {
+    if (text.length === 0) {
+      return;
+    }
+
+    this.totalChars += text.length;
+    this.totalBytes += Buffer.byteLength(text, "utf8");
+
+    if (this.totalChars > this.maxChars) {
+      if (this.fullOutputPath === undefined) {
+        this.fullOutputPath = path.join(tmpdir(), `${this.tempFilePrefix}-${randomUUID()}.log`);
+        const outputPath = this.fullOutputPath;
+        const initialContent = this.chunks.join("") + text;
+        this.writeChain = this.writeChain.then(() => writeFile(outputPath, initialContent, "utf8"));
+      } else {
+        const outputPath = this.fullOutputPath;
+        this.writeChain = this.writeChain.then(() => appendFile(outputPath, text, "utf8"));
+      }
+    }
+
+    this.chunks.push(text);
+    this.previewChars += text.length;
+    this.trimPreview();
+  }
+
+  async snapshot(): Promise<OutputPreview> {
+    await this.writeChain;
+    const preview: OutputPreview = {
+      text: this.chunks.join(""),
+      bytes: this.totalBytes,
+      chars: this.totalChars,
+      truncated: this.totalChars > this.maxChars,
+    };
+    if (this.fullOutputPath !== undefined) {
+      preview.fullOutputPath = this.fullOutputPath;
+    }
+    return preview;
+  }
+
+  private trimPreview(): void {
+    let excess = this.previewChars - this.maxChars;
+    while (excess > 0 && this.chunks.length > 0) {
+      const first = this.chunks[0];
+      if (first === undefined) {
+        break;
+      }
+      if (first.length <= excess) {
+        this.chunks.shift();
+        this.previewChars -= first.length;
+        excess -= first.length;
+      } else {
+        this.chunks[0] = first.slice(excess);
+        this.previewChars -= excess;
+        excess = 0;
+      }
+    }
+  }
+}
+
+function emptyOutput(): OutputPreview {
   return {
-    text: truncated ? text.slice(0, maxChars) : text,
-    bytes: Buffer.byteLength(text, "utf8"),
-    chars: text.length,
-    truncated,
+    text: "",
+    bytes: 0,
+    chars: 0,
+    truncated: false,
   };
+}
+
+function killProcessTree(pid: number): void {
+  if (process.platform === "win32") {
+    try {
+      spawnChild("taskkill", ["/F", "/T", "/PID", String(pid)], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch {
+      // Ignore failures for processes that have already exited.
+    }
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Process already exited.
+    }
+  }
 }
 
 function resolveCwd(repoRoot: string, cwd: string): string {

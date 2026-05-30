@@ -1123,7 +1123,7 @@ async function rejectSymlinkPathSegments(
 
 async function ensureWritableParent(
   repoRoot: string,
-  relativePath: string,
+  _relativePath: string,
   absolutePath: string,
   options: { createDirs: boolean },
 ): Promise<void> {

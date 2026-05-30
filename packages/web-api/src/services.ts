@@ -18,6 +18,7 @@ import {
   deleteChatSession,
   forkChatSession,
   getChatSession,
+  getChatToolResult,
   invokeChatSkill,
   listChatFiles,
   listChatModels,
@@ -36,7 +37,6 @@ import {
   startNotionMcp,
   validateNotion,
 } from "./connectorServices.js";
-import { listJobs } from "./jobServices.js";
 import {
   deleteMcpSettings,
   getMcpSettingsStatus,
@@ -130,6 +130,7 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
       chat.clearQueuedMessages(queueTarget(input)).then((removed) => ({ removed })),
     listChatSessions: (input) => listChatSessions(input, getSessionStore),
     getChatSession: (input) => getChatSession(input, getSessionStore),
+    getChatToolResult: (input) => getChatToolResult(input, getSessionStore),
     forkChatSession: (input) => forkChatSession(input, getSessionStore),
     deleteChatSession: (input) => {
       const activeRun = chat.getActiveRunForSession(input.sessionId);
@@ -170,7 +171,6 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     updateRoutineTrigger: (input) => updateRoutineTriggerForWeb(input, options),
     deleteRoutineTrigger: (input) => deleteRoutineTriggerForWeb(input, options),
     runRoutineTriggerNow: (input) => runRoutineTriggerNowFromWeb(input, options),
-    listJobs,
     retrievalIndexStatus: () => getRetrievalIndexStatusForWeb(options),
     refreshRetrievalIndex: (input) => refreshRetrievalIndexForWeb(input, options),
 

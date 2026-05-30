@@ -132,7 +132,7 @@ function renderParagraph(
 
 function renderCodeBlock(
   token: Tokens.Code,
-  width: number,
+  _width: number,
   nextType: string | undefined,
 ): string[] {
   const lang = token.lang ?? "";

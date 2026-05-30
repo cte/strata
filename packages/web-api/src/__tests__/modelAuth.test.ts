@@ -12,7 +12,7 @@ import {
   setChatGptCredentials,
   setModelApiKey as setStoredModelApiKey,
 } from "@strata/agent";
-import { disconnectModelAuth, getModelAuthStatus, setModelApiKey } from "../modelAuth.js";
+import { disconnectModelAuth, setModelApiKey } from "../modelAuth.js";
 
 async function tempRepo(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "strata-model-auth-"));

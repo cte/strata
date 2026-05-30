@@ -1,10 +1,18 @@
 import type { AppRouter } from "@strata/web-api/trpc";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink, httpLink } from "@trpc/client";
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 
 const trpc = createTRPCClient<AppRouter>({
   links: [
     httpBatchLink({
+      url: "/api/trpc",
+    }),
+  ],
+});
+
+const unbatchedTrpc = createTRPCClient<AppRouter>({
+  links: [
+    httpLink({
       url: "/api/trpc",
     }),
   ],
@@ -49,6 +57,8 @@ export type ChatQueueTargetInput = RouterInput["chat"]["queue"]["list"];
 export type ChatQueueTarget = { sessionId?: string; runId?: string };
 export type ChatSessionSummary = RouterOutput["chat"]["sessions"]["list"]["sessions"][number];
 export type ChatSessionDetail = NonNullable<RouterOutput["chat"]["sessions"]["get"]>;
+export type ChatSessionGetInput = RouterInput["chat"]["sessions"]["get"];
+export type ChatToolResultDetail = NonNullable<RouterOutput["chat"]["sessions"]["toolResult"]>;
 export type ChatSessionDeleteResult = RouterOutput["chat"]["sessions"]["delete"];
 export type ChatMessageSummary = ChatSessionDetail["messages"][number];
 export type WikiTreeEntry = RouterOutput["wiki"]["tree"]["tree"][number];
@@ -84,7 +94,6 @@ export type RoutineUpdateInput = RouterInput["routines"]["update"];
 export type RoutineStatus = RouterInput["routines"]["setStatus"]["status"];
 export type RoutineTemplateSummary =
   RouterOutput["routines"]["templates"]["list"]["templates"][number];
-export type JobMetadata = RouterOutput["jobs"]["list"]["jobs"][number];
 export type RoutineTrigger = RouterOutput["routines"]["triggers"]["list"]["triggers"][number];
 export type RoutineTriggerCreateInput = RouterInput["routines"]["triggers"]["create"];
 export type RoutineTriggerUpdateInput = RouterInput["routines"]["triggers"]["update"];
@@ -139,20 +148,6 @@ export async function saveConnectorConfigProfile(
   input: ConnectorConfigProfileSaveInput,
 ): Promise<ConnectorConfigProfilesResult> {
   return trpc.connectors.config.save.mutate(input);
-}
-
-export async function deleteConnectorConfigProfile(
-  connector: ConnectorConfigName,
-  id: string,
-): Promise<ConnectorConfigProfilesResult> {
-  return trpc.connectors.config.delete.mutate({ connector, id });
-}
-
-export async function setDefaultConnectorConfigProfile(
-  connector: ConnectorConfigName,
-  id: string,
-): Promise<ConnectorConfigProfilesResult> {
-  return trpc.connectors.config.setDefault.mutate({ connector, id });
 }
 
 export async function getNotionMcpStatus(): Promise<NotionMcpStatus> {
@@ -302,8 +297,25 @@ export async function listChatSessions(limit = 20): Promise<ChatSessionSummary[]
   return body.sessions;
 }
 
-export async function getChatSession(sessionId: string): Promise<ChatSessionDetail | null> {
-  return trpc.chat.sessions.get.query({ sessionId });
+export async function getChatSession(
+  sessionId: string,
+  options: Omit<ChatSessionGetInput, "sessionId"> = {},
+): Promise<ChatSessionDetail | null> {
+  const input: ChatSessionGetInput = { sessionId };
+  if (options.messageLimit !== undefined) {
+    input.messageLimit = options.messageLimit;
+  }
+  if (options.beforeMessageId !== undefined) {
+    input.beforeMessageId = options.beforeMessageId;
+  }
+  return unbatchedTrpc.chat.sessions.get.query(input);
+}
+
+export async function getChatToolResult(
+  sessionId: string,
+  toolCallId: string,
+): Promise<ChatToolResultDetail | null> {
+  return unbatchedTrpc.chat.sessions.toolResult.query({ sessionId, toolCallId });
 }
 
 export async function forkChatSession(sessionId: string): Promise<ChatSessionDetail> {
@@ -312,11 +324,6 @@ export async function forkChatSession(sessionId: string): Promise<ChatSessionDet
 
 export async function deleteChatSession(sessionId: string): Promise<ChatSessionDeleteResult> {
   return trpc.chat.sessions.delete.mutate({ sessionId });
-}
-
-export async function searchChatSessions(query: string, limit = 20): Promise<ChatSessionSummary[]> {
-  const body = await trpc.chat.sessions.search.query({ query, limit });
-  return body.sessions;
 }
 
 export async function getWikiTree(includeRaw = false): Promise<WikiTreeEntry[]> {
@@ -484,11 +491,6 @@ export async function listRoutineArtifacts(
 ): Promise<RoutineArtifactRecord[]> {
   const body = await trpc.routines.artifacts.list.query(input);
   return body.artifacts;
-}
-
-export async function listJobs(): Promise<JobMetadata[]> {
-  const body = await trpc.jobs.list.query();
-  return body.jobs;
 }
 
 export async function listRoutineTriggers(routineId: string): Promise<RoutineTrigger[]> {

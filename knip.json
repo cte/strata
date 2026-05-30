@@ -1,0 +1,65 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [".agents/**", ".claude/**"],
+  "workspaces": {
+    "packages/agent": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/cli": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/core": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/e2e": {
+      "entry": ["src/__tests__/**/*.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/ingest": {
+      "entry": [
+        "src/lintWiki.ts",
+        "src/pullGranola.ts",
+        "src/pullSlack.ts",
+        "src/pullNotion.ts"
+      ],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/integration-mcp": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/jobs": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/routines": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/terminal-web": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/terminal-backend": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/tools": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/tui": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/web-api": {
+      "project": ["src/**/*.ts"]
+    },
+    "apps/web": {
+      "paths": {
+        "@/*": ["./src/*"]
+      },
+      "project": ["src/**/*.{ts,tsx}"]
+    }
+  },
+  "ignoreDependencies": ["@typescript/native-preview", "tailwindcss", "tw-animate-css"],
+  "treatConfigHintsAsErrors": true,
+  "ignoreExportsUsedInFile": true,
+  "ignoreIssues": {
+    "apps/web/src/components/ai-elements/**": ["exports", "types"],
+    "apps/web/src/components/ui/**": ["exports", "types"]
+  }
+}

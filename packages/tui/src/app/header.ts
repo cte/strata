@@ -25,7 +25,8 @@ export const VERSION = readVersion();
  * Build the pi-shaped startup header lines.
  *
  *   strata v0.1.0
- *   escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · @ files · /help more
+ *   escape interrupt · ctrl+c/ctrl+d clear/exit · ctrl+z suspend
+ *   / commands · @ files · /help more
  *   Type /help for the full keymap and command list.
  *
  * Returns already-styled strings — the transcript renderer prints them with a
@@ -34,9 +35,12 @@ export const VERSION = readVersion();
 export function buildStartupHeader(): string[] {
   const logo = `${theme.bold(theme.accent("strata"))}${theme.dim(` v${VERSION}`)}`;
   const sep = theme.muted(" · ");
-  const hints = [
+  const primaryHints = [
     `${theme.muted("escape")} interrupt`,
     `${theme.muted("ctrl+c/ctrl+d")} clear/exit`,
+    `${theme.muted("ctrl+z")} suspend`,
+  ].join(sep);
+  const secondaryHints = [
     `${theme.muted("/")} commands`,
     `${theme.muted("@")} files`,
     `${theme.muted("/help")} more`,
@@ -45,7 +49,7 @@ export function buildStartupHeader(): string[] {
   // Leading blank line mirrors pi's `Spacer(1)` above its `headerContainer`
   // (`interactive-mode.ts:616`) so the logo doesn't butt up against the top
   // of the viewport / prior shell prompt.
-  return ["", logo, hints, onboarding];
+  return ["", logo, primaryHints, secondaryHints, onboarding];
 }
 
 /**
@@ -69,6 +73,7 @@ export function buildHelpNotice(commands: { name: string; description: string }[
   lines.push(`  ${key("Ctrl+L".padEnd(14))}redraw`);
   lines.push(`  ${key("Ctrl+C".padEnd(14))}interrupt run / clear input / exit`);
   lines.push(`  ${key("Ctrl+D".padEnd(14))}exit (when input is empty)`);
+  lines.push(`  ${key("Ctrl+Z".padEnd(14))}suspend to background`);
   lines.push(`  ${key("Esc".padEnd(14))}cancel completion / dismiss overlay / interrupt run`);
   lines.push(`  ${key("Esc Esc".padEnd(14))}open the resume picker`);
   lines.push("");

@@ -1,12 +1,12 @@
 {
-  "name": "@strata/e2e",
+  "name": "@strata/terminal-backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "dependencies": {
-    "@strata/agent": "workspace:*",
-    "@strata/core": "workspace:*",
-    "@strata/tui": "workspace:*"
+  "exports": {
+    ".": "./src/index.ts",
+    "./http": "./src/terminalHttp.ts",
+    "./session": "./src/terminal.ts"
   },
   "scripts": {
     "check": "bun ../../node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p tsconfig.json",

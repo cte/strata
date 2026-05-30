@@ -162,6 +162,54 @@ describe("SessionStore.deleteSession", () => {
   });
 });
 
+describe("SessionStore.listMessagePage", () => {
+  test("pages by display messages while keeping matching tool result rows", async () => {
+    await withTempStore(async (store) => {
+      const session = await store.createSession({ kind: "chat", title: "Paged transcript" });
+      await store.appendMessage({ sessionId: session.id, role: "system", content: "context" });
+      await store.appendMessage({ sessionId: session.id, role: "user", content: "first" });
+      await store.appendMessage({
+        sessionId: session.id,
+        role: "assistant",
+        content: "checking",
+        toolCalls: [{ id: "call-1", name: "fs.read", argumentsText: "{}" }],
+      });
+      await store.appendMessage({
+        sessionId: session.id,
+        role: "tool",
+        toolCallId: "call-1",
+        content: JSON.stringify({ ok: true, toolName: "fs.read", result: { path: "a.md" } }),
+      });
+      await store.appendMessage({ sessionId: session.id, role: "user", content: "second" });
+      await store.appendMessage({ sessionId: session.id, role: "assistant", content: "done" });
+
+      const tail = store.listMessagePage(session.id, { displayLimit: 2 });
+
+      expect(tail.messages.map((message) => message.content)).toEqual(["second", "done"]);
+      expect(tail.hasMoreBefore).toBe(true);
+      expect(tail.oldestDisplayMessageId).toBe(tail.messages[0]?.id ?? null);
+      expect(tail.oldestDisplayMessageId).not.toBeNull();
+
+      const older = store.listMessagePage(session.id, {
+        displayLimit: 2,
+        beforeMessageId: tail.oldestDisplayMessageId as number,
+      });
+
+      expect(older.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"]);
+      expect(older.messages.map((message) => message.content)).toEqual([
+        "first",
+        "checking",
+        JSON.stringify({ ok: true, toolName: "fs.read", result: { path: "a.md" } }),
+      ]);
+      expect(older.hasMoreBefore).toBe(false);
+
+      expect(store.getToolResultMessage(session.id, "call-1")?.content).toBe(
+        JSON.stringify({ ok: true, toolName: "fs.read", result: { path: "a.md" } }),
+      );
+    });
+  });
+});
+
 describe("SessionStore.sessionChangesSince", () => {
   test("reports distinct changed sessions and advances the high-water mark", async () => {
     await withTempStore(async (store) => {

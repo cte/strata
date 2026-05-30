@@ -915,6 +915,7 @@ async function* executeToolCallsSequential(
       options.sessionId,
       options.tools,
       toolCall,
+      options.signal,
       (chunk) => channel.push(toolOutputEvent(toolCall.id, chunk)),
     );
     void resultPromise.then(
@@ -965,6 +966,7 @@ async function* executeToolCallsParallel(
       options.sessionId,
       options.tools,
       toolCall,
+      options.signal,
       (chunk) => channel.push(toolOutputEvent(toolCall.id, chunk)),
     ).then((result) => {
       const execution: ExecutedToolCall = { index: sourceIndex, toolCall, result };
@@ -1095,12 +1097,14 @@ async function executeToolCall(
   sessionId: string,
   tools: ToolRegistry,
   toolCall: AgentToolCall,
+  signal?: AbortSignal,
   onOutput?: (chunk: ToolOutputChunk) => void,
 ): Promise<ToolExecutionResult> {
   return tools.safeExecuteText(toolCall.name, toolCall.argumentsText, {
     repoRoot,
     sessionId,
     toolCallId: toolCall.id,
+    ...(signal === undefined ? {} : { signal }),
     recordFileChange: async (change) => {
       await store.appendEvent(sessionId, "file.changed", {
         toolCallId: toolCall.id,

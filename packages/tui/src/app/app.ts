@@ -156,6 +156,8 @@ export class StrataApp implements Component {
           this.runtime.forceRedraw();
         } else if (event.key === "ctrl+d" && this.editor.text === "") {
           this.requestExit();
+        } else if (event.key === "ctrl+z") {
+          this.handleCtrlZ();
         } else if (event.key === "shift+tab") {
           this.cycleThinkingLevel();
         } else if (event.key === "alt+enter") {
@@ -858,6 +860,38 @@ export class StrataApp implements Component {
     this.exitRequested = true;
     this.stopAnimationLoop();
     this.runtime.stop();
+  }
+
+  private handleCtrlZ(): void {
+    if (process.platform === "win32") {
+      appendTranscript(this.state, {
+        kind: "status",
+        content: "Suspend to background is not supported on Windows",
+      });
+      this.invalidate();
+      return;
+    }
+
+    // Mirrors Pi: restore the terminal before stopping the process group, then
+    // rebuild the TUI when the shell resumes us with `fg`.
+    const suspendKeepAlive = setInterval(() => {}, 2 ** 30);
+    const ignoreSigint = () => {};
+    process.on("SIGINT", ignoreSigint);
+    process.once("SIGCONT", () => {
+      clearInterval(suspendKeepAlive);
+      process.removeListener("SIGINT", ignoreSigint);
+      this.runtime.start();
+      this.runtime.forceRedraw();
+    });
+
+    try {
+      this.runtime.stop();
+      process.kill(0, "SIGTSTP");
+    } catch (error: unknown) {
+      clearInterval(suspendKeepAlive);
+      process.removeListener("SIGINT", ignoreSigint);
+      throw error;
+    }
   }
 
   private shouldAnimate(): boolean {

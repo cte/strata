@@ -51,36 +51,6 @@ export function normalizeProjectLabels(
   );
 }
 
-export function actionOwner(text: string, taxonomy: ResolvedIngestTaxonomy): "mine" | "theirs" {
-  if (/\b(i|i'll|i’ll|i will)\b/i.test(text) || actionMentionsSelfName(text, taxonomy)) {
-    return "mine";
-  }
-  return "theirs";
-}
-
-function actionMentionsSelfName(text: string, taxonomy: ResolvedIngestTaxonomy): boolean {
-  const owner =
-    /^(?:[-*]\s*)?([A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3})\s+(?:will|must|needs? to|owns?|is responsible for|is going to)\b/.exec(
-      text.trim(),
-    )?.[1];
-  if (owner === undefined) {
-    return false;
-  }
-  const normalizedOwner = normalizePersonForCompare(owner);
-  return taxonomy.selfNames.some((name) => {
-    const normalizedName = normalizePersonForCompare(name);
-    return (
-      normalizedOwner === normalizedName ||
-      normalizedOwner.startsWith(`${normalizedName} `) ||
-      normalizedName.startsWith(`${normalizedOwner} `)
-    );
-  });
-}
-
-function normalizePersonForCompare(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
 function uniqueStrings(items: string[]): string[] {
   const seen = new Set<string>();
   const result = [];

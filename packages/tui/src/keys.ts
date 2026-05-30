@@ -38,7 +38,8 @@ export type KeyId =
   | "ctrl+p"
   | "ctrl+r"
   | "ctrl+u"
-  | "ctrl+w";
+  | "ctrl+w"
+  | "ctrl+z";
 
 export type InputEvent =
   | { type: "key"; key: KeyId; raw: string }
@@ -76,6 +77,7 @@ const RECOGNIZED_KEY_IDS = new Set<string>([
   "ctrl+r",
   "ctrl+u",
   "ctrl+w",
+  "ctrl+z",
 ]);
 
 // Pi uses "pageUp"/"pageDown"; strata's KeyId uses "pageup"/"pagedown".

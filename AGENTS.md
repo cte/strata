@@ -72,7 +72,7 @@ This repo runs in an exe.dev VM. Only use documented exe.dev features. The exe.d
 
 Use Bun, not npm.
 
-The repo uses `bun@1.3.13`, TypeScript via `@typescript/native-preview` (`tsgo`), Biome for formatting/linting, and dotenvx for encrypted local `.env` values. Bun runs `.ts` files directly; there is no `tsc` emit step. `verbatimModuleSyntax` and `exactOptionalPropertyTypes` are enabled. Relative imports use `.js` extensions even when the source files are `.ts`.
+The repo uses `bun@1.3.13`, TypeScript via `@typescript/native-preview` (`tsgo`), Biome for formatting/linting, Knip for unused-code detection, and dotenvx for encrypted local `.env` values. Bun runs `.ts` files directly; there is no `tsc` emit step. `verbatimModuleSyntax` and `exactOptionalPropertyTypes` are enabled. Relative imports use `.js` extensions even when the source files are `.ts`.
 
 Runtime scripts that need secrets wrap dotenvx automatically with overload enabled, so encrypted `.env` values work through `bun run strata`, `bun run web:api`, `bun run web:dev`, and the pull scripts. Do not manually decrypt secrets into tracked files.
 
@@ -86,6 +86,7 @@ bun test
 bun test packages/tui/src/runtime.test.ts
 bun test packages/tui/src/runtime.test.ts -t "scrolls"
 bun run biome:check
+bun run knip
 bun run format
 bun run format:check
 bun dev
@@ -114,6 +115,8 @@ packages/
   ingest/      Connector/runtime contracts, raw-to-wiki indexing, taxonomy, and ingest activity normalization
   jobs/        Registered jobs, job runner, durable routine triggers, and scheduler loop
   routines/    Structured Routine definitions, runs, artifacts, triggers, and routine.run orchestration
+  terminal-web/      Browser terminal emulator API and renderer
+  terminal-backend/  Local shell session and HTTP/SSE terminal bridge
   web-api/     Local HTTP API for chat, connector setup, routines, activity, and operations
   e2e/         End-to-end TUI/agent tests driven through FakeTerminal
   extensions/  Planned Pi-style local extension runtime
@@ -129,7 +132,7 @@ Workspace dependencies use `workspace:*`. Cross-package imports use `@strata/<pk
 
 The agent loop is the source of truth. `runAgentLoopEvents()` in `packages/agent/src/agentLoop.ts` drives a single run, owns session creation, seeds messages, counts iterations/tool calls, honors abort signals, emits lifecycle events, and persists state. `runAgentLoop()` is a thin consumer. Do not duplicate loop logic.
 
-Cancellation is end-to-end. `AgentRunConfig.signal` and `ModelRequest.signal` flow into model adapters and are checked by the loop at iteration and tool-call boundaries. Cancelled runs should end as `interrupted` with `stoppedReason: "cancelled"`.
+Cancellation is end-to-end. `AgentRunConfig.signal` flows into `ModelRequest.signal` for model adapters and `ToolContext.signal` for tools, and is checked by the loop at iteration and tool-call boundaries. Cancelled runs should end as `interrupted` with `stoppedReason: "cancelled"`.
 
 Session storage is centralized. Use `SessionStore.open(repoRoot?)`; runs persist to `.strata/state.sqlite` and `.strata/traces/<sessionId>.jsonl`. Delete sessions through `SessionStore.deleteSession()` so SQLite state and the matching trace file are removed together.
 
@@ -157,8 +160,8 @@ Web client data fetching goes through React Query, not bespoke `useEffect` loade
 
 - `apps/web/src/lib/api.ts` is the transport layer only — thin typed tRPC wrappers (`listX`, `getX`, `createX`). Do not call those functions directly from route components or hand-roll `useState`/`useEffect`/`useTransition` fetch-then-set ladders.
 - Reads use `useQuery` (or `useQueries` for a fixed fan-out) in a `lib/queries` hook. Dependent reads pass `enabled` (e.g. a detail query keyed by the selected id). Derive `loaded`/`error` from the query (`!query.isPending`, `query.error`), and keep selection, filters, dialog, and form state as local `useState`.
-- Writes use `useMutation` that invalidates the affected `qk.<domain>.root` (or seeds the cache with `setQueryData` when the mutation returns the fresh state) in `onSuccess`. For an encapsulated multi-call write flow (e.g. the taxonomy add forms, the schedules `mutate(key, op)` wrapper) it is acceptable to call the api functions directly and then invalidate the domain key through `useQueryClient`/a small `useInvalidate*` helper — but never leave a write without invalidating its read.
-- Share one query key across routes instead of refetching: the connector summary list, the schedule list, and the connector schedule status are read by several pages through the same `qk` entry, so a write in one place refreshes the others.
+- Writes use `useMutation` that invalidates the affected `qk.<domain>.root` (or seeds the cache with `setQueryData` when the mutation returns the fresh state) in `onSuccess`. For an encapsulated multi-call write flow it is acceptable to call the api functions directly and then invalidate the domain key through `useQueryClient`/a small `useInvalidate*` helper — but never leave a write without invalidating its read.
+- Share one query key across routes instead of refetching: the connector summary list, routine list, and routine trigger status can be read by several pages through the same `qk` entry, so a write in one place refreshes the others.
 - Never call `startTransition`/dispatch side effects from inside a `setState` updater (React 19 + StrictMode runs updaters twice and a transition started during render misbehaves) — validate, set busy state, then run the mutation/transition at the top level of the handler.
 - The chat surface is the deliberate exception: it streams over SSE through `chatRunsStore`/`useChatRun` and keeps its own inline `["chat", ...]` keys; do not fold it into the `qk` factory or convert its stream to a query. Realtime cross-process refresh remains the change-feed's job (above); query invalidation is for same-tab writes.
 
@@ -173,7 +176,7 @@ Run context includes durable local guidance. `packages/agent/src/runContext.ts` 
 
 Auto-compaction is owned by the shared agent loop and is append-only. `packages/agent/src/compaction.ts` appends `compaction.completed` checkpoint events instead of deleting historical messages; continued runs rebuild model context through `buildCompactedMessageRecords()` as fresh system context, the latest summary checkpoint, and kept recent messages. Threshold compaction uses Pi's `contextWindow - reserveTokens` rule, overflow errors compact and retry once, and stale pre-compaction usage must not immediately retrigger compaction.
 
-Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), optional `maxResultChars`, and optional `executionMode` (`parallel` or `sequential`). The agent loop executes multiple tool calls in Pi-style `parallel` mode by default: starts are emitted in assistant source order, completions are emitted as tools finish, and persisted tool-result messages remain in assistant source order. Any called tool with `executionMode: "sequential"` forces the whole batch sequential. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values. Native human-interaction tools such as planned `user.ask` should be normal trace-backed tools over a shared agent UI adapter; TUI and web may provide interactive adapters, while CLI print and scheduled jobs must return explicit unavailable/cancelled results instead of blocking indefinitely.
+Tools use dotted names, JSON-schema inputs, a `mode` (`read`, `write`, `learning`, or `dangerous`), optional `maxResultChars`, optional `executionMode` (`parallel` or `sequential`), and the run `ToolContext.signal` for cancellation. The agent loop executes multiple tool calls in Pi-style `parallel` mode by default: starts are emitted in assistant source order, completions are emitted as tools finish, and persisted tool-result messages remain in assistant source order. Any called tool with `executionMode: "sequential"` forces the whole batch sequential. Execute tools through `registry.safeExecute()` so tool failures become structured `ToolExecutionResult` values. Native human-interaction tools such as planned `user.ask` should be normal trace-backed tools over a shared agent UI adapter; TUI and web may provide interactive adapters, while CLI print and scheduled jobs must return explicit unavailable/cancelled results instead of blocking indefinitely.
 
 TUI rendering is pi-style scrollback, not alt-screen. `TuiRuntime` writes to the main terminal buffer and must not enable alt-screen. Width/height changes clear the visible viewport but must not wipe terminal scrollback.
 

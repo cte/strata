@@ -1,14 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-export interface TerminalSocketData {
-  kind: "terminal";
-  sessionId: string;
-}
-
 export interface TerminalSession {
   id: string;
+  shell: string;
   process: Bun.Subprocess<"pipe", "pipe", "pipe">;
   stdin: Bun.FileSink;
+  write(data: string | Uint8Array): void;
 }
 
 export class TerminalSessionManager {
@@ -30,7 +27,6 @@ export class TerminalSessionManager {
       stderr: "pipe",
       env: {
         ...this.env,
-
         TERM: "xterm-256color",
         COLORTERM: "truecolor",
         STRATA_WEB_TERMINAL: "1",
@@ -41,7 +37,17 @@ export class TerminalSessionManager {
     });
     const stdin = process.stdin;
 
-    const session: TerminalSession = { id, process, stdin };
+    const session: TerminalSession = {
+      id,
+      shell,
+      process,
+      stdin,
+      write(data) {
+        const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+        stdin.write(text.replaceAll("\r", "\n"));
+        stdin.flush();
+      },
+    };
 
     this.sessions.set(id, session);
     return session;
@@ -55,12 +61,11 @@ export class TerminalSessionManager {
     const session = this.sessions.get(id);
     if (session === undefined) return;
     this.sessions.delete(id);
-    session.stdin.end();
-
+    try {
+      session.stdin.end();
+    } catch {
+      // The shell may have already exited and closed stdin.
+    }
     session.process.kill();
   }
-}
-
-export function createTerminalSocketData(): TerminalSocketData {
-  return { kind: "terminal", sessionId: randomUUID() };
 }

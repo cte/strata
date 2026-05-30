@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import { createSessionId, nowIso, safeJsonStringify } from "./events.js";
 import { MIGRATIONS } from "./migrations.js";
@@ -17,7 +17,10 @@ import type {
   JsonObject,
   JsonValue,
   MessageInput,
+  MessagePage,
+  MessagePageOptions,
   MessageRecord,
+  MessageRole,
   SessionRecord,
   SessionStatus,
   StrataPaths,
@@ -433,6 +436,88 @@ export class SessionStore {
       .orderBy(asc(messages.id))
       .all();
     return rows.map(messageRowToRecord);
+  }
+
+  getToolResultMessage(sessionId: string, toolCallId: string): MessageRecord | undefined {
+    const row = this.drizzle
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, sessionId),
+          eq(messages.role, "tool"),
+          eq(messages.toolCallId, toolCallId),
+        ),
+      )
+      .orderBy(asc(messages.id))
+      .limit(1)
+      .get();
+    return row === undefined ? undefined : messageRowToRecord(row);
+  }
+
+  listMessagePage(sessionId: string, options: MessagePageOptions = {}): MessagePage {
+    if (options.displayLimit === undefined) {
+      return {
+        messages: this.listMessages(sessionId),
+        hasMoreBefore: false,
+        oldestDisplayMessageId: null,
+      };
+    }
+
+    const limit = Math.max(1, Math.trunc(options.displayLimit));
+    const displayRoles: MessageRole[] = ["user", "assistant"];
+    const displayWhere =
+      options.beforeMessageId === undefined
+        ? and(eq(messages.sessionId, sessionId), inArray(messages.role, displayRoles))
+        : and(
+            eq(messages.sessionId, sessionId),
+            inArray(messages.role, displayRoles),
+            lt(messages.id, options.beforeMessageId),
+          );
+    const displayIdsDesc = this.drizzle
+      .select({ id: messages.id })
+      .from(messages)
+      .where(displayWhere)
+      .orderBy(desc(messages.id))
+      .limit(limit)
+      .all();
+    const displayIds = displayIdsDesc.map((row) => row.id).toReversed();
+    const oldestDisplayMessageId = displayIds[0] ?? null;
+    if (oldestDisplayMessageId === null) {
+      return { messages: [], hasMoreBefore: false, oldestDisplayMessageId: null };
+    }
+
+    const rowWhere =
+      options.beforeMessageId === undefined
+        ? and(eq(messages.sessionId, sessionId), gte(messages.id, oldestDisplayMessageId))
+        : and(
+            eq(messages.sessionId, sessionId),
+            gte(messages.id, oldestDisplayMessageId),
+            lt(messages.id, options.beforeMessageId),
+          );
+    const rows = this.drizzle
+      .select()
+      .from(messages)
+      .where(rowWhere)
+      .orderBy(asc(messages.id))
+      .all();
+    const older = this.drizzle
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, sessionId),
+          inArray(messages.role, displayRoles),
+          lt(messages.id, oldestDisplayMessageId),
+        ),
+      )
+      .limit(1)
+      .get();
+    return {
+      messages: rows.map(messageRowToRecord),
+      hasMoreBefore: older !== undefined,
+      oldestDisplayMessageId,
+    };
   }
 
   getSession(sessionId: string): SessionRecord | undefined {

@@ -4,12 +4,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 
 import os from "node:os";
 import path from "node:path";
-import {
-  type AgentRunConfig,
-  type AgentRunEvent,
-  type AgentRunResult,
-  type ModelAdapter,
-} from "@strata/agent";
+import { type AgentRunEvent, type AgentRunResult, type ModelAdapter } from "@strata/agent";
 import { writeLearningProposal } from "@strata/core/proposal-store";
 import { SessionStore } from "@strata/core/session-store";
 import { RoutineStore } from "@strata/routines";
@@ -1081,6 +1076,16 @@ describe("web api", () => {
           content: "The launch decision is ready.",
           toolCalls: [{ id: "call-1", name: "wiki.search", argumentsText: "{}" }],
         });
+        await store.appendMessage({
+          sessionId: querySession.id,
+          role: "tool",
+          toolCallId: "call-1",
+          content: JSON.stringify({
+            ok: true,
+            toolName: "wiki.search",
+            result: { query: "launch decision", count: 3, matches: [] },
+          }),
+        });
         await store.endSession(querySession.id, "completed");
 
         const chatSession = await store.createSession({
@@ -1130,8 +1135,48 @@ describe("web api", () => {
         expect(loaded?.messages[1]).toMatchObject({
           role: "assistant",
           content: "The launch decision is ready.",
-          toolCalls: [{ id: "call-1", name: "wiki.search", argumentsText: "{}" }],
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "wiki.search",
+              argumentsText: "{}",
+              status: "complete",
+              summary: "launch decision · 3 match(es)",
+              resultAvailable: true,
+            },
+          ],
         });
+
+        const tail = await client.chat.sessions.get.query({
+          sessionId: querySessionId,
+          messageLimit: 1,
+        });
+        expect(tail?.messages.map((message) => message.content)).toEqual([
+          "The launch decision is ready.",
+        ]);
+        expect(tail?.messagePage.hasMoreBefore).toBe(true);
+        expect(tail?.messagePage.oldestDisplayMessageId).not.toBeNull();
+        const older = await client.chat.sessions.get.query({
+          sessionId: querySessionId,
+          messageLimit: 1,
+          beforeMessageId: tail?.messagePage.oldestDisplayMessageId as number,
+        });
+        expect(older?.messages.map((message) => message.content)).toEqual([
+          "Find the launch decision",
+        ]);
+        expect(older?.messagePage.hasMoreBefore).toBe(false);
+
+        const toolResult = await client.chat.sessions.toolResult.query({
+          sessionId: querySessionId,
+          toolCallId: "call-1",
+        });
+        expect(toolResult).toMatchObject({
+          sessionId: querySessionId,
+          toolCallId: "call-1",
+          status: "complete",
+          summary: "launch decision · 3 match(es)",
+        });
+        expect(toolResult?.content).toContain('"matches":[]');
 
         await expect(
           client.chat.sessions.get.query({ sessionId: ingestSessionId }),

@@ -3,7 +3,6 @@ import {
   CalendarClock,
   Database,
   FileText,
-  GitBranch,
   Layers3,
   Link2,
   Play,
@@ -11,7 +10,7 @@ import {
   SearchCheck,
 } from "lucide-react";
 import type * as React from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Callout } from "@/components/shared/callout";
 import { Eyebrow } from "@/components/shared/eyebrow";
