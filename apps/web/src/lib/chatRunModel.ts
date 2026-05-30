@@ -26,6 +26,8 @@ export interface ChatMessageView {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** Streamed reasoning/thinking summary for this assistant turn, if any. */
+  reasoning?: string;
   status: MessageStatus;
   toolCalls: ChatToolCallView[];
   runId?: string;
@@ -73,6 +75,35 @@ export function appendAssistantDelta(
   );
 }
 
+export function appendAssistantReasoning(
+  messages: ChatMessageView[],
+  runId: string | null,
+  iteration: number,
+  delta: string,
+): ChatMessageView[] {
+  const index = findAssistantByRunIteration(messages, runId, iteration);
+  if (index === -1) {
+    return [
+      ...messages,
+      {
+        id: clientId("assistant"),
+        role: "assistant",
+        ...runScope(runId),
+        iteration,
+        content: "",
+        reasoning: delta,
+        status: "streaming",
+        toolCalls: [],
+      },
+    ];
+  }
+  return messages.map((message, messageIndex) =>
+    messageIndex === index
+      ? { ...message, reasoning: `${message.reasoning ?? ""}${delta}`, status: "streaming" }
+      : message,
+  );
+}
+
 export function finalizeAssistantResponse(
   messages: ChatMessageView[],
   runId: string | null,
@@ -80,6 +111,7 @@ export function finalizeAssistantResponse(
   content: string,
   toolCalls: Array<{ id: string; name: string; argumentsText: string }>,
   usage: TokenUsage | undefined,
+  reasoning?: string,
 ): ChatMessageView[] {
   const nextToolCalls = toolCalls.map((toolCall) => ({
     id: toolCall.id,
@@ -99,6 +131,7 @@ export function finalizeAssistantResponse(
         content,
         status: "complete",
         toolCalls: nextToolCalls,
+        ...(reasoning === undefined || reasoning === "" ? {} : { reasoning }),
         ...(usage === undefined ? {} : { usage }),
       },
     ];
@@ -110,6 +143,9 @@ export function finalizeAssistantResponse(
           content,
           status: "complete",
           toolCalls: mergeToolCalls(message.toolCalls, nextToolCalls),
+          // Prefer the canonical reasoning from model.response; fall back to the
+          // text accumulated from streamed deltas.
+          ...(reasoning === undefined || reasoning === "" ? {} : { reasoning }),
           ...(usage === undefined ? {} : { usage }),
         }
       : message,
@@ -220,6 +256,7 @@ export function completeToolCall(
 
 type TranscriptStreamEvent =
   | Extract<ChatStreamEvent, { type: "assistant.delta" }>
+  | Extract<ChatStreamEvent, { type: "assistant.reasoning" }>
   | Extract<ChatStreamEvent, { type: "model.response" }>
   | Extract<ChatStreamEvent, { type: "tool.call.started" }>
   | Extract<ChatStreamEvent, { type: "tool.output" }>
@@ -236,6 +273,9 @@ export function transcriptUpdateForStreamEvent(
     case "assistant.delta":
       return (messages) =>
         appendAssistantDelta(messages, runId, event.iteration, event.contentDelta);
+    case "assistant.reasoning":
+      return (messages) =>
+        appendAssistantReasoning(messages, runId, event.iteration, event.reasoningDelta);
     case "model.response":
       return (messages) =>
         finalizeAssistantResponse(
@@ -245,6 +285,7 @@ export function transcriptUpdateForStreamEvent(
           event.content,
           event.toolCalls,
           usage,
+          event.reasoning,
         );
     case "tool.call.started":
       return (messages) => startToolCall(messages, runId, event);
@@ -339,12 +380,14 @@ export function messagesToTranscript(
     }
     if (message.role === "user") {
       const matched = existingByRole.user.shift();
+      const attachments = attachmentsToAttachmentData(message.attachments);
       transcript.push({
         id: matched?.id ?? `stored-user-${message.id}`,
         role: "user",
         content: message.content,
         status: "complete",
         toolCalls: [],
+        ...(attachments.length === 0 ? {} : { attachments }),
       });
       continue;
     }
@@ -496,6 +539,31 @@ function isToolErrorResult(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function attachmentsToAttachmentData(value: ChatMessageSummary["attachments"]): AttachmentData[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const attachments: AttachmentData[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || item.kind !== "image") {
+      continue;
+    }
+    const mimeType = typeof item.mimeType === "string" ? item.mimeType : "image/png";
+    const dataBase64 = typeof item.dataBase64 === "string" ? item.dataBase64 : "";
+    if (dataBase64 === "") {
+      continue;
+    }
+    attachments.push({
+      id: clientId("stored-att"),
+      type: "file",
+      mediaType: mimeType,
+      filename: typeof item.name === "string" ? item.name : "Image",
+      url: `data:${mimeType};base64,${dataBase64}`,
+    });
+  }
+  return attachments;
 }
 
 function parseJsonValue(value: string): unknown {

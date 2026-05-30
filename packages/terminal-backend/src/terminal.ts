@@ -48,9 +48,6 @@ export class TerminalSessionManager {
         COLUMNS: String(initialSize.cols),
         LINES: String(initialSize.rows),
         STRATA_WEB_TERMINAL: "1",
-        PS1: "strata$ ",
-        PROMPT_COMMAND: "",
-        ZDOTDIR: `${this.cwd}/.strata/terminal-empty-zdotdir`,
       },
     });
     const stdin = process.stdin;

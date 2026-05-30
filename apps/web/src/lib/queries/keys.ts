@@ -12,6 +12,10 @@
  * in here.
  */
 export const qk = {
+  auth: {
+    root: ["auth"] as const,
+    status: ["auth", "status"] as const,
+  },
   routines: {
     root: ["routines"] as const,
     list: (status: string) => ["routines", "list", status] as const,

@@ -623,7 +623,8 @@ class ChatRunsStore {
           this.update(key, { runState: "streaming" });
         }
         break;
-      case "assistant.delta": {
+      case "assistant.delta":
+      case "assistant.reasoning": {
         this.queueTranscriptUpdate(
           key,
           transcriptUpdateForStreamEvent(event, refs.runId),

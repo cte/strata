@@ -41,6 +41,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { WebAuthGate, WebAuthLogoutButton } from "@/components/web-auth-gate";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { readLastChatSessionId } from "@/lib/chatLastSession";
 import { chatRunsStore } from "@/lib/chatRunsStore";
@@ -95,18 +96,24 @@ function RootLayout(): React.ReactElement {
   );
 
   return (
-    <ChatSessionCommandPaletteContext.Provider value={openCommandPalette}>
-      <SidebarProvider open={!sidebarCollapsed} onOpenChange={handleSidebarOpenChange}>
-        <AppSidebar />
-        <ChatSessionCommandPalette open={commandPaletteOpen} setOpen={setCommandPaletteOpen} />
-        <SidebarInset>
-          <TopRail />
-          <main className="min-w-0 px-6 py-8 md:px-10 md:py-10">
-            <Outlet />
-          </main>
-        </SidebarInset>
-      </SidebarProvider>
-    </ChatSessionCommandPaletteContext.Provider>
+    <WebAuthGate>
+      <ChatSessionCommandPaletteContext.Provider value={openCommandPalette}>
+        <SidebarProvider
+          open={!sidebarCollapsed}
+          onOpenChange={handleSidebarOpenChange}
+          style={{ "--sidebar-width": "13rem" } as React.CSSProperties}
+        >
+          <AppSidebar />
+          <ChatSessionCommandPalette open={commandPaletteOpen} setOpen={setCommandPaletteOpen} />
+          <SidebarInset>
+            <TopRail />
+            <main className="min-w-0 px-6 py-8 md:px-10 md:py-10">
+              <Outlet />
+            </main>
+          </SidebarInset>
+        </SidebarProvider>
+      </ChatSessionCommandPaletteContext.Provider>
+    </WebAuthGate>
   );
 }
 
@@ -354,7 +361,8 @@ function TopRail(): React.ReactElement {
       <div className="flex items-center gap-3">
         <SidebarTrigger className="!h-6 !w-6 text-fg-dim hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5" />
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
+        <WebAuthLogoutButton />
         <ThemeToggle />
       </div>
     </header>

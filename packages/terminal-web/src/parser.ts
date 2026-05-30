@@ -9,13 +9,16 @@ const PRINTABLE_CONTROL = new Set(["\n", "\r", "\b", "\t"]);
 
 export class HandwrittenVtParser implements TerminalVtParser {
   write(data: string, screen: TerminalScreen): void {
-    for (let index = 0; index < data.length; index += 1) {
+    for (let index = 0; index < data.length; ) {
       const char = data[index] ?? "";
       if (char === "\x1b") {
         index = this.consumeEscape(data, index, screen);
+        index += 1;
         continue;
       }
-      this.putChar(screen, char);
+      const printable = readPrintableCluster(data, index);
+      this.putChar(screen, printable.text);
+      index = printable.nextIndex;
     }
   }
 
@@ -48,7 +51,7 @@ export class HandwrittenVtParser implements TerminalVtParser {
     const next = data[start + 1];
     if (next === undefined) return start;
     if (next === "[") return this.consumeCsi(data, start + 2, screen);
-    if (next === "]") return consumeUntilTerminator(data, start + 2);
+    if (next === "]") return this.consumeOsc(data, start + 2, screen);
     if (next === "c") {
       screen.reset();
       return start + 1;
@@ -126,15 +129,11 @@ export class HandwrittenVtParser implements TerminalVtParser {
 
     return cursor;
   }
-}
 
-export class GhosttyWasmParserBoundary implements TerminalVtParser {
-  write(): void {
-    throw new Error("Ghostty/libghostty WASM parser boundary is not implemented yet.");
-  }
-
-  reset(screen: TerminalScreen): void {
-    screen.reset();
+  private consumeOsc(data: string, index: number, screen: TerminalScreen): number {
+    const parsed = readUntilOscTerminator(data, index);
+    applyOsc(screen, parsed.payload);
+    return parsed.endIndex;
   }
 }
 
@@ -166,15 +165,84 @@ function applyPrivateMode(
   enabled: boolean,
 ): void {
   for (const mode of modes) {
-    if (mode === 47 || mode === 1047 || mode === 1049) screen.setAlternateScreen(enabled);
+    if (mode === 1) screen.setApplicationCursor(enabled);
+    else if (mode === 47 || mode === 1047 || mode === 1049) screen.setAlternateScreen(enabled);
     else if (mode === 2004) screen.setBracketedPaste(enabled);
+    else if (mode === 1000 || mode === 1002 || mode === 1003 || mode === 1006) {
+      screen.setMouseMode(mode, enabled);
+    }
   }
 }
 
-function consumeUntilTerminator(text: string, start: number): number {
+function readUntilOscTerminator(
+  text: string,
+  start: number,
+): { payload: string; endIndex: number } {
   for (let index = start; index < text.length; index += 1) {
-    if (text[index] === "\u0007") return index;
-    if (text[index] === "\x1b" && text[index + 1] === "\\") return index + 1;
+    if (text[index] === "\u0007") {
+      return { payload: text.slice(start, index), endIndex: index };
+    }
+    if (text[index] === "\x1b" && text[index + 1] === "\\") {
+      return { payload: text.slice(start, index), endIndex: index + 1 };
+    }
   }
-  return text.length - 1;
+  return { payload: text.slice(start), endIndex: text.length - 1 };
+}
+
+function applyOsc(screen: TerminalScreen, payload: string): void {
+  const firstSeparator = payload.indexOf(";");
+  if (firstSeparator === -1) return;
+  const command = payload.slice(0, firstSeparator);
+  if (command !== "8") return;
+
+  const rest = payload.slice(firstSeparator + 1);
+  const secondSeparator = rest.indexOf(";");
+  if (secondSeparator === -1) return;
+  const uri = rest.slice(secondSeparator + 1);
+  screen.setHyperlink(uri.length > 0 ? uri : null);
+}
+
+function readPrintableCluster(text: string, start: number): { text: string; nextIndex: number } {
+  const first = text.codePointAt(start);
+  if (first === undefined) return { text: "", nextIndex: start + 1 };
+  let end = start + codePointLength(first);
+
+  while (end < text.length) {
+    const next = text.codePointAt(end);
+    if (next === undefined) break;
+    if (isCombiningCodePoint(next) || isVariationSelector(next) || isEmojiModifier(next)) {
+      end += codePointLength(next);
+      continue;
+    }
+    if (next === 0x200d) {
+      end += codePointLength(next);
+      const joined = text.codePointAt(end);
+      if (joined !== undefined) end += codePointLength(joined);
+      continue;
+    }
+    break;
+  }
+
+  return { text: text.slice(start, end), nextIndex: end };
+}
+
+function codePointLength(value: number): number {
+  return value > 0xffff ? 2 : 1;
+}
+
+function isCombiningCodePoint(value: number): boolean {
+  return (
+    (value >= 0x0300 && value <= 0x036f) ||
+    (value >= 0x1ab0 && value <= 0x1aff) ||
+    (value >= 0x1dc0 && value <= 0x1dff) ||
+    (value >= 0x20d0 && value <= 0x20ff)
+  );
+}
+
+function isVariationSelector(value: number): boolean {
+  return (value >= 0xfe00 && value <= 0xfe0f) || (value >= 0xe0100 && value <= 0xe01ef);
+}
+
+function isEmojiModifier(value: number): boolean {
+  return value >= 0x1f3fb && value <= 0x1f3ff;
 }

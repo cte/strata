@@ -50,9 +50,11 @@ import { SessionSelector, sessionDisplayTitle } from "./sessionSelector.js";
 import {
   type AppState,
   appendAssistantDelta,
+  appendAssistantReasoning,
   appendTranscript,
   clearTranscript,
   finalizeAssistantStream,
+  finalizeReasoningStream,
   initialAppState,
   nextThinkingLevel,
   type ProviderName,
@@ -852,9 +854,14 @@ export class StrataApp implements Component {
         this.clearRetryCountdown();
         appendAssistantDelta(this.state, event.iteration, event.contentDelta);
         return;
+      case "assistant.reasoning":
+        this.clearRetryCountdown();
+        appendAssistantReasoning(this.state, event.iteration, event.reasoningDelta);
+        return;
       case "model.response":
         this.clearRetryCountdown();
         recordModelUsage(this.state, event.usage);
+        finalizeReasoningStream(this.state, event.iteration);
         finalizeAssistantStream(this.state, event.iteration, event.content);
         return;
       case "compaction.started":

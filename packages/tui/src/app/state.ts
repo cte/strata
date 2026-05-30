@@ -25,6 +25,7 @@ export interface AuthStatusSummary {
 export type TranscriptItem =
   | { kind: "user"; content: string }
   | { kind: "assistant"; content: string; iteration: number; streaming?: boolean }
+  | { kind: "reasoning"; content: string; iteration: number; streaming?: boolean }
   | {
       kind: "tool";
       toolCallId: string;
@@ -162,6 +163,45 @@ export function appendAssistantDelta(state: AppState, iteration: number, delta: 
 }
 
 /**
+ * Append a streamed reasoning/thinking fragment. Mirrors `appendAssistantDelta`
+ * but builds a separate `reasoning` transcript item that precedes the visible
+ * answer for the same iteration, so the renderer can style it distinctly.
+ */
+export function appendAssistantReasoning(state: AppState, iteration: number, delta: string): void {
+  const last = state.transcript[state.transcript.length - 1];
+  if (
+    last !== undefined &&
+    last.kind === "reasoning" &&
+    last.streaming === true &&
+    last.iteration === iteration
+  ) {
+    last.content += delta;
+    return;
+  }
+  state.transcript.push({
+    kind: "reasoning",
+    content: delta,
+    iteration,
+    streaming: true,
+  });
+}
+
+/**
+ * Mark the reasoning item for an iteration as no longer streaming, once the
+ * turn's response arrives. The reasoning item precedes the assistant text item,
+ * so we scan back rather than only inspecting the tail.
+ */
+export function finalizeReasoningStream(state: AppState, iteration: number): void {
+  for (let index = state.transcript.length - 1; index >= 0; index -= 1) {
+    const item = state.transcript[index];
+    if (item?.kind === "reasoning" && item.iteration === iteration && item.streaming === true) {
+      item.streaming = false;
+      return;
+    }
+  }
+}
+
+/**
  * Finalize the streaming assistant item for an iteration with the canonical
  * model content. If a streaming item exists for this iteration we replace
  * its content (in case deltas don't perfectly equal the final text); if
@@ -222,13 +262,13 @@ export function recordModelUsage(state: AppState, usage: JsonObject | undefined)
 export function recordCompletion(state: AppState, result: AgentRunResult): void {
   state.running = false;
   // Any in-flight streaming item (e.g. cancelled mid-stream) is finalized
-  // so the cursor/streaming flag doesn't linger past the run.
+  // so the cursor/streaming flag doesn't linger past the run. Both the visible
+  // answer and the reasoning trace can be mid-stream, so clear either kind.
   for (let i = state.transcript.length - 1; i >= 0; i -= 1) {
     const item = state.transcript[i];
-    if (item?.kind === "assistant" && item.streaming === true) {
+    if ((item?.kind === "assistant" || item?.kind === "reasoning") && item.streaming === true) {
       item.streaming = false;
       if (item.content === "") state.transcript.splice(i, 1);
-      break;
     }
   }
   // On a successful run we don't surface a status — pi stays quiet too. Only

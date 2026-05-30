@@ -1,205 +1,177 @@
-import { Terminal } from "@strata/terminal-web";
-import { Terminal as TerminalIcon, X } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, RotateCcw, X } from "lucide-react";
 import type * as React from "react";
-import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useFloatingWindow } from "@/hooks/use-floating-window";
+import {
+  type TerminalSessionController,
+  type TerminalStatus,
+  useTerminalSession,
+} from "@/hooks/use-terminal-session";
+import { cn } from "@/lib/utils";
 
-interface TerminalSessionResponse {
-  id: string;
-  shell: string;
-  cols: number;
-  rows: number;
-}
+const DEFAULT_FONT = 13;
+const WINDOW_KEY = "strata.terminal.window";
+const HEADER_HEIGHT = 40;
 
-interface TerminalFrame {
-  event: string;
-  data: unknown;
-}
+const STATUS_META: Record<TerminalStatus, { label: string; dot: string }> = {
+  connecting: { label: "Connecting", dot: "bg-warn animate-pulse" },
+  connected: { label: "Connected", dot: "bg-good" },
+  closed: { label: "Session ended", dot: "bg-fg-mute" },
+  error: { label: "Connection error", dot: "bg-bad" },
+};
 
 export function TerminalPanel({ onClose }: { onClose: () => void }): React.ReactElement {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const [status, setStatus] = useState("connecting");
+  const terminal = useTerminalSession(DEFAULT_FONT);
+  const win = useFloatingWindow({
+    storageKey: WINDOW_KEY,
+    minWidth: 380,
+    minHeight: 260,
+    headerHeight: HEADER_HEIGHT,
+  });
 
-  useEffect(() => {
-    const host = hostRef.current;
-    if (host === null) return;
-
-    const abort = new AbortController();
-    let disposed = false;
-    let sessionId: string | null = null;
-    let dataSub: { dispose: () => void } | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-    let latestSize = { cols: 96, rows: 24 };
-    let lastSentSizeKey: string | null = null;
-    const terminal = new Terminal({ cols: 96, rows: 24 });
-    terminal.open(host);
-    terminal.write("Strata experimental terminal\r\n");
-    terminal.write("Connecting over HTTP stream\r\n");
-    setStatus("connecting");
-
-    const sendInput = async (data: string) => {
-      if (disposed || sessionId === null) return;
-      await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/input`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ data }),
-        signal: abort.signal,
-      }).catch(() => {
-        if (!disposed) setStatus("input error");
-      });
-    };
-
-    const sendResize = async (size: { cols: number; rows: number }) => {
-      if (disposed || sessionId === null) return;
-      await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/resize`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(size),
-        signal: abort.signal,
-      }).catch(() => {
-        if (!disposed) setStatus("resize error");
-      });
-    };
-
-    const fitAndSyncResize = () => {
-      if (disposed) return;
-      latestSize = terminal.fit();
-      const nextKey = sizeKey(latestSize);
-      if (sessionId === null || nextKey === lastSentSizeKey) return;
-      lastSentSizeKey = nextKey;
-      void sendResize(latestSize);
-    };
-
-    dataSub = terminal.onData((data) => {
-      void sendInput(data);
-    });
-
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => fitAndSyncResize());
-      resizeObserver.observe(host);
-    }
-    window.addEventListener("resize", fitAndSyncResize);
-    window.requestAnimationFrame(fitAndSyncResize);
-
-    void (async () => {
-      try {
-        latestSize = terminal.fit();
-        const created = await fetch("/api/terminal/sessions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(latestSize),
-          signal: abort.signal,
-        });
-        if (!created.ok) throw new Error(`create failed ${created.status}`);
-        const session = (await created.json()) as TerminalSessionResponse;
-        if (disposed) return;
-        sessionId = session.id;
-        lastSentSizeKey = sizeKey({ cols: session.cols, rows: session.rows });
-        fitAndSyncResize();
-        setStatus("connected");
-        terminal.write(`Shell: ${session.shell}\r\n`);
-        terminal.focus();
-        await streamTerminal(session.id, abort.signal, (frame) => {
-          if (disposed) return;
-          if (frame.event === "stdout" || frame.event === "stderr") {
-            if (typeof frame.data === "string") terminal.write(frame.data);
-            return;
-          }
-          if (frame.event === "closed") {
-            setStatus("closed");
-          }
-        });
-      } catch (error: unknown) {
-        if (disposed || abort.signal.aborted) return;
-        const message = error instanceof Error ? error.message : String(error);
-        setStatus("error");
-        terminal.write(`\r\n[terminal connection error: ${message}]\r\n`);
-      }
-    })();
-
-    return () => {
-      disposed = true;
-      dataSub?.dispose();
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", fitAndSyncResize);
-      abort.abort();
-      const id = sessionId;
-      if (id !== null) {
-        void fetch(`/api/terminal/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-      }
-      terminal.dispose();
-    };
-  }, []);
+  const meta = STATUS_META[terminal.status];
 
   return (
-    <aside className="flex min-h-0 w-full flex-col border-l border-hairline bg-bg-elev md:w-[42rem]">
-      <header className="flex h-11 shrink-0 items-center justify-between border-b border-hairline px-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-fg">
-          <TerminalIcon size={14} strokeWidth={1.75} />
-          Terminal
-          <span className="rounded-full bg-accent-soft px-2 py-0.5 text-2xs font-normal text-fg-dim">
-            {status}
+    <aside
+      style={win.style}
+      className={cn(
+        "z-30 flex min-h-0 flex-col overflow-hidden rounded-xl border border-hairline-strong",
+        // Translucent, frosted backdrop: the chat surface shows through.
+        "bg-bg-elev/75 shadow-2xl shadow-black/40 backdrop-blur-xl backdrop-saturate-150",
+        win.isDragging && "select-none",
+      )}
+      aria-label="Terminal window"
+    >
+      <header
+        {...win.dragHandleProps}
+        onDoubleClick={win.toggleCollapsed}
+        className="flex h-10 shrink-0 items-center gap-2 border-hairline border-b pr-1.5 pl-2"
+      >
+        <GripVertical size={14} strokeWidth={1.75} className="shrink-0 text-fg-mute" aria-hidden />
+        <span
+          className={cn("size-2 shrink-0 rounded-full", meta.dot)}
+          title={meta.label}
+          aria-hidden
+        />
+        <span className="text-sm font-medium text-fg">Terminal</span>
+        {terminal.shell !== null ? (
+          <span className="min-w-0 truncate text-2xs text-fg-mute" title={terminal.shell}>
+            {terminal.shell}
           </span>
+        ) : (
+          <span className="text-2xs text-fg-mute">{meta.label}</span>
+        )}
+
+        <div className="ml-auto flex items-center gap-0.5" data-no-drag>
+          {!win.collapsed ? (
+            <ToolbarButton label="Restart session" onClick={terminal.restart}>
+              <RotateCcw size={14} strokeWidth={1.75} />
+            </ToolbarButton>
+          ) : null}
+          <ToolbarButton
+            label={win.collapsed ? "Expand terminal" : "Collapse terminal"}
+            onClick={win.toggleCollapsed}
+          >
+            {win.collapsed ? (
+              <ChevronUp size={14} strokeWidth={1.75} />
+            ) : (
+              <ChevronDown size={14} strokeWidth={1.75} />
+            )}
+          </ToolbarButton>
+          <ToolbarButton label="Close terminal" onClick={onClose}>
+            <X size={14} strokeWidth={1.75} />
+          </ToolbarButton>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          aria-label="Close terminal"
-          className="h-7 w-7 text-fg-dim hover:text-fg [&>svg]:!size-3.5"
-        >
-          <X size={14} strokeWidth={1.75} />
-        </Button>
       </header>
-      <div className="border-b border-hairline px-3 py-2 text-xs leading-5 text-fg-dim">
-        Privileged local shell in the repo root. PTY-backed prototype; emulator support is still
-        incomplete.
+
+      {/* Keep the session mounted while collapsed so the PTY survives. */}
+      <div className={cn("relative min-h-0 flex-1", win.collapsed && "hidden")}>
+        <div ref={terminal.containerRef} className="absolute inset-0 overflow-hidden" />
+        <SessionOverlay status={terminal.status} onRestart={terminal.restart} />
       </div>
-      <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden" />
+
+      {!win.collapsed ? (
+        <button
+          {...win.resizeHandleProps}
+          type="button"
+          aria-label="Resize terminal"
+          className="group absolute right-0 bottom-0 z-10 flex size-4 cursor-nwse-resize items-end justify-end p-1 touch-none"
+        >
+          <svg
+            viewBox="0 0 10 10"
+            className="size-2.5 text-fg-mute/70 group-hover:text-fg-dim"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.25}
+            strokeLinecap="round"
+            aria-hidden
+          >
+            <path d="M9 1 1 9" />
+            <path d="M9 5 5 9" />
+          </svg>
+        </button>
+      ) : null}
     </aside>
   );
 }
 
-async function streamTerminal(
-  sessionId: string,
-  signal: AbortSignal,
-  onFrame: (frame: TerminalFrame) => void,
-): Promise<void> {
-  const response = await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/stream`, {
-    signal,
-  });
-  if (!response.ok) throw new Error(`stream failed ${response.status}`);
-  if (response.body === null) throw new Error("stream body missing");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (!signal.aborted) {
-    const next = await reader.read();
-    if (next.done) break;
-    buffer += decoder.decode(next.value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-    for (const part of parts) {
-      const frame = parseSseFrame(part);
-      if (frame !== null) onFrame(frame);
-    }
-  }
+function ToolbarButton({
+  label,
+  onClick,
+  disabled,
+  className,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "size-7 text-fg-dim hover:text-fg disabled:opacity-40 [&>svg]:!size-3.5",
+        className,
+      )}
+    >
+      {children}
+    </Button>
+  );
 }
 
-function sizeKey(size: { cols: number; rows: number }): string {
-  return `${size.cols}x${size.rows}`;
-}
-
-function parseSseFrame(frame: string): TerminalFrame | null {
-  const event = frame
-    .split("\n")
-    .find((line) => line.startsWith("event: "))
-    ?.slice("event: ".length);
-  const data = frame
-    .split("\n")
-    .find((line) => line.startsWith("data: "))
-    ?.slice("data: ".length);
-  if (event === undefined || data === undefined) return null;
-  return { event, data: JSON.parse(data) as unknown };
+function SessionOverlay({
+  status,
+  onRestart,
+}: {
+  status: TerminalStatus;
+  onRestart: TerminalSessionController["restart"];
+}): React.ReactElement | null {
+  if (status !== "closed" && status !== "error") return null;
+  const ended = status === "closed";
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-bg/70 backdrop-blur-[1px]">
+      <div className="flex flex-col items-center gap-3 rounded-lg border border-hairline bg-bg-elev px-6 py-5 text-center shadow-lg">
+        <p className="text-sm font-medium text-fg">
+          {ended ? "Session ended" : "Connection error"}
+        </p>
+        <p className="max-w-56 text-xs leading-5 text-fg-dim">
+          {ended
+            ? "The shell process exited. Start a fresh session to keep working."
+            : "The terminal lost its connection to the local backend."}
+        </p>
+        <Button type="button" size="sm" variant="outline" onClick={onRestart} className="gap-1.5">
+          <RotateCcw size={13} strokeWidth={1.75} />
+          Restart session
+        </Button>
+      </div>
+    </div>
+  );
 }

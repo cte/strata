@@ -1,6 +1,6 @@
 # Strata Web Control Plane Plan
 
-Status: skeleton plus activity, wiki action management, retrieval-index management, automation-first schedules, scheduled agent prompts, connector schedule controls, one-off connector operations, saved connector defaults, ingest taxonomy controls, and proposal review with guarded exact consolidation apply present.
+Status: skeleton plus local-token web auth, activity, wiki action management, retrieval-index management, automation-first schedules, scheduled agent prompts, connector schedule controls, one-off connector operations, saved connector defaults, ingest taxonomy controls, and proposal review with guarded exact consolidation apply present.
 
 This plan covers a local web app for configuring and operating Strata connectors and local automations. It is subordinate to [roadmap.md](./roadmap.md), [routines-plan.md](./routines-plan.md), [agent-harness-plan.md](./agent-harness-plan.md), [wiki-plan.md](./wiki-plan.md), and [ingest-activity-log-plan.md](./ingest-activity-log-plan.md).
 
@@ -108,6 +108,7 @@ Requirements:
 
 - Bind to `127.0.0.1` by default.
 - Do not expose a public network listener unless the user explicitly opts in.
+- Require a local web unlock token for privileged API routes. Current implementation accepts `Authorization: Bearer <STRATA_WEB_TOKEN>` or an HttpOnly `strata_web_session` cookie; if `STRATA_WEB_TOKEN` is unset, `packages/web-api` creates `.strata/web-auth-token` and the React app prompts for it. Keep `/api/health`, `/api/auth/status`, `/api/auth/session`, and OAuth callback routes exempt; use `STRATA_WEB_AUTH=off` only as an explicit local/dev bypass.
 - Do not render secrets into client-side pages.
 - Do not write connector tokens to traces, wiki pages, proposals, or logs.
 - Store secrets separately from non-secret connector config.

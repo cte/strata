@@ -137,6 +137,7 @@ export class AnthropicModelAdapter implements ModelAdapter {
       parseSseEvents<AnthropicStreamEvent>(response),
       toolNameMap.providerToCanonical,
       request.onAssistantDelta,
+      request.onReasoningDelta,
     );
   }
 }
@@ -271,8 +272,11 @@ async function parseAnthropicSseResponse(
   events: AsyncIterable<AnthropicStreamEvent>,
   providerToCanonical: Map<string, string>,
   onAssistantDelta?: (delta: string) => void,
+  onReasoningDelta?: (delta: string) => void,
 ): Promise<ModelResponse> {
   let content = "";
+  let reasoning = "";
+  let reasoningSignature = "";
   let finishReason = "unknown";
   let providerResponseId: string | undefined;
   let usage: JsonObject | undefined;
@@ -313,11 +317,22 @@ async function parseAnthropicSseResponse(
     } else if (type === "content_block_delta") {
       const index = typeof event.index === "number" ? event.index : 0;
       const delta = event.delta as
-        | { type?: unknown; text?: unknown; partial_json?: unknown }
+        | {
+            type?: unknown;
+            text?: unknown;
+            partial_json?: unknown;
+            thinking?: unknown;
+            signature?: unknown;
+          }
         | undefined;
       if (delta?.type === "text_delta" && typeof delta.text === "string") {
         content += delta.text;
         onAssistantDelta?.(delta.text);
+      } else if (delta?.type === "thinking_delta" && typeof delta.thinking === "string") {
+        reasoning += delta.thinking;
+        onReasoningDelta?.(delta.thinking);
+      } else if (delta?.type === "signature_delta" && typeof delta.signature === "string") {
+        reasoningSignature += delta.signature;
       } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
         const block = toolBlocks.get(index);
         if (block !== undefined) {
@@ -364,6 +379,12 @@ async function parseAnthropicSseResponse(
   }
   if (usage !== undefined) {
     response.usage = usage;
+  }
+  if (reasoning !== "") {
+    response.reasoning = reasoning;
+  }
+  if (reasoningSignature !== "") {
+    response.reasoningSignature = reasoningSignature;
   }
   return response;
 }

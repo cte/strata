@@ -1,6 +1,9 @@
 export interface TerminalCell {
   char: string;
   style?: TerminalCellStyle;
+  hyperlink?: string;
+  width?: number;
+  continuation?: boolean;
 }
 
 export interface TerminalCellStyle {
@@ -10,7 +13,9 @@ export interface TerminalCellStyle {
   dim?: boolean;
   italic?: boolean;
   underline?: boolean;
+  strikethrough?: boolean;
   inverse?: boolean;
+  invisible?: boolean;
 }
 
 export interface TerminalCursor {
@@ -21,6 +26,9 @@ export interface TerminalCursor {
 export interface TerminalModes {
   alternateScreen: boolean;
   bracketedPaste: boolean;
+  applicationCursor: boolean;
+  mouseTracking: boolean;
+  sgrMouse: boolean;
 }
 
 export interface TerminalSnapshot {
@@ -28,6 +36,7 @@ export interface TerminalSnapshot {
   rows: number;
   cursor: TerminalCursor;
   modes: TerminalModes;
+  scrollbackCells: readonly (readonly TerminalCell[])[];
   cells: readonly (readonly TerminalCell[])[];
 }
 
@@ -43,17 +52,24 @@ export class TerminalScreen {
   private primaryBuffer: ScreenBuffer;
   private alternateBuffer: ScreenBuffer | null = null;
   private activeBuffer: ScreenBuffer;
+  private scrollbackCells: TerminalCell[][] = [];
   private currentStyle: TerminalCellStyle = {};
   private scrollTop = 0;
   private scrollBottom: number;
+  private readonly scrollbackLimit: number;
+  private activeHyperlink: string | null = null;
   private modes: TerminalModes = {
     alternateScreen: false,
     bracketedPaste: false,
+    applicationCursor: false,
+    mouseTracking: false,
+    sgrMouse: false,
   };
 
-  constructor(cols: number, rows: number) {
+  constructor(cols: number, rows: number, scrollbackLimit = 1000) {
     this.cols = positiveInt(cols, 80);
     this.rows = positiveInt(rows, 24);
+    this.scrollbackLimit = Math.max(0, Math.floor(scrollbackLimit));
     this.primaryBuffer = createBuffer(this.cols, this.rows);
     this.activeBuffer = this.primaryBuffer;
     this.scrollBottom = this.rows - 1;
@@ -73,6 +89,7 @@ export class TerminalScreen {
       rows: this.rows,
       cursor: { x: this.activeBuffer.cursorX, y: this.activeBuffer.cursorY },
       modes: this.modeState,
+      scrollbackCells: this.scrollbackCells,
       cells: this.activeBuffer.cells,
     };
   }
@@ -81,13 +98,18 @@ export class TerminalScreen {
     this.primaryBuffer = createBuffer(this.cols, this.rows);
     this.alternateBuffer = null;
     this.activeBuffer = this.primaryBuffer;
+    this.scrollbackCells = [];
     this.currentStyle = {};
     this.scrollTop = 0;
     this.scrollBottom = this.rows - 1;
     this.modes = {
       alternateScreen: false,
       bracketedPaste: false,
+      applicationCursor: false,
+      mouseTracking: false,
+      sgrMouse: false,
     };
+    this.activeHyperlink = null;
   }
 
   resize(cols: number, rows: number): void {
@@ -96,6 +118,7 @@ export class TerminalScreen {
     if (nextCols === this.cols && nextRows === this.rows) return;
 
     this.primaryBuffer = resizeBuffer(this.primaryBuffer, nextCols, nextRows);
+    this.scrollbackCells = this.scrollbackCells.map((row) => resizeRow(row, nextCols));
     if (this.alternateBuffer !== null) {
       this.alternateBuffer = resizeBuffer(this.alternateBuffer, nextCols, nextRows);
     }
@@ -111,11 +134,33 @@ export class TerminalScreen {
   }
 
   putChar(char: string): void {
+    const width = cellWidth(char);
+    if (width === 0) return;
+    if (this.activeBuffer.cursorX + width > this.cols) {
+      this.activeBuffer.cursorX = 0;
+      this.lineFeed();
+    }
+
     this.activeBuffer.cells[this.activeBuffer.cursorY]![this.activeBuffer.cursorX] = cell(
       char,
       this.currentStyle,
+      {
+        hyperlink: this.activeHyperlink,
+        width,
+      },
     );
-    this.activeBuffer.cursorX += 1;
+    if (width > 1 && this.activeBuffer.cursorX + 1 < this.cols) {
+      this.activeBuffer.cells[this.activeBuffer.cursorY]![this.activeBuffer.cursorX + 1] = cell(
+        " ",
+        this.currentStyle,
+        {
+          hyperlink: this.activeHyperlink,
+          continuation: true,
+        },
+      );
+    }
+
+    this.activeBuffer.cursorX += width;
     if (this.activeBuffer.cursorX >= this.cols) {
       this.activeBuffer.cursorX = 0;
       this.lineFeed();
@@ -175,7 +220,8 @@ export class TerminalScreen {
   scrollUp(count: number): void {
     const steps = Math.max(1, Math.floor(count));
     for (let i = 0; i < steps; i += 1) {
-      this.activeBuffer.cells.splice(this.scrollTop, 1);
+      const removed = this.activeBuffer.cells.splice(this.scrollTop, 1)[0];
+      this.captureScrollbackRow(removed);
       this.activeBuffer.cells.splice(this.scrollBottom, 0, createRow(this.cols, this.currentStyle));
     }
   }
@@ -189,6 +235,10 @@ export class TerminalScreen {
   }
 
   eraseDisplay(mode: number): void {
+    if (mode === 3) {
+      this.scrollbackCells = [];
+    }
+
     if (mode === 2 || mode === 3) {
       this.activeBuffer.cells = createScreen(this.cols, this.rows, this.currentStyle);
       return;
@@ -290,6 +340,43 @@ export class TerminalScreen {
   setBracketedPaste(enabled: boolean): void {
     this.modes.bracketedPaste = enabled;
   }
+
+  setApplicationCursor(enabled: boolean): void {
+    this.modes.applicationCursor = enabled;
+  }
+
+  setMouseMode(mode: number, enabled: boolean): void {
+    if (mode === 1006) {
+      this.modes.sgrMouse = enabled;
+      return;
+    }
+    if (mode === 1000 || mode === 1002 || mode === 1003) {
+      this.modes.mouseTracking = enabled;
+      return;
+    }
+  }
+
+  setHyperlink(uri: string | null): void {
+    this.activeHyperlink = uri !== null && uri.length > 0 ? uri : null;
+  }
+
+  private captureScrollbackRow(row: TerminalCell[] | undefined): void {
+    if (
+      row === undefined ||
+      this.scrollbackLimit === 0 ||
+      this.modes.alternateScreen ||
+      this.activeBuffer !== this.primaryBuffer ||
+      this.scrollTop !== 0 ||
+      this.scrollBottom !== this.rows - 1
+    ) {
+      return;
+    }
+
+    this.scrollbackCells.push(row.map(cloneCell));
+    if (this.scrollbackCells.length > this.scrollbackLimit) {
+      this.scrollbackCells.splice(0, this.scrollbackCells.length - this.scrollbackLimit);
+    }
+  }
 }
 
 function createBuffer(cols: number, rows: number): ScreenBuffer {
@@ -318,6 +405,13 @@ function resizeBuffer(buffer: ScreenBuffer, cols: number, rows: number): ScreenB
   };
 }
 
+function resizeRow(row: readonly TerminalCell[], cols: number): TerminalCell[] {
+  return Array.from({ length: cols }, (_, index) => {
+    const source = row[index];
+    return source === undefined ? cell(" ") : cloneCell(source);
+  });
+}
+
 function createScreen(cols: number, rows: number, style: TerminalCellStyle = {}): TerminalCell[][] {
   return Array.from({ length: rows }, () => createRow(cols, style));
 }
@@ -326,13 +420,31 @@ function createRow(cols: number, style: TerminalCellStyle = {}): TerminalCell[] 
   return Array.from({ length: cols }, () => cell(" ", style));
 }
 
-function cell(char: string, style: TerminalCellStyle = {}): TerminalCell {
+function cell(
+  char: string,
+  style: TerminalCellStyle = {},
+  options: {
+    hyperlink?: string | null;
+    width?: number;
+    continuation?: boolean;
+  } = {},
+): TerminalCell {
   const cloned = cloneStyle(style);
-  return cloned === undefined ? { char } : { char, style: cloned };
+  const next: TerminalCell = cloned === undefined ? { char } : { char, style: cloned };
+  if (options.hyperlink !== undefined && options.hyperlink !== null) {
+    next.hyperlink = options.hyperlink;
+  }
+  if (options.width !== undefined && options.width !== 1) next.width = options.width;
+  if (options.continuation === true) next.continuation = true;
+  return next;
 }
 
 function cloneCell(source: TerminalCell): TerminalCell {
-  return source.style === undefined ? { char: source.char } : cell(source.char, source.style);
+  const next = source.style === undefined ? { char: source.char } : cell(source.char, source.style);
+  if (source.hyperlink !== undefined) next.hyperlink = source.hyperlink;
+  if (source.width !== undefined) next.width = source.width;
+  if (source.continuation === true) next.continuation = true;
+  return next;
 }
 
 function cloneStyle(style: TerminalCellStyle): TerminalCellStyle | undefined {
@@ -343,7 +455,9 @@ function cloneStyle(style: TerminalCellStyle): TerminalCellStyle | undefined {
   if (style.dim === true) next.dim = true;
   if (style.italic === true) next.italic = true;
   if (style.underline === true) next.underline = true;
+  if (style.strikethrough === true) next.strikethrough = true;
   if (style.inverse === true) next.inverse = true;
+  if (style.invisible === true) next.invisible = true;
   return Object.keys(next).length === 0 ? undefined : next;
 }
 
@@ -423,4 +537,40 @@ function rgbColor(red: number, green: number, blue: number): string {
 
 function hexByte(value: number): string {
   return clamp(Math.floor(value), 0, 255).toString(16).padStart(2, "0");
+}
+
+function cellWidth(value: string): number {
+  const codePoint = value.codePointAt(0);
+  if (codePoint === undefined) return 0;
+  if (isCombiningCodePoint(codePoint)) return 0;
+  if (isWideCodePoint(codePoint)) return 2;
+  return 1;
+}
+
+function isCombiningCodePoint(value: number): boolean {
+  return (
+    (value >= 0x0300 && value <= 0x036f) ||
+    (value >= 0x1ab0 && value <= 0x1aff) ||
+    (value >= 0x1dc0 && value <= 0x1dff) ||
+    (value >= 0x20d0 && value <= 0x20ff) ||
+    (value >= 0xfe00 && value <= 0xfe0f)
+  );
+}
+
+function isWideCodePoint(value: number): boolean {
+  return (
+    value >= 0x1100 &&
+    (value <= 0x115f ||
+      value === 0x2329 ||
+      value === 0x232a ||
+      (value >= 0x2e80 && value <= 0xa4cf && value !== 0x303f) ||
+      (value >= 0xac00 && value <= 0xd7a3) ||
+      (value >= 0xf900 && value <= 0xfaff) ||
+      (value >= 0xfe10 && value <= 0xfe19) ||
+      (value >= 0xfe30 && value <= 0xfe6f) ||
+      (value >= 0xff00 && value <= 0xff60) ||
+      (value >= 0xffe0 && value <= 0xffe6) ||
+      (value >= 0x1f300 && value <= 0x1faff) ||
+      (value >= 0x20000 && value <= 0x3fffd))
+  );
 }
