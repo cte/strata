@@ -9,45 +9,51 @@
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+/*
+ * Monochrome Vercel/Geist palette. The grays are pure greyscale (zero
+ * saturation); the accent is inverted black/white (white primary on black in
+ * dark, black primary on white in light) to match Vercel's primary button.
+ * Status (good/warn/bad) keeps semantic color for legibility, as Vercel does.
+ */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #09090b;
-  --bg-elev: #0e0e10;
-  --surface: #111114;
-  --surface-2: #16161a;
-  --hairline: rgba(255, 255, 255, 0.07);
-  --hairline-strong: rgba(255, 255, 255, 0.12);
-  --fg: #ededee;
-  --fg-dim: #a1a1aa;
-  --fg-mute: #6b6b74;
-  --accent: #5eead4;
-  --accent-fg: #042f2a;
-  --accent-soft: rgba(94, 234, 212, 0.12);
-  --good: #5eead4;
-  --warn: #f5b86a;
-  --bad: #f87171;
-  --ring: rgba(94, 234, 212, 0.45);
+  --bg: #000000;
+  --bg-elev: #0a0a0a;
+  --surface: #0f0f0f;
+  --surface-2: #1a1a1a;
+  --hairline: rgba(255, 255, 255, 0.10);
+  --hairline-strong: rgba(255, 255, 255, 0.18);
+  --fg: #ededed;
+  --fg-dim: #a1a1a1;
+  --fg-mute: #707070;
+  --accent: #ffffff;
+  --accent-fg: #000000;
+  --accent-soft: rgba(255, 255, 255, 0.10);
+  --good: #4ade80;
+  --warn: #f5a623;
+  --bad: #ff6166;
+  --ring: rgba(255, 255, 255, 0.40);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #fafaf9;
+  --bg: #fafafa;
   --bg-elev: #ffffff;
   --surface: #ffffff;
-  --surface-2: #f4f4f3;
-  --hairline: rgba(15, 15, 17, 0.08);
-  --hairline-strong: rgba(15, 15, 17, 0.16);
-  --fg: #18181b;
-  --fg-dim: #52525b;
-  --fg-mute: #8a8a93;
-  --accent: #0d9488;
-  --accent-fg: #f0fdfa;
-  --accent-soft: rgba(13, 148, 136, 0.10);
-  --good: #0d9488;
+  --surface-2: #f2f2f2;
+  --hairline: rgba(0, 0, 0, 0.08);
+  --hairline-strong: rgba(0, 0, 0, 0.16);
+  --fg: #171717;
+  --fg-dim: #4d4d4d;
+  --fg-mute: #8f8f8f;
+  --accent: #171717;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(0, 0, 0, 0.06);
+  --good: #45a557;
   --warn: #b45309;
-  --bad: #b91c1c;
-  --ring: rgba(13, 148, 136, 0.32);
+  --bad: #e5484d;
+  --ring: rgba(0, 0, 0, 0.24);
 }
 
 :root {
@@ -384,6 +390,113 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .dot-pulse::after {
+    animation: none !important;
+  }
+}
+
+/*
+ * Ambient "console" backdrop used by the full-screen states (lock screen, 404).
+ * A drifting hairline grid, two slow-breathing accent auroras, and a vignette,
+ * all keyed off the runtime palette so it tracks the theme. Pointer-events stay
+ * off so these never intercept input.
+ */
+.strata-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.strata-grid {
+  position: absolute;
+  inset: -40%;
+  background-image:
+    linear-gradient(to right, var(--hairline) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--hairline) 1px, transparent 1px);
+  background-size: 52px 52px;
+  mask-image: radial-gradient(ellipse 60% 55% at 50% 42%, #000 0%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 42%, #000 0%, transparent 78%);
+  animation: strata-grid-drift 32s linear infinite;
+}
+
+.strata-aurora {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(72px);
+  opacity: 0.55;
+  background: radial-gradient(circle at center, var(--accent) 0%, transparent 70%);
+}
+
+.strata-aurora-1 {
+  top: -14%;
+  left: 50%;
+  width: 46rem;
+  height: 46rem;
+  margin-left: -23rem;
+  opacity: 0.16;
+  animation: strata-breathe 11s ease-in-out infinite;
+}
+
+.strata-aurora-2 {
+  bottom: -22%;
+  right: -8%;
+  width: 34rem;
+  height: 34rem;
+  opacity: 0.08;
+  background: radial-gradient(circle at center, var(--accent) 0%, transparent 70%);
+  animation: strata-breathe 14s ease-in-out infinite reverse;
+}
+
+.strata-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 75% 70% at 50% 38%, transparent 40%, var(--bg) 100%);
+}
+
+@keyframes strata-grid-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(52px, 52px, 0);
+  }
+}
+
+@keyframes strata-breathe {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 0.14;
+  }
+  50% {
+    transform: scale(1.12) translateY(-12px);
+    opacity: 0.22;
+  }
+}
+
+/* The stacked-layers mark: each plate floats on its own slow cycle. */
+.strata-plate {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: strata-plate-float 6s ease-in-out infinite;
+}
+
+@keyframes strata-plate-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.5px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strata-grid,
+  .strata-aurora-1,
+  .strata-aurora-2,
+  .strata-plate {
     animation: none !important;
   }
 }
