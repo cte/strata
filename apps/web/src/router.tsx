@@ -24,6 +24,7 @@ import {
 import type * as React from "react";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { ChatSessionListBody, useDeleteChatSession } from "@/components/chat-session-list";
+import { NotFound } from "@/components/not-found";
 import { CommandDialog, CommandInput, CommandList } from "@/components/ui/command";
 import {
   Sidebar,
@@ -479,7 +480,7 @@ const routeTree = rootRoute.addChildren([
   mcpsRoute,
 ]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({ routeTree, defaultNotFoundComponent: NotFound });
 
 declare module "@tanstack/react-router" {
   interface Register {

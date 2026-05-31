@@ -27,6 +27,19 @@
       }
     },
     {
+      "name": "strata-storybook",
+      "script": "bun",
+      "args": "run web:storybook",
+      "interpreter": "none",
+      "cwd": ".",
+      "autorestart": true,
+      "watch": false,
+      "restart_delay": 1000,
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
       "name": "strata-slack-listener",
       "script": "bun",
       "args": "run strata ingest slack listen",

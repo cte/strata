@@ -1,5 +1,11 @@
+import { ArrowRight } from "lucide-react";
 import type * as React from "react";
 import { useState } from "react";
+import { ConsoleBackdrop } from "@/components/shared/console-backdrop";
+import { CtaButton } from "@/components/shared/cta-button";
+import { Eyebrow } from "@/components/shared/eyebrow";
+import { StrataMark } from "@/components/shared/strata-mark";
+import { Input } from "@/components/ui/input";
 import { useLogoutWeb, useUnlockWeb, useWebAuthStatus } from "@/lib/queries/auth";
 
 export function WebAuthGate({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -7,12 +13,21 @@ export function WebAuthGate({ children }: { children: React.ReactNode }): React.
   const unlock = useUnlockWeb();
 
   if (statusQuery.isPending) {
-    return <AuthShell title="Checking access…" description="Verifying this browser session." />;
+    return (
+      <AuthShell
+        status="pending"
+        statusLabel="Verifying"
+        title="Checking access"
+        description="Verifying this browser session against the local web API."
+      />
+    );
   }
 
   if (statusQuery.isError) {
     return (
       <AuthShell
+        status="error"
+        statusLabel="Offline"
         title="Strata web unavailable"
         description={
           statusQuery.error instanceof Error
@@ -63,11 +78,13 @@ function UnlockForm({
 
   return (
     <AuthShell
+      status="locked"
+      statusLabel="Locked"
       title="Unlock Strata"
-      description="Enter the local web token to access chat, connectors, routines, and the terminal."
+      description="Enter the local web token to reach chat, connectors, routines, and the terminal."
     >
       <form
-        className="mt-6 space-y-4"
+        className="mt-7 space-y-3"
         onSubmit={(event) => {
           event.preventDefault();
           if (trimmed === "") return;
@@ -75,64 +92,97 @@ function UnlockForm({
         }}
       >
         <label className="block space-y-2">
-          <span className="text-xs font-medium uppercase tracking-[0.14em] text-fg-mute">
-            Web token
-          </span>
-          <input
-            type="password"
-            autoFocus
-            value={token}
-            onChange={(event) => {
-              if (unlock.error !== null) {
-                unlock.reset();
-              }
-              setToken(event.target.value);
-            }}
-            placeholder="Paste STRATA_WEB_TOKEN"
-            className="h-11 w-full rounded-lg border border-hairline bg-surface px-3 font-mono text-sm text-fg outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-fg-mute focus:border-ring focus:ring-2 focus:ring-ring/30"
-          />
+          <Eyebrow>Web token</Eyebrow>
+          <div className="group relative">
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-fg-mute select-none transition-colors group-focus-within:text-accent"
+            >
+              ›
+            </span>
+            <Input
+              type="password"
+              autoFocus
+              value={token}
+              onChange={(event) => {
+                if (unlock.error !== null) {
+                  unlock.reset();
+                }
+                setToken(event.target.value);
+              }}
+              placeholder="Paste STRATA_WEB_TOKEN"
+              className="pl-7 font-mono text-sm tracking-tight"
+            />
+          </div>
         </label>
-        {error !== null ? <p className="text-sm text-bad">{error}</p> : null}
-        <button
+        {error !== null ? (
+          <p className="flex items-center gap-1.5 text-xs text-bad">
+            <span aria-hidden="true" className="dot bg-bad" />
+            {error}
+          </p>
+        ) : null}
+        <CtaButton
           type="submit"
+          icon={ArrowRight}
           disabled={trimmed === "" || unlock.isPending}
-          className="h-10 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-1 w-full"
         >
-          {unlock.isPending ? "Unlocking…" : "Unlock"}
-        </button>
+          {unlock.isPending ? "Unlocking…" : "Unlock console"}
+        </CtaButton>
       </form>
-      <p className="mt-4 text-xs leading-5 text-fg-mute">
-        {tokenSource === "local"
-          ? "No STRATA_WEB_TOKEN is set, so this instance generated a local token in .strata/web-auth-token. Read it from the VM terminal."
-          : "Set STRATA_WEB_TOKEN in the local .env to rotate this shared secret."}
-      </p>
+      {tokenSource === "local" ? null : (
+        <p className="mt-5 border-t border-hairline pt-4 text-xs leading-5 text-fg-mute">
+          Set STRATA_WEB_TOKEN in the local .env to rotate this shared secret.
+        </p>
+      )}
     </AuthShell>
   );
 }
 
+type AuthStatus = "locked" | "pending" | "error";
+
+const statusTone: Record<AuthStatus, { dot: string; text: string }> = {
+  locked: { dot: "bg-accent", text: "text-accent" },
+  pending: { dot: "bg-warn", text: "text-warn" },
+  error: { dot: "bg-bad", text: "text-bad" },
+};
+
 function AuthShell({
+  status,
+  statusLabel,
   title,
   description,
   children,
 }: {
+  status: AuthStatus;
+  statusLabel: string;
   title: string;
   description: string;
   children?: React.ReactNode;
 }): React.ReactElement {
+  const tone = statusTone[status];
   return (
-    <main className="grid min-h-dvh place-items-center bg-bg px-6 py-12 text-fg">
-      <section className="w-full max-w-sm rounded-2xl border border-hairline bg-bg-elev p-7 shadow-2xl shadow-black/20">
-        <div className="mb-5 flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-xl border border-hairline bg-surface-2 font-mono text-sm font-semibold text-accent">
-            S
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-fg-mute">Strata web</p>
-            <h1 className="text-xl font-semibold tracking-tight text-fg">{title}</h1>
-          </div>
+    <main className="relative grid min-h-dvh place-items-center overflow-hidden bg-bg px-6 py-12 text-fg">
+      <ConsoleBackdrop />
+      <section className="relative z-10 w-full max-w-sm">
+        <div className="mb-7 flex flex-col items-center text-center">
+          <StrataMark className="h-24 w-24" />
+          <Eyebrow className="mt-3">Strata · local console</Eyebrow>
         </div>
-        <p className="text-sm leading-6 text-fg-dim">{description}</p>
-        {children}
+        <div className="rounded-md border border-hairline bg-bg-elev/70 p-7 shadow-2xl shadow-black/40 backdrop-blur-xl">
+          <div
+            className={`mb-4 inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/60 px-2.5 py-1 font-mono text-2xs ${tone.text}`}
+          >
+            <span
+              className={`dot ${tone.dot} ${status === "pending" ? "dot-pulse" : ""}`}
+              aria-hidden="true"
+            />
+            <span className="uppercase tracking-[0.16em]">{statusLabel}</span>
+          </div>
+          <h1 className="text-md font-medium tracking-tight text-fg">{title}</h1>
+          <p className="mt-2 text-sm leading-6 text-fg-dim">{description}</p>
+          {children}
+        </div>
       </section>
     </main>
   );

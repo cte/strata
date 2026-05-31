@@ -31,6 +31,7 @@
     "web:dev": "dotenvx --quiet run --overload -e STRATA_WEB_HOST=0.0.0.0 -- bun run --cwd apps/web dev",
     "web:dev:local": "dotenvx --quiet run --overload -- bun run --cwd apps/web dev",
     "web:build": "dotenvx --quiet run --overload -- bun run --cwd apps/web build",
+    "web:storybook": "bun run --cwd apps/web storybook",
     "lint:wiki": "bun packages/ingest/src/lintWiki.ts",
     "pull:granola": "dotenvx --quiet run --overload -- bun packages/ingest/src/pullGranola.ts",
     "pull:slack": "dotenvx --quiet run --overload -- bun packages/ingest/src/pullSlack.ts",
