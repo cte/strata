@@ -1,16 +1,16 @@
-import { ArrowRight } from "lucide-react";
+import { REGEXP_ONLY_DIGITS } from "input-otp";
+import { Check, Lock, LockOpen } from "lucide-react";
 import type * as React from "react";
 import { useState } from "react";
 import { ConsoleBackdrop } from "@/components/shared/console-backdrop";
 import { CtaButton } from "@/components/shared/cta-button";
 import { Eyebrow } from "@/components/shared/eyebrow";
 import { StrataMark } from "@/components/shared/strata-mark";
-import { Input } from "@/components/ui/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { useLogoutWeb, useUnlockWeb, useWebAuthStatus } from "@/lib/queries/auth";
 
 export function WebAuthGate({ children }: { children: React.ReactNode }): React.ReactElement {
   const statusQuery = useWebAuthStatus();
-  const unlock = useUnlockWeb();
 
   if (statusQuery.isPending) {
     return (
@@ -43,7 +43,7 @@ export function WebAuthGate({ children }: { children: React.ReactNode }): React.
     return <>{children}</>;
   }
 
-  return <UnlockForm tokenSource={status.tokenSource} unlock={unlock} />;
+  return <UnlockForm />;
 }
 
 export function WebAuthLogoutButton(): React.ReactElement | null {
@@ -58,83 +58,90 @@ export function WebAuthLogoutButton(): React.ReactElement | null {
       type="button"
       onClick={() => logout.mutate()}
       disabled={logout.isPending}
-      className="rounded border border-hairline px-2.5 py-1 text-xs font-medium text-fg-dim transition-[color,border-color,background-color] duration-150 hover:border-border hover:bg-surface-2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+      aria-label="Lock Strata"
+      title="Lock Strata"
+      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-hairline bg-bg-elev text-fg-mute transition-colors duration-150 hover:border-hairline-strong hover:text-fg-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
     >
-      {logout.isPending ? "Locking…" : "Lock"}
+      <Lock size={12} strokeWidth={1.75} aria-hidden="true" />
     </button>
   );
 }
 
-function UnlockForm({
-  tokenSource,
-  unlock,
-}: {
-  tokenSource: "env" | "local" | "disabled";
-  unlock: ReturnType<typeof useUnlockWeb>;
-}): React.ReactElement {
-  const [token, setToken] = useState("");
-  const trimmed = token.trim();
-  const error = unlock.error instanceof Error ? unlock.error.message : null;
+const PASSCODE_LENGTH = 4;
+
+function UnlockForm(): React.ReactElement {
+  const unlock = useUnlockWeb();
+  const [passcode, setPasscode] = useState("");
+  const complete = passcode.length === PASSCODE_LENGTH;
+  const rejected = unlock.isError;
+  const unlocked = unlock.isSuccess;
+  const LockGlyph = unlocked ? LockOpen : Lock;
 
   return (
-    <AuthShell
-      status="locked"
-      statusLabel="Locked"
-      title="Unlock Strata"
-      description="Enter the local web token to reach chat, connectors, routines, and the terminal."
-    >
+    <AuthShell status="locked">
+      <div className="mt-1 mb-6 flex justify-center">
+        <div
+          className={`flex h-16 w-16 items-center justify-center rounded-full border transition-colors duration-500 ${
+            unlocked ? "border-good/30 bg-good/10" : "border-bad/30 bg-bad/10"
+          }`}
+        >
+          <LockGlyph
+            aria-hidden="true"
+            strokeWidth={1.5}
+            className={`h-7 w-7 transition-colors duration-500 ${
+              unlocked ? "text-good" : "text-bad"
+            }`}
+          />
+        </div>
+      </div>
       <form
         className="mt-7 space-y-3"
         onSubmit={(event) => {
           event.preventDefault();
-          if (trimmed === "") return;
-          unlock.mutate(trimmed);
+          if (!complete) return;
+          unlock.mutate(passcode);
         }}
       >
-        <label className="block space-y-2">
-          <Eyebrow>Web token</Eyebrow>
-          <div className="group relative">
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-fg-mute select-none transition-colors group-focus-within:text-accent"
-            >
-              ›
-            </span>
-            <Input
-              type="password"
-              autoFocus
-              value={token}
-              onChange={(event) => {
-                if (unlock.error !== null) {
-                  unlock.reset();
-                }
-                setToken(event.target.value);
-              }}
-              placeholder="Paste STRATA_WEB_TOKEN"
-              className="pl-7 font-mono text-sm tracking-tight"
-            />
-          </div>
-        </label>
-        {error !== null ? (
-          <p className="flex items-center gap-1.5 text-xs text-bad">
-            <span aria-hidden="true" className="dot bg-bad" />
-            {error}
-          </p>
-        ) : null}
+        <div className={`flex justify-center ${rejected ? "animate-pulse" : ""}`}>
+          <InputOTP
+            maxLength={PASSCODE_LENGTH}
+            pattern={REGEXP_ONLY_DIGITS}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            autoFocus
+            disabled={unlock.isPending || unlocked}
+            value={passcode}
+            onChange={(value) => {
+              if (unlock.error !== null) {
+                unlock.reset();
+              }
+              setPasscode(value);
+            }}
+          >
+            <InputOTPGroup className="gap-2">
+              {Array.from({ length: PASSCODE_LENGTH }, (_, index) => (
+                <InputOTPSlot
+                  // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length passcode slots
+                  key={index}
+                  index={index}
+                  mask
+                  className={`h-12 w-12 rounded-md border-l text-md ${
+                    rejected ? "border-bad/60" : ""
+                  }`}
+                />
+              ))}
+            </InputOTPGroup>
+          </InputOTP>
+        </div>
         <CtaButton
           type="submit"
-          icon={ArrowRight}
-          disabled={trimmed === "" || unlock.isPending}
+          {...(unlocked ? { icon: Check } : {})}
+          disabled={!complete || unlock.isPending || unlocked}
           className="mt-1 w-full"
         >
-          {unlock.isPending ? "Unlocking…" : "Unlock console"}
+          {unlocked ? "Unlocked" : unlock.isPending ? "Unlocking…" : "Unlock"}
         </CtaButton>
       </form>
-      {tokenSource === "local" ? null : (
-        <p className="mt-5 border-t border-hairline pt-4 text-xs leading-5 text-fg-mute">
-          Set STRATA_WEB_TOKEN in the local .env to rotate this shared secret.
-        </p>
-      )}
     </AuthShell>
   );
 }
@@ -155,9 +162,9 @@ function AuthShell({
   children,
 }: {
   status: AuthStatus;
-  statusLabel: string;
-  title: string;
-  description: string;
+  statusLabel?: string;
+  title?: string;
+  description?: string;
   children?: React.ReactNode;
 }): React.ReactElement {
   const tone = statusTone[status];
@@ -170,17 +177,23 @@ function AuthShell({
           <Eyebrow className="mt-3">Strata · local console</Eyebrow>
         </div>
         <div className="rounded-md border border-hairline bg-bg-elev/70 p-7 shadow-2xl shadow-black/40 backdrop-blur-xl">
-          <div
-            className={`mb-4 inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/60 px-2.5 py-1 font-mono text-2xs ${tone.text}`}
-          >
-            <span
-              className={`dot ${tone.dot} ${status === "pending" ? "dot-pulse" : ""}`}
-              aria-hidden="true"
-            />
-            <span className="uppercase tracking-[0.16em]">{statusLabel}</span>
-          </div>
-          <h1 className="text-md font-medium tracking-tight text-fg">{title}</h1>
-          <p className="mt-2 text-sm leading-6 text-fg-dim">{description}</p>
+          {statusLabel !== undefined ? (
+            <div
+              className={`mb-4 inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/60 px-2.5 py-1 font-mono text-2xs ${tone.text}`}
+            >
+              <span
+                className={`dot ${tone.dot} ${status === "pending" ? "dot-pulse" : ""}`}
+                aria-hidden="true"
+              />
+              <span className="uppercase tracking-[0.16em]">{statusLabel}</span>
+            </div>
+          ) : null}
+          {title !== undefined ? (
+            <h1 className="text-md font-medium tracking-tight text-fg">{title}</h1>
+          ) : null}
+          {description !== undefined ? (
+            <p className="mt-2 text-sm leading-6 text-fg-dim">{description}</p>
+          ) : null}
           {children}
         </div>
       </section>

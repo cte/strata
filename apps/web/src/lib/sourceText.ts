@@ -89,6 +89,50 @@ export function cleanSourceText(input: string): string {
     .trim();
 }
 
+/**
+ * Clean source context while preserving Markdown syntax for rendered previews.
+ * Slack angle-bracket links are converted to Markdown links so context like
+ * `<https://example.com|Thread>` remains clickable after rendering.
+ */
+export function cleanSourceMarkdown(input: string): string {
+  let text = decodeEntities(input);
+
+  text = text.replace(/<!(here|channel|everyone)>/g, (_match, keyword: string) => `@${keyword}`);
+  text = text.replace(/<!subteam\^[A-Z0-9]+(?:\|([^>]+))?>/g, (_match, name?: string) =>
+    name ? `@${name}` : "@team",
+  );
+  text = text.replace(/<@[A-Z0-9]+(?:\|([^>]+))?>/g, (_match, name?: string) =>
+    name ? `@${name}` : "@someone",
+  );
+  text = text.replace(/<#[A-Z0-9]+(?:\|([^>]+))?>/g, (_match, name?: string) =>
+    name ? `#${name}` : "#channel",
+  );
+  text = text.replace(
+    /<((?:https?:|mailto:)[^|>]+)\|([^>]+)>/g,
+    (_match, url: string, label: string) =>
+      `[${escapeMarkdownLinkLabel(label)}](<${escapeMarkdownLinkDestination(url)}>)`,
+  );
+  text = text.replace(/<((?:https?:|mailto:)[^>]+)>/g, (_match, url: string) => url);
+  text = text.replace(
+    /(^|[\s([{])(:[a-z][a-z0-9_+'-]*:)(?=[\s.,!?:;)\]}]|$)/gi,
+    (_match, lead: string) => lead,
+  );
+
+  return text
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ +\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function escapeMarkdownLinkLabel(value: string): string {
+  return value.replace(/([\\[\]])/g, "\\$1");
+}
+
+function escapeMarkdownLinkDestination(value: string): string {
+  return value.replace(/[<>]/g, "");
+}
+
 export type SourceKind = "slack" | "granola" | "notion" | "wiki" | "source";
 
 const SOURCE_KIND_LABELS: Record<SourceKind, string> = {

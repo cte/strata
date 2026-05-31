@@ -49,10 +49,10 @@ export const MessageContent = ({ className, ...props }: MessageContentProps) => 
   <div
     className={cn(
       "min-w-0 max-w-[min(760px,100%)] text-sm leading-6",
-      "group-data-[from=user]/message:rounded-md group-data-[from=user]/message:border group-data-[from=user]/message:border-accent/35 group-data-[from=user]/message:bg-accent-soft group-data-[from=user]/message:px-3.5 group-data-[from=user]/message:py-3 group-data-[from=user]/message:text-fg",
+      "group-data-[from=user]/message:rounded-md group-data-[from=user]/message:bg-fg/[0.05] group-data-[from=user]/message:px-3.5 group-data-[from=user]/message:py-3 group-data-[from=user]/message:text-fg",
       "group-data-[from=user]/message:whitespace-pre-wrap group-data-[from=user]/message:break-words",
       "group-data-[from=assistant]/message:text-fg",
-      "group-data-[status=error]/message:border-bad/45 group-data-[status=error]/message:bg-bad/[0.06]",
+      "group-data-[status=error]/message:border group-data-[status=error]/message:border-bad/45 group-data-[status=error]/message:bg-bad/[0.06]",
       className,
     )}
     {...props}

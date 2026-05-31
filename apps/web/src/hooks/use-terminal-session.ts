@@ -62,8 +62,13 @@ export function useTerminalSession(initialFontSize: number): TerminalSessionCont
       rows: 24,
       emulator: "ghostty",
       fontSize: fontSizeRef.current,
-      // The floating window paints its own translucent backdrop; keep the
-      // emulator root transparent so it shows through.
+      // Drives the DOM renderer's inline `font-family`. The CSS var (defined in
+      // globals.css) uses the self-hosted "GeistMono Nerd Font Mono" so shell
+      // prompt glyphs (Powerline/Nerd Font icons) render, falling back to the
+      // Google-hosted Geist Mono for ordinary text.
+      fontFamily: "var(--font-mono-terminal)",
+      // The docked panel paints its own backdrop; keep the emulator root
+      // transparent so it shows through.
       rootBackground: "transparent",
     });
     terminalRef.current = terminal;

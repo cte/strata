@@ -17,15 +17,23 @@ import {
   ListTodo,
   MessageSquare,
   Network,
-  Search,
+  Plus,
   Workflow,
 } from "lucide-react";
 
 import type * as React from "react";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChatSessionListBody, useDeleteChatSession } from "@/components/chat-session-list";
 import { NotFound } from "@/components/not-found";
-import { CommandDialog, CommandInput, CommandList } from "@/components/ui/command";
+import {
+  CommandDialog,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+  CommandShortcut,
+} from "@/components/ui/command";
 import {
   Sidebar,
   SidebarContent,
@@ -44,6 +52,7 @@ import {
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { WebAuthGate, WebAuthLogoutButton } from "@/components/web-auth-gate";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { ChatSessionCommandPaletteContext } from "@/lib/chatCommandPalette";
 import { readLastChatSessionId } from "@/lib/chatLastSession";
 import { chatRunsStore } from "@/lib/chatRunsStore";
 import { useChatSessions } from "@/lib/useChatSessions";
@@ -62,15 +71,6 @@ import { SettingsMcpsPage } from "@/routes/settings-mcps";
 import { WikiPage } from "@/routes/wiki";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "strata:sidebar:collapsed";
-const noopOpenChatSessionCommandPalette = () => {};
-
-const ChatSessionCommandPaletteContext = createContext<() => void>(
-  noopOpenChatSessionCommandPalette,
-);
-
-function useOpenChatSessionCommandPalette(): () => void {
-  return useContext(ChatSessionCommandPaletteContext);
-}
 
 function RootLayout(): React.ReactElement {
   const queryClient = useQueryClient();
@@ -220,18 +220,12 @@ function ChatNavItem(): React.ReactElement {
   const matchRoute = useMatchRoute();
   const isActive = !!matchRoute({ to: "/" }) || !!matchRoute({ to: "/chat", fuzzy: true });
   const { isMobile, setOpenMobile } = useSidebar();
-  const openCommandPalette = useOpenChatSessionCommandPalette();
 
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
     }
   }, [isMobile, setOpenMobile]);
-
-  const handleOpenSearch = useCallback(() => {
-    closeMobileSidebar();
-    openCommandPalette();
-  }, [closeMobileSidebar, openCommandPalette]);
 
   const handleOpenChat = useCallback(
     (event: React.MouseEvent<HTMLAnchorElement>) => {
@@ -258,36 +252,23 @@ function ChatNavItem(): React.ReactElement {
 
   return (
     <SidebarMenuItem>
-      <div className="relative">
-        <SidebarMenuButton
-          asChild
-          isActive={isActive}
-          tooltip="Chat"
-          className="group/nav rounded-md text-sm font-medium tracking-tight text-fg-dim data-[active=true]:bg-surface-2 data-[active=true]:text-fg hover:bg-surface-2 hover:text-fg"
-        >
-          <Link to="/chat" onClick={handleOpenChat}>
-            <MessageSquare size={14} strokeWidth={1.75} />
-            <span>Chat</span>
-          </Link>
-        </SidebarMenuButton>
-        <div className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center gap-1.5 group-data-[collapsible=icon]:hidden">
-          <button
-            type="button"
-            onClick={handleOpenSearch}
-            aria-label="Search sessions"
-            title="Search sessions (⌘K)"
-            className="pointer-events-auto flex h-6 items-center gap-1 rounded px-1.5 text-fg-mute transition-[color,background-color] duration-150 hover:bg-bg-elev hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <kbd className="pointer-events-none rounded border border-hairline px-1 py-px font-mono text-2xs leading-none tracking-tight text-fg-mute">
-              ⌘K
-            </kbd>
-            <Search size={13} strokeWidth={1.75} />
-          </button>
+      <SidebarMenuButton
+        asChild
+        isActive={isActive}
+        tooltip="Chat"
+        className="group/nav rounded-md text-sm font-medium tracking-tight text-fg-dim data-[active=true]:bg-surface-2 data-[active=true]:text-fg hover:bg-surface-2 hover:text-fg"
+      >
+        <Link to="/chat" onClick={handleOpenChat}>
+          <MessageSquare size={14} strokeWidth={1.75} />
+          <span>Chat</span>
           {isActive ? (
-            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent" />
+            <span
+              aria-hidden="true"
+              className="ml-auto h-1.5 w-1.5 rounded-full bg-accent group-data-[collapsible=icon]:hidden"
+            />
           ) : null}
-        </div>
-      </div>
+        </Link>
+      </SidebarMenuButton>
     </SidebarMenuItem>
   );
 }
@@ -331,6 +312,16 @@ function ChatSessionCommandPalette({
     [navigate, setOpen, setSearchQuery],
   );
 
+  const handleNewChat = useCallback(() => {
+    setOpen(false);
+    setSearchQuery("");
+    void navigate({ to: "/chat" });
+  }, [navigate, setOpen, setSearchQuery]);
+
+  // Only surface the "New chat" action on an empty query, so typing keeps the
+  // first matching session highlighted (Enter opens it, not a new chat).
+  const showNewChat = searchQuery.trim() === "";
+
   return (
     <CommandDialog
       commandProps={{ shouldFilter: false }}
@@ -344,6 +335,18 @@ function ChatSessionCommandPalette({
         placeholder="Search chat sessions..."
       />
       <CommandList className="max-h-[min(420px,70dvh)]">
+        {showNewChat ? (
+          <>
+            <CommandGroup>
+              <CommandItem value="new-chat" onSelect={handleNewChat}>
+                <Plus size={14} strokeWidth={1.75} />
+                New chat
+                <CommandShortcut>⌘⇧O</CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
+            <CommandSeparator />
+          </>
+        ) : null}
         <ChatSessionListBody
           sessions={sessions}
           isLoaded={isLoaded}

@@ -108,7 +108,7 @@ Requirements:
 
 - Bind to `127.0.0.1` by default.
 - Do not expose a public network listener unless the user explicitly opts in.
-- Require a local web unlock token for privileged API routes. Current implementation accepts `Authorization: Bearer <STRATA_WEB_TOKEN>` or an HttpOnly `strata_web_session` cookie; if `STRATA_WEB_TOKEN` is unset, `packages/web-api` creates `.strata/web-auth-token` and the React app prompts for it. Keep `/api/health`, `/api/auth/status`, `/api/auth/session`, and OAuth callback routes exempt; use `STRATA_WEB_AUTH=off` only as an explicit local/dev bypass.
+- Require a local web unlock passcode for privileged API routes. Current implementation accepts `Authorization: Bearer <STRATA_PASSCODE>` or an HttpOnly `strata_web_session` cookie; the React app prompts for a 4-digit passcode (shadcn `input-otp`) checked against the dotenvx-encrypted `STRATA_PASSCODE`. If `STRATA_PASSCODE` is unset, `packages/web-api` keeps the UI enabled but locked (nothing can unlock it) and warns at startup. Keep `/api/health`, `/api/auth/status`, `/api/auth/session`, and OAuth callback routes exempt; use `STRATA_WEB_AUTH=off` only as an explicit local/dev bypass.
 - Do not render secrets into client-side pages.
 - Do not write connector tokens to traces, wiki pages, proposals, or logs.
 - Store secrets separately from non-secret connector config.

@@ -11,6 +11,7 @@ export class TerminalInputController {
   private element: HTMLDivElement | null = null;
   private composition = false;
   private bracketedPaste = false;
+  private selectionText: (() => string | null) | null = null;
   private modes: TerminalInputModes = {
     applicationCursor: false,
     mouseTracking: false,
@@ -78,6 +79,11 @@ export class TerminalInputController {
     this.modes = { ...modes };
   }
 
+  /** Supplies the current renderer selection text for the copy shortcut. */
+  setSelectionTextProvider(provider: (() => string | null) | null): void {
+    this.selectionText = provider;
+  }
+
   private emitData(data: string): void {
     for (const listener of this.dataListeners) listener(data);
   }
@@ -101,7 +107,17 @@ export class TerminalInputController {
   }
 
   private handleKeydown(event: KeyboardEvent): void {
-    if (isCopyShortcut(event) && hasDocumentSelection(this.element)) return;
+    // With a canvas display there is no native text selection, so the copy
+    // shortcut copies the renderer's selection itself; with no selection it
+    // falls through to the normal key sequence (e.g. Ctrl+C → SIGINT).
+    if (isCopyShortcut(event)) {
+      const selected = this.selectionText?.() ?? null;
+      if (selected !== null && selected !== "") {
+        event.preventDefault();
+        void globalThis.navigator?.clipboard?.writeText(selected);
+        return;
+      }
+    }
     const sequence = keySequence(event, this.modes);
     if (sequence === null) return;
     event.preventDefault();
@@ -239,18 +255,4 @@ function mouseCellPosition(
 
 function isCopyShortcut(event: KeyboardEvent): boolean {
   return (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "c";
-}
-
-export function hasDocumentSelection(root: Node | null): boolean {
-  const selection = globalThis.getSelection?.();
-  if (selection === undefined || selection === null || selection.isCollapsed) return false;
-  if (root === null) return false;
-  return (
-    isSelectionNodeInside(root, selection.anchorNode) &&
-    isSelectionNodeInside(root, selection.focusNode)
-  );
-}
-
-function isSelectionNodeInside(root: Node, node: Node | null): boolean {
-  return node !== null && (node === root || root.contains(node));
 }

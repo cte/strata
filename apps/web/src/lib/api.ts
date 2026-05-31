@@ -189,12 +189,12 @@ export async function getWebAuthStatus(): Promise<WebAuthStatus> {
   return response.json() as Promise<WebAuthStatus>;
 }
 
-export async function unlockWeb(token: string): Promise<WebAuthStatus> {
+export async function unlockWeb(passcode: string): Promise<WebAuthStatus> {
   const response = await fetch("/api/auth/session", {
     method: "POST",
     headers: { "content-type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ passcode }),
   });
   if (!response.ok) {
     throw new Error(await responseErrorMessage(response));

@@ -11,13 +11,24 @@ export function useWebAuthStatus() {
   });
 }
 
+/**
+ * How long the unlock screen lingers after a successful token exchange before
+ * the gate swaps in the app, so the lock→unlock (red→green) animation is seen.
+ */
+const UNLOCK_TRANSITION_DELAY_MS = 900;
+
 export function useUnlockWeb() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: unlockWeb,
     onSuccess: (status: WebAuthStatus) => {
-      queryClient.setQueryData(qk.auth.status, status);
-      void queryClient.invalidateQueries({ queryKey: qk.auth.root });
+      // Keep the mutation in its success state (unlocked icon visible) and delay
+      // writing the authenticated status into the cache, which is what flips the
+      // gate from the unlock screen to the app.
+      setTimeout(() => {
+        queryClient.setQueryData(qk.auth.status, status);
+        void queryClient.invalidateQueries({ queryKey: qk.auth.root });
+      }, UNLOCK_TRANSITION_DELAY_MS);
     },
   });
 }

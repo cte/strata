@@ -38,12 +38,11 @@ export const Default: Story = {};
 /** Every tone side by side. */
 export const AllTones: Story = {
   render: () => (
-    <div className="flex flex-col gap-3">
-      {TONES.map((tone) => (
-        <Badge key={tone} tone={tone}>
-          {tone}
-        </Badge>
-      ))}
+    <div className="flex flex-wrap items-center gap-3">
+      <Badge tone="warning">In Progress</Badge>
+      <Badge tone="bad">Blocked</Badge>
+      <Badge tone="ready">Done</Badge>
+      <Badge tone="muted">Idle</Badge>
     </div>
   ),
 };

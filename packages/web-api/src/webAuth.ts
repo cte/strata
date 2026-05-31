@@ -1,14 +1,16 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { getStrataPaths } from "@strata/core";
 import type { WebApiOptions } from "./runtime.js";
-import { repoRoot, runtimeEnv } from "./runtime.js";
+import { runtimeEnv } from "./runtime.js";
 
 export interface WebAuthStatus {
   enabled: boolean;
   authenticated: boolean;
-  tokenSource: "env" | "local" | "disabled";
+  /**
+   * Where the unlock passcode comes from: `env` when STRATA_PASSCODE is set,
+   * `unset` when auth is on but no passcode is configured (nothing can unlock
+   * until one is set), or `disabled` when auth is turned off entirely.
+   */
+  source: "env" | "unset" | "disabled";
 }
 
 export interface WebAuthSessionResult {
@@ -18,9 +20,9 @@ export interface WebAuthSessionResult {
 }
 
 export const WEB_AUTH_COOKIE_NAME = "strata_web_session";
-const WEB_AUTH_TOKEN_ENV = "STRATA_WEB_TOKEN";
+const WEB_AUTH_PASSCODE_ENV = "STRATA_PASSCODE";
 const WEB_AUTH_DISABLE_ENV = "STRATA_WEB_AUTH";
-const WEB_AUTH_TOKEN_FILE = "web-auth-token";
+const PASSCODE_PATTERN = /^\d{4}$/;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 interface WebAuthSession {
@@ -29,58 +31,44 @@ interface WebAuthSession {
 
 export class WebAuthController {
   readonly enabled: boolean;
-  readonly tokenSource: WebAuthStatus["tokenSource"];
-  readonly tokenPath: string;
-  private readonly token: string;
+  readonly source: WebAuthStatus["source"];
+  private readonly passcode: string;
   private readonly sessions = new Map<string, WebAuthSession>();
 
   private constructor(input: {
     enabled: boolean;
-    token: string;
-    tokenSource: WebAuthStatus["tokenSource"];
-    tokenPath: string;
+    passcode: string;
+    source: WebAuthStatus["source"];
   }) {
     this.enabled = input.enabled;
-    this.token = input.token;
-    this.tokenSource = input.tokenSource;
-    this.tokenPath = input.tokenPath;
+    this.passcode = input.passcode;
+    this.source = input.source;
   }
 
   static create(options: WebApiOptions = {}): WebAuthController {
     const env = runtimeEnv(options);
-    const tokenPath = webAuthTokenPath(options);
     if (isWebAuthDisabled(env)) {
-      return new WebAuthController({
-        enabled: false,
-        token: "",
-        tokenSource: "disabled",
-        tokenPath,
-      });
+      return new WebAuthController({ enabled: false, passcode: "", source: "disabled" });
     }
 
-    const envToken = env[WEB_AUTH_TOKEN_ENV]?.trim();
-    if (envToken !== undefined && envToken !== "") {
-      return new WebAuthController({
-        enabled: true,
-        token: envToken,
-        tokenSource: "env",
-        tokenPath,
-      });
+    const passcode = env[WEB_AUTH_PASSCODE_ENV]?.trim() ?? "";
+    if (passcode === "") {
+      return new WebAuthController({ enabled: true, passcode: "", source: "unset" });
     }
 
-    return new WebAuthController({
-      enabled: true,
-      token: loadOrCreateLocalWebToken(tokenPath),
-      tokenSource: "local",
-      tokenPath,
-    });
+    return new WebAuthController({ enabled: true, passcode, source: "env" });
+  }
+
+  /** True when STRATA_PASSCODE is set but is not exactly four digits. */
+  get passcodeMalformed(): boolean {
+    return this.source === "env" && !PASSCODE_PATTERN.test(this.passcode);
   }
 
   status(request?: Request): WebAuthStatus {
     return {
       enabled: this.enabled,
       authenticated: !this.enabled || (request !== undefined && this.isAuthenticated(request)),
-      tokenSource: this.tokenSource,
+      source: this.source,
     };
   }
 
@@ -90,7 +78,7 @@ export class WebAuthController {
     }
 
     const bearer = bearerToken(request.headers.get("authorization"));
-    if (bearer !== null && secureEqual(bearer, this.token)) {
+    if (bearer !== null && secureEqual(bearer, this.passcode)) {
       return true;
     }
 
@@ -101,7 +89,7 @@ export class WebAuthController {
     return this.hasValidSession(sessionId);
   }
 
-  createSession(token: string, request: Request): WebAuthSessionResult | undefined {
+  createSession(passcode: string, request: Request): WebAuthSessionResult | undefined {
     if (!this.enabled) {
       return {
         ok: true,
@@ -109,7 +97,7 @@ export class WebAuthController {
         cookie: expiredCookie(request),
       };
     }
-    if (!secureEqual(token, this.token)) {
+    if (!secureEqual(passcode, this.passcode)) {
       return undefined;
     }
     this.pruneExpiredSessions(Date.now());
@@ -117,7 +105,7 @@ export class WebAuthController {
     this.sessions.set(sessionId, { expiresAt: Date.now() + SESSION_TTL_SECONDS * 1000 });
     return {
       ok: true,
-      status: { enabled: true, authenticated: true, tokenSource: this.tokenSource },
+      status: { enabled: true, authenticated: true, source: this.source },
       cookie: sessionCookie(sessionId, request),
     };
   }
@@ -159,10 +147,6 @@ export function isWebAuthDisabled(env: Record<string, string | undefined>): bool
   return value === "off" || value === "false" || value === "0" || value === "disabled";
 }
 
-export function webAuthTokenPath(options: WebApiOptions = {}): string {
-  return path.join(getStrataPaths(repoRoot(options)).runtimeDir, WEB_AUTH_TOKEN_FILE);
-}
-
 export function isWebAuthExemptPath(pathname: string, method: string): boolean {
   if (method === "OPTIONS") {
     return true;
@@ -177,21 +161,6 @@ export function isWebAuthExemptPath(pathname: string, method: string): boolean {
     return true;
   }
   return /^\/api\/auth\/models\/[^/]+\/callback$/.test(pathname);
-}
-
-function loadOrCreateLocalWebToken(tokenPath: string): string {
-  if (existsSync(tokenPath)) {
-    const existing = readFileSync(tokenPath, "utf8").trim();
-    if (existing !== "") {
-      return existing;
-    }
-  }
-
-  const token = randomBytes(32).toString("base64url");
-  mkdirSync(path.dirname(tokenPath), { recursive: true });
-  writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
-  chmodSync(tokenPath, 0o600);
-  return token;
 }
 
 function secureEqual(actual: string, expected: string): boolean {
