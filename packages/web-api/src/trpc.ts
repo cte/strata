@@ -904,7 +904,7 @@ export type RoutineTriggerRunNowRpcInput = z.output<typeof routineTriggerIdInput
 export interface WebAuthStatusResult {
   enabled: boolean;
   authenticated: boolean;
-  tokenSource: "env" | "local" | "disabled";
+  source: "env" | "unset" | "disabled";
 }
 
 export interface WebApiServices {

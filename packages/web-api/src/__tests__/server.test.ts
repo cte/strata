@@ -8,7 +8,6 @@ import { type AgentRunEvent, type AgentRunResult, type ModelAdapter } from "@str
 import { writeLearningProposal } from "@strata/core/proposal-store";
 import { SessionStore } from "@strata/core/session-store";
 import { RoutineStore } from "@strata/routines";
-import { webAuthTokenPath } from "@strata/web-api/web-auth";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createWebApiHandler } from "../server.js";
 import type { AppRouter } from "../trpc.js";
@@ -33,7 +32,7 @@ describe("web api", () => {
   test("requires web auth for privileged API routes", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-auth-"));
     try {
-      const handler = createWebApiHandler({ repoRoot, env: { STRATA_WEB_TOKEN: "unlock-me" } });
+      const handler = createWebApiHandler({ repoRoot, env: { STRATA_PASSCODE: "4271" } });
 
       const health = await handler(new Request("http://127.0.0.1/api/health"));
       expect(health.status).toBe(200);
@@ -44,7 +43,7 @@ describe("web api", () => {
 
       const bearer = await handler(
         new Request("http://127.0.0.1/api/connectors", {
-          headers: { authorization: "Bearer unlock-me" },
+          headers: { authorization: "Bearer 4271" },
         }),
       );
       expect(bearer.status).toBe(200);
@@ -53,7 +52,7 @@ describe("web api", () => {
         new Request("http://127.0.0.1/api/auth/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: "wrong" }),
+          body: JSON.stringify({ passcode: "0000" }),
         }),
       );
       expect(deniedSession.status).toBe(401);
@@ -62,14 +61,14 @@ describe("web api", () => {
         new Request("http://127.0.0.1/api/auth/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: "unlock-me" }),
+          body: JSON.stringify({ passcode: "4271" }),
         }),
       );
       expect(session.status).toBe(200);
       expect(await session.json()).toMatchObject({
         enabled: true,
         authenticated: true,
-        tokenSource: "env",
+        source: "env",
       });
       const cookie = session.headers.get("set-cookie");
       expect(cookie).toContain("strata_web_session=");
@@ -86,7 +85,7 @@ describe("web api", () => {
     }
   });
 
-  test("creates a local web token when STRATA_WEB_TOKEN is unset", async () => {
+  test("stays locked and unconfigured when STRATA_PASSCODE is unset", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-auth-"));
     try {
       const handler = createWebApiHandler({ repoRoot, env: {} });
@@ -95,20 +94,21 @@ describe("web api", () => {
       await expect(status.json()).resolves.toMatchObject({
         enabled: true,
         authenticated: false,
-        tokenSource: "local",
+        source: "unset",
       });
-      const token = (await readFile(webAuthTokenPath({ repoRoot, env: {} }), "utf8")).trim();
-      expect(token.length).toBeGreaterThan(20);
 
+      // With no passcode configured, nothing can create a session.
       const session = await handler(
         new Request("http://127.0.0.1/api/auth/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token }),
+          body: JSON.stringify({ passcode: "0000" }),
         }),
       );
-      expect(session.status).toBe(200);
-      await expect(session.json()).resolves.toMatchObject({ authenticated: true });
+      expect(session.status).toBe(401);
+
+      const stillBlocked = await handler(new Request("http://127.0.0.1/api/connectors"));
+      expect(stillBlocked.status).toBe(401);
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

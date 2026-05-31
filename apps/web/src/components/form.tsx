@@ -55,11 +55,11 @@ export function FormField({
   return (
     <label className="block space-y-1.5">
       <span className="flex items-center justify-between gap-2">
-        <span className="label-eyebrow text-[var(--fg-mute)]">{label}</span>
-        {hint ? <span className="font-mono text-[10px] text-[var(--fg-mute)]">{hint}</span> : null}
+        <span className="label-eyebrow text-fg-mute">{label}</span>
+        {hint ? <span className="font-mono text-[10px] text-fg-mute">{hint}</span> : null}
       </span>
       {children}
-      {error ? <p className="font-mono text-2xs text-[var(--bad)]">{error}</p> : null}
+      {error ? <p className="font-mono text-2xs text-bad">{error}</p> : null}
     </label>
   );
 }
@@ -80,7 +80,7 @@ export function SelectInput({
   );
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger className="h-9 w-full border-[var(--hairline)] bg-[var(--bg)] text-xs text-[var(--fg)]">
+      <SelectTrigger className="h-9 w-full border-hairline bg-bg text-xs text-fg">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

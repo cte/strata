@@ -122,6 +122,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -131,6 +133,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import {
   addChatQueuedMessage,
   type ChatQueueTarget,
@@ -140,6 +143,7 @@ import {
   listChatQueuedMessages,
   removeChatQueuedMessage,
 } from "@/lib/api";
+import { useOpenChatSessionCommandPalette } from "@/lib/chatCommandPalette";
 import { chatComposerSubmitState } from "@/lib/chatComposer";
 import { writeLastChatSessionId } from "@/lib/chatLastSession";
 import {
@@ -495,122 +499,156 @@ export function ChatPage(): React.ReactElement {
 
   return (
     <div className="chat-surface relative -mx-6 -my-8 h-[calc(100dvh-2.75rem)] overflow-hidden bg-bg md:-mx-10 md:-my-10">
-      <section className="relative flex h-full min-h-0 min-w-0 flex-col">
-        <ChatSessionToolbar
-          sessionId={urlSessionId}
-          terminalOpen={terminalOpen}
-          onToggleTerminal={() => setTerminalOpen((open) => !open)}
-        />
+      <ResizablePanelGroup
+        direction="vertical"
+        autoSaveId="strata-chat-terminal"
+        className="h-full"
+      >
+        <ResizablePanel id="chat" order={1} minSize={30} className="!overflow-hidden">
+          <section className="relative flex h-full min-h-0 min-w-0 flex-col">
+            <ChatSessionToolbar sessionId={urlSessionId} />
 
-        {error === null ? null : <InlineError message={error} />}
-        {showCommandHelp ? <CommandHelp onClose={() => setShowCommandHelp(false)} /> : null}
+            {error === null ? null : <InlineError message={error} />}
+            {showCommandHelp ? <CommandHelp onClose={() => setShowCommandHelp(false)} /> : null}
 
-        <Conversation className="min-h-0 flex-1">
-          <ConversationContent
-            className={cn(transcript.length === 0 ? "min-h-full pb-32" : "pb-56 md:pb-52")}
-          >
-            {transcript.length === 0 ? (
-              urlSessionId === null ? (
-                <InlineChatEmptyState />
-              ) : (
-                <ConversationEmptyState
-                  title="Ready."
-                  description={modelLine}
-                  icon={<MessageSquare size={14} strokeWidth={1.75} />}
-                />
-              )
-            ) : (
-              <>
-                {hasMoreBefore ? (
-                  <LoadOlderMessagesButton
-                    loading={olderMessagesLoading}
-                    onClick={loadOlderMessages}
-                  />
-                ) : null}
-                {transcript.map((message) => (
-                  <TranscriptMessage key={message.id} message={message} sessionId={sessionId} />
-                ))}
-              </>
-            )}
-          </ConversationContent>
-          <ConversationScrollButton />
-        </Conversation>
+            <Conversation className="min-h-0 flex-1">
+              <ConversationContent
+                className={cn(transcript.length === 0 ? "min-h-full pb-32" : "pb-56 md:pb-52")}
+              >
+                {transcript.length === 0 ? (
+                  urlSessionId === null ? (
+                    <InlineChatEmptyState />
+                  ) : (
+                    <ConversationEmptyState
+                      title="Ready."
+                      description={modelLine}
+                      icon={<MessageSquare size={14} strokeWidth={1.75} />}
+                    />
+                  )
+                ) : (
+                  <>
+                    {hasMoreBefore ? (
+                      <LoadOlderMessagesButton
+                        loading={olderMessagesLoading}
+                        onClick={loadOlderMessages}
+                      />
+                    ) : null}
+                    {transcript.map((message) => (
+                      <TranscriptMessage key={message.id} message={message} sessionId={sessionId} />
+                    ))}
+                  </>
+                )}
+              </ConversationContent>
+              <ConversationScrollButton />
+            </Conversation>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-3 md:px-6 md:pb-4">
-          <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
-            <div className="flex justify-end px-1">
-              <RunStatusBadge
-                runState={runState}
-                runId={activeRunId}
-                externallyRunning={externallyRunning}
-              />
-            </div>
-            <PromptInput
-              accept="image/*"
-              globalDrop
-              maxFileSize={MAX_ATTACHMENT_BYTES}
-              multiple
-              onError={handlePromptInputError}
-              onSubmit={handleSubmit}
-              className="rounded-md bg-bg-elev [&_[data-slot=input-group]]:rounded-md [&_[data-slot=input-group]]:border-hairline [&_[data-slot=input-group]]:bg-bg-elev [&_[data-slot=input-group]]:shadow-none"
-            >
-              <AutocompletePopover
-                open={autocomplete.open}
-                items={autocomplete.items}
-                selectedIndex={autocomplete.selectedIndex}
-                anchorRect={autocomplete.anchorRect}
-                onAccept={autocomplete.accept}
-                onSelect={autocomplete.select}
-              />
-              <ChatPromptHeader
-                queuedMessages={queuedMessages}
-                onRemoveQueuedMessage={handleRemoveQueuedMessage}
-              />
-              <PromptInputBody>
-                <PromptInputTextarea
-                  inputRef={promptInputRef}
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.currentTarget.value)}
-                  onFocus={autocomplete.refresh}
-                  onKeyDown={handlePromptUnhandledKeyDown}
-                  disabled={composerDisabled}
-                  className="min-h-12 text-sm leading-5 md:text-sm"
-                />
-              </PromptInputBody>
-              <PromptInputFooter>
-                <PromptInputTools>
-                  <PromptInputActionMenu>
-                    <PromptInputActionMenuTrigger disabled={composerDisabled} />
-                    <PromptInputActionMenuContent>
-                      <PromptInputActionAddAttachments label="Attach image" />
-                      <PromptInputActionAddScreenshot />
-                    </PromptInputActionMenuContent>
-                  </PromptInputActionMenu>
-                  <ChatModelPicker
-                    choice={selectedModelChoice}
-                    providerStates={modelProviderStates}
-                    open={modelPickerOpen}
-                    onOpenChange={setModelPickerOpen}
-                    onSelect={setModelChoice}
-                    onReasoningEffortChange={setModelReasoningEffort}
-                    disabled={composerDisabled}
-                  />
-                </PromptInputTools>
-                <PromptInputTools className="shrink-0 justify-end gap-2">
-                  <ContextUsageIndicator usage={usageTotals} contextWindow={contextWindow} />
-                  <ChatPromptSubmit
-                    prompt={prompt}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-3 md:px-6 md:pb-4">
+              <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
+                <div className="flex justify-end px-1">
+                  <RunStatusBadge
                     runState={runState}
+                    runId={activeRunId}
                     externallyRunning={externallyRunning}
-                    onStop={handleCancel}
                   />
-                </PromptInputTools>
-              </PromptInputFooter>
-            </PromptInput>
-          </div>
-        </div>
-      </section>
-      {terminalOpen ? <TerminalPanel onClose={handleCloseTerminal} /> : null}
+                </div>
+                <PromptInput
+                  accept="image/*"
+                  globalDrop
+                  maxFileSize={MAX_ATTACHMENT_BYTES}
+                  multiple
+                  onError={handlePromptInputError}
+                  onSubmit={handleSubmit}
+                  className="rounded-md bg-bg-elev [&_[data-slot=input-group]]:rounded-md [&_[data-slot=input-group]]:border-hairline [&_[data-slot=input-group]]:bg-bg-elev [&_[data-slot=input-group]]:shadow-none"
+                >
+                  <AutocompletePopover
+                    open={autocomplete.open}
+                    items={autocomplete.items}
+                    selectedIndex={autocomplete.selectedIndex}
+                    anchorRect={autocomplete.anchorRect}
+                    onAccept={autocomplete.accept}
+                    onSelect={autocomplete.select}
+                  />
+                  <ChatPromptHeader
+                    queuedMessages={queuedMessages}
+                    onRemoveQueuedMessage={handleRemoveQueuedMessage}
+                  />
+                  <PromptInputBody>
+                    <PromptInputTextarea
+                      inputRef={promptInputRef}
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.currentTarget.value)}
+                      onFocus={autocomplete.refresh}
+                      onKeyDown={handlePromptUnhandledKeyDown}
+                      disabled={composerDisabled}
+                      className="min-h-12 text-sm leading-5 md:text-sm"
+                    />
+                  </PromptInputBody>
+                  <PromptInputFooter>
+                    <PromptInputTools>
+                      <PromptInputActionMenu>
+                        <PromptInputActionMenuTrigger disabled={composerDisabled} />
+                        <PromptInputActionMenuContent>
+                          <PromptInputActionAddAttachments label="Attach image" />
+                          <PromptInputActionAddScreenshot />
+                        </PromptInputActionMenuContent>
+                      </PromptInputActionMenu>
+                      <ChatModelPicker
+                        choice={selectedModelChoice}
+                        providerStates={modelProviderStates}
+                        open={modelPickerOpen}
+                        onOpenChange={setModelPickerOpen}
+                        onSelect={setModelChoice}
+                        onReasoningEffortChange={setModelReasoningEffort}
+                        disabled={composerDisabled}
+                      />
+                    </PromptInputTools>
+                    <PromptInputTools className="shrink-0 justify-end gap-2">
+                      <ContextUsageIndicator usage={usageTotals} contextWindow={contextWindow} />
+                      <ChatPromptSubmit
+                        prompt={prompt}
+                        runState={runState}
+                        externallyRunning={externallyRunning}
+                        onStop={handleCancel}
+                      />
+                    </PromptInputTools>
+                  </PromptInputFooter>
+                </PromptInput>
+              </div>
+            </div>
+
+            {terminalOpen ? null : (
+              <div className="pointer-events-none absolute right-3 bottom-3 z-30 md:right-6 md:bottom-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="Open terminal"
+                  title="Open terminal"
+                  onClick={() => setTerminalOpen(true)}
+                  className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
+                >
+                  <TerminalIcon size={13} strokeWidth={1.75} />
+                </Button>
+              </div>
+            )}
+          </section>
+        </ResizablePanel>
+        {terminalOpen ? (
+          <>
+            <ResizableHandle withHandle />
+            <ResizablePanel
+              id="terminal"
+              order={2}
+              defaultSize={38}
+              minSize={12}
+              maxSize={85}
+              className="!overflow-hidden"
+            >
+              <TerminalPanel onClose={handleCloseTerminal} />
+            </ResizablePanel>
+          </>
+        ) : null}
+      </ResizablePanelGroup>
     </div>
   );
 }
@@ -644,21 +682,13 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Floating top-right toolbar over the chat surface. Provides a "New Chat"
- * shortcut plus an overflow menu whose only action (for now) deletes the
- * session currently being viewed. The delete affordance is hidden on a fresh
- * surface (no session yet) and disabled while the session is running.
+ * Floating top-right toolbar over the chat surface: a single overflow menu with
+ * New / Search / Delete session actions. Delete is disabled on a fresh surface
+ * (no session yet) and while the session is running.
  */
-function ChatSessionToolbar({
-  sessionId,
-  terminalOpen,
-  onToggleTerminal,
-}: {
-  sessionId: string | null;
-  terminalOpen: boolean;
-  onToggleTerminal: () => void;
-}): React.ReactElement {
+function ChatSessionToolbar({ sessionId }: { sessionId: string | null }): React.ReactElement {
   const navigate = useNavigate();
+  const openCommandPalette = useOpenChatSessionCommandPalette();
   const { sessions } = useChatSessions();
   const deleteSession = useDeleteChatSession();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -707,31 +737,27 @@ function ChatSessionToolbar({
     );
   }, [canDelete, deleteSession, deleting, session]);
 
+  // Keyboard shortcuts (⌘K for the session picker lives with the palette):
+  // ⌘⇧O starts a new session, ⌘⇧⌫ opens the delete confirm. Mirrors the
+  // dropdown actions and the hints shown next to them.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey) return;
+      if (!event.shiftKey) return;
+      if (event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        handleNewChat();
+      } else if (event.key === "Backspace" && canDelete) {
+        event.preventDefault();
+        setConfirmOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [canDelete, handleNewChat]);
+
   return (
     <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-1.5 md:right-6">
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
-        title={terminalOpen ? "Close terminal" : "Open terminal"}
-        onClick={onToggleTerminal}
-        className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
-      >
-        <TerminalIcon size={13} strokeWidth={1.75} />
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        aria-label="New chat"
-        title="New chat"
-        onClick={handleNewChat}
-        className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
-      >
-        <Plus size={13} strokeWidth={1.75} />
-      </Button>
-
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Button
@@ -745,7 +771,32 @@ function ChatSessionToolbar({
             <MoreHorizontal size={14} strokeWidth={1.75} />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-44 border-hairline bg-bg-elev text-fg">
+        <DropdownMenuContent align="end" className="w-48 border-hairline bg-bg-elev text-fg">
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault();
+              setMenuOpen(false);
+              handleNewChat();
+            }}
+            className="gap-2 text-xs"
+          >
+            <Plus size={13} strokeWidth={1.75} />
+            New
+            <DropdownMenuShortcut>⌘⇧O</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault();
+              setMenuOpen(false);
+              openCommandPalette();
+            }}
+            className="gap-2 text-xs"
+          >
+            <Search size={13} strokeWidth={1.75} />
+            Search
+            <DropdownMenuShortcut>⌘K</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="bg-hairline" />
           <DropdownMenuItem
             disabled={!canDelete}
             onSelect={(event) => {
@@ -756,7 +807,8 @@ function ChatSessionToolbar({
             className="gap-2 text-xs text-bad focus:bg-bad/10 focus:text-bad"
           >
             <Trash2 size={13} strokeWidth={1.75} />
-            Delete session
+            Delete
+            <DropdownMenuShortcut>⌘⇧⌫</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -790,7 +842,7 @@ function InlineChatEmptyState(): React.ReactElement {
         </EmptyMedia>
         <EmptyTitle className="text-sm font-medium tracking-tight text-fg">Ready.</EmptyTitle>
         <EmptyDescription className="text-xs leading-normal text-fg-mute">
-          Start a new chat below, or use <KeyboardShortcut>Cmd-K</KeyboardShortcut> to open the
+          Start a new chat below, or use <KeyboardShortcut>⌘K</KeyboardShortcut> to open the
           session picker.
         </EmptyDescription>
       </EmptyHeader>
@@ -824,7 +876,7 @@ function LoadOlderMessagesButton({
 
 function KeyboardShortcut({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
-    <kbd className="rounded border border-hairline px-1 py-px font-mono text-2xs leading-none tracking-tight text-fg-mute">
+    <kbd className="whitespace-nowrap rounded border border-hairline px-1 py-px font-mono text-2xs leading-none tracking-tight text-fg-mute">
       {children}
     </kbd>
   );

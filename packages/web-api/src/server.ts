@@ -55,7 +55,7 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
       await next();
       return;
     }
-    return c.json(errorResponse("unauthorized", "Unlock Strata web with the local token."), 401, {
+    return c.json(errorResponse("unauthorized", "Unlock Strata web with your passcode."), 401, {
       "www-authenticate": 'Bearer realm="Strata web"',
     });
   });
@@ -63,13 +63,16 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
   app.get("/api/auth/status", (c) => c.json(auth.status(c.req.raw)));
 
   app.post("/api/auth/session", async (c) => {
-    const body = (await c.req.json().catch(() => null)) as { token?: unknown } | null;
-    if (auth.enabled && (body === null || typeof body.token !== "string")) {
-      return c.json(errorResponse("bad_request", "Token is required."), 400);
+    const body = (await c.req.json().catch(() => null)) as { passcode?: unknown } | null;
+    if (auth.enabled && (body === null || typeof body.passcode !== "string")) {
+      return c.json(errorResponse("bad_request", "Passcode is required."), 400);
     }
-    const result = auth.createSession(typeof body?.token === "string" ? body.token : "", c.req.raw);
+    const result = auth.createSession(
+      typeof body?.passcode === "string" ? body.passcode : "",
+      c.req.raw,
+    );
     if (result === undefined) {
-      return c.json(errorResponse("unauthorized", "Invalid Strata web token."), 401);
+      return c.json(errorResponse("unauthorized", "Incorrect passcode."), 401);
     }
     c.header("set-cookie", result.cookie);
     return c.json(result.status);
@@ -278,14 +281,18 @@ export async function startWebApiServer(
 
   const auth = WebAuthController.create({ ...options, repoRoot: root });
   console.log(`Strata web API listening on http://${server.hostname}:${server.port}`);
-  if (auth.enabled) {
-    if (auth.tokenSource === "local") {
-      console.log(`Strata web auth token: ${auth.tokenPath}`);
-    } else {
-      console.log("Strata web auth: STRATA_WEB_TOKEN enabled");
-    }
-  } else {
+  if (!auth.enabled) {
     console.log("Strata web auth: disabled by STRATA_WEB_AUTH");
+  } else if (auth.source === "unset") {
+    console.warn(
+      "Strata web auth: STRATA_PASSCODE is not set — the web UI is locked and cannot be unlocked until you set a 4-digit passcode in your .env.",
+    );
+  } else if (auth.passcodeMalformed) {
+    console.warn(
+      "Strata web auth: STRATA_PASSCODE should be exactly 4 digits — unlock will fail until it is corrected.",
+    );
+  } else {
+    console.log("Strata web auth: STRATA_PASSCODE enabled");
   }
   return server;
 }

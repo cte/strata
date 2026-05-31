@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Callout } from "@/components/shared/callout";
 import { Chip } from "@/components/shared/chip";
@@ -39,7 +40,7 @@ import {
   useUpdateWikiAction,
   useWikiActions,
 } from "@/lib/queries/wikiActions";
-import { cleanSourceText, shortSourceLabel } from "@/lib/sourceText";
+import { cleanSourceMarkdown, cleanSourceText, shortSourceLabel } from "@/lib/sourceText";
 import { cn } from "@/lib/utils";
 
 type ActionScope = "today" | "open" | "all";
@@ -393,7 +394,7 @@ function ActionRow({
   const sourceTitle = action.source
     ? `${cleanSourceText(action.source.label)} — ${action.path}:${action.line}`
     : `${action.path}:${action.line}`;
-  const contextPreview = action.context.length > 0 ? cleanSourceText(action.context) : "";
+  const contextPreview = action.context.length > 0 ? cleanSourceMarkdown(action.context) : "";
 
   return (
     <article className="group grid gap-2 py-3 [content-visibility:auto] [contain-intrinsic-size:96px] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start lg:gap-4">
@@ -442,9 +443,14 @@ function ActionRow({
               </Chip>
             </div>
             {!editing && contextPreview.length > 0 ? (
-              <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-fg-dim">
+              <MessageResponse
+                className={cn(
+                  "action-context-markdown mt-2 h-auto w-full break-words text-xs leading-5 text-fg-dim",
+                  !expanded && "max-h-10 overflow-hidden",
+                )}
+              >
                 {contextPreview}
-              </p>
+              </MessageResponse>
             ) : null}
           </div>
         </div>

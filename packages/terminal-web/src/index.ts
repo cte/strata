@@ -1,7 +1,7 @@
+import { TerminalCanvasRenderer } from "./canvasRenderer.js";
 import { type GhosttyWasmTerminal, loadGhosttyWasmTerminal } from "./ghosttyWasm.js";
 import { type TerminalDataListener, TerminalInputController } from "./input.js";
 import { HandwrittenVtParser, type TerminalVtParser } from "./parser.js";
-import { TerminalDomRenderer } from "./renderer.js";
 import { TerminalScreen, type TerminalSnapshot } from "./screen.js";
 
 export interface TerminalTheme {
@@ -32,13 +32,14 @@ export interface TerminalOptions {
 export class Terminal {
   private readonly screen: TerminalScreen;
   private readonly parser: TerminalVtParser;
-  private readonly renderer: TerminalDomRenderer;
+  private readonly renderer: TerminalCanvasRenderer;
   private readonly input = new TerminalInputController();
   private readonly scrollback: number;
   private ghostty: GhosttyWasmTerminal | null = null;
   private ghosttyLoad: Promise<void> | null = null;
   private replayText = "";
   private disposed = false;
+  private renderRaf = 0;
 
   constructor(options: TerminalOptions = {}) {
     const cols = positiveInt(options.cols, 80);
@@ -46,7 +47,7 @@ export class Terminal {
     this.scrollback = positiveInt(options.scrollback, 1000);
     this.screen = new TerminalScreen(cols, rows, this.scrollback);
     this.parser = options.parser ?? new HandwrittenVtParser();
-    this.renderer = new TerminalDomRenderer({
+    this.renderer = new TerminalCanvasRenderer({
       fontFamily:
         options.fontFamily ??
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
@@ -69,6 +70,7 @@ export class Terminal {
   open(container: HTMLElement): void {
     this.input.detach();
     const root = this.renderer.open(container);
+    this.input.setSelectionTextProvider(() => this.renderer.getSelectionText());
     this.input.attach(root);
     this.render();
     root.focus();
@@ -80,10 +82,28 @@ export class Terminal {
 
   dispose(): void {
     this.disposed = true;
+    if (this.renderRaf !== 0 && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(this.renderRaf);
+    }
+    this.renderRaf = 0;
     this.input.dispose();
     this.renderer.dispose();
     this.ghostty?.dispose();
     this.ghostty = null;
+  }
+
+  /** Coalesce bursty writes into a single render on the next animation frame. */
+  private scheduleRender(): void {
+    if (this.disposed) return;
+    if (typeof requestAnimationFrame !== "function") {
+      this.render();
+      return;
+    }
+    if (this.renderRaf !== 0) return;
+    this.renderRaf = requestAnimationFrame(() => {
+      this.renderRaf = 0;
+      if (!this.disposed) this.render();
+    });
   }
 
   onData(listener: TerminalDataListener): { dispose: () => void } {
@@ -98,7 +118,9 @@ export class Terminal {
       if (this.ghosttyLoad !== null) this.replayText += text;
       this.parser.write(text, this.screen);
     }
-    this.render();
+    // Streaming output arrives as many small frames; coalesce them into one
+    // render per animation frame instead of re-rendering synchronously each time.
+    this.scheduleRender();
   }
 
   clear(): void {
@@ -188,8 +210,8 @@ function positiveNumber(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+export * from "./canvasRenderer.js";
 export * from "./ghosttyWasm.js";
 export * from "./input.js";
 export * from "./parser.js";
-export * from "./renderer.js";
 export * from "./screen.js";

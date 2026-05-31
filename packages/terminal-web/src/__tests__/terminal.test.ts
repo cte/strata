@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Terminal, type TerminalSnapshot } from "../index.js";
-import { hasDocumentSelection, keySequence, pastePayload, sgrMouseSequence } from "../input.js";
+import { keySequence, pastePayload, sgrMouseSequence } from "../input.js";
 import { HandwrittenVtParser } from "../parser.js";
 import { TerminalScreen } from "../screen.js";
 import { ANSI_TRANSCRIPT, FULLSCREEN_TRANSCRIPT, SHELL_TRANSCRIPT } from "./terminalFixtures.js";
@@ -218,28 +218,6 @@ describe("keySequence", () => {
   });
 });
 
-describe("hasDocumentSelection", () => {
-  test("only treats terminal-contained selections as copyable", () => {
-    const inside = {} as Node;
-    const outside = {} as Node;
-    const root = {
-      contains: (node: Node | null) => node === inside,
-    } as Node;
-
-    withSelection({ isCollapsed: false, anchorNode: inside, focusNode: inside }, () => {
-      expect(hasDocumentSelection(root)).toBe(true);
-    });
-
-    withSelection({ isCollapsed: false, anchorNode: inside, focusNode: outside }, () => {
-      expect(hasDocumentSelection(root)).toBe(false);
-    });
-
-    withSelection({ isCollapsed: true, anchorNode: inside, focusNode: inside }, () => {
-      expect(hasDocumentSelection(root)).toBe(false);
-    });
-  });
-});
-
 function lines(snapshot: TerminalSnapshot): string[] {
   return snapshot.cells.map((row) => row.map((cell) => cell.char).join(""));
 }
@@ -259,24 +237,4 @@ function key(
     metaKey: options.metaKey ?? false,
     shiftKey: options.shiftKey ?? false,
   } as KeyboardEvent;
-}
-
-function withSelection(
-  selection: Pick<Selection, "isCollapsed" | "anchorNode" | "focusNode">,
-  fn: () => void,
-): void {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "getSelection");
-  Object.defineProperty(globalThis, "getSelection", {
-    configurable: true,
-    value: () => selection,
-  });
-  try {
-    fn();
-  } finally {
-    if (descriptor === undefined) {
-      Reflect.deleteProperty(globalThis, "getSelection");
-    } else {
-      Object.defineProperty(globalThis, "getSelection", descriptor);
-    }
-  }
 }

@@ -196,13 +196,13 @@ export const Attachment = ({ data, onRemove, className, children, ...props }: At
           variant === "grid" && "size-24 overflow-hidden rounded-lg",
           variant === "inline" && [
             "flex h-8 cursor-pointer select-none items-center gap-1.5",
-            "rounded-md border border-border px-1.5",
+            "rounded-md border border-hairline px-1.5",
             "font-medium text-sm transition-all",
-            "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+            "hover:bg-surface-2 hover:text-fg dark:hover:bg-surface-2/50",
           ],
           variant === "list" && [
             "flex w-full items-center gap-3 rounded-lg border p-3",
-            "hover:bg-accent/50",
+            "hover:bg-surface-2/50",
           ],
           className,
         )}
@@ -231,9 +231,7 @@ export const AttachmentPreview = ({
 
   const iconSize = variant === "inline" ? "size-3" : "size-3.5";
 
-  const renderIcon = (Icon: typeof ImageIcon) => (
-    <Icon className={cn(iconSize, "text-muted-foreground")} />
-  );
+  const renderIcon = (Icon: typeof ImageIcon) => <Icon className={cn(iconSize, "text-fg-mute")} />;
 
   const renderContent = () => {
     if (mediaCategory === "image" && data.type === "file" && data.url) {
@@ -252,9 +250,9 @@ export const AttachmentPreview = ({
     <div
       className={cn(
         "flex shrink-0 items-center justify-center overflow-hidden",
-        variant === "grid" && "size-full bg-muted",
-        variant === "inline" && "size-5 rounded bg-background",
-        variant === "list" && "size-12 rounded bg-muted",
+        variant === "grid" && "size-full bg-surface-2",
+        variant === "inline" && "size-5 rounded bg-bg",
+        variant === "list" && "size-12 rounded bg-surface-2",
         className,
       )}
       {...props}
@@ -288,7 +286,7 @@ export const AttachmentInfo = ({
     <div className={cn("min-w-0 flex-1", className)} {...props}>
       <span className="block truncate">{label}</span>
       {showMediaType && data.mediaType && (
-        <span className="block truncate text-xs text-muted-foreground">{data.mediaType}</span>
+        <span className="block truncate text-xs text-fg-mute">{data.mediaType}</span>
       )}
     </div>
   );
@@ -328,9 +326,9 @@ export const AttachmentRemove = ({
       className={cn(
         variant === "grid" && [
           "absolute top-2 right-2 size-6 rounded-full p-0",
-          "bg-background/80 backdrop-blur-sm",
+          "bg-bg/80 backdrop-blur-sm",
           "opacity-0 transition-opacity group-hover:opacity-100",
-          "hover:bg-background",
+          "hover:bg-bg",
           "[&>svg]:!size-3",
         ],
         variant === "inline" && [
@@ -390,7 +388,7 @@ export type AttachmentEmptyProps = HTMLAttributes<HTMLDivElement>;
 
 export const AttachmentEmpty = ({ className, children, ...props }: AttachmentEmptyProps) => (
   <div
-    className={cn("flex items-center justify-center p-4 text-sm text-muted-foreground", className)}
+    className={cn("flex items-center justify-center p-4 text-sm text-fg-mute", className)}
     {...props}
   >
     {children ?? "No attachments"}

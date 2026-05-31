@@ -529,8 +529,8 @@ export function RoutinesPage(): React.ReactElement {
         }
       />
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-[var(--hairline)] bg-[var(--surface)] lg:grid-cols-[minmax(300px,420px)_minmax(0,1fr)]">
-        <aside className="min-h-0 border-b border-[var(--hairline)] bg-[var(--bg)] lg:border-r lg:border-b-0">
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-hairline bg-surface lg:grid-cols-[minmax(300px,420px)_minmax(0,1fr)]">
+        <aside className="min-h-0 border-b border-hairline bg-bg lg:border-r lg:border-b-0">
           <ScrollArea className="h-full">
             <div className="flex flex-col gap-3 p-3">
               <RoutineListHeader count={routines.length} />
@@ -553,7 +553,7 @@ export function RoutinesPage(): React.ReactElement {
           </ScrollArea>
         </aside>
 
-        <section className="min-h-0 min-w-0 bg-[var(--bg)]">
+        <section className="min-h-0 min-w-0 bg-bg">
           <ScrollArea className="h-full">
             <RoutineDetailPanel
               detail={detail}
@@ -614,17 +614,15 @@ function RoutineStatusToggle({
   onChange(value: RoutineStatusFilter): void;
 }): React.ReactElement {
   return (
-    <div className="grid grid-cols-4 rounded-md border border-[var(--hairline)] p-0.5">
+    <div className="grid grid-cols-4 rounded-md border border-hairline p-0.5">
       {STATUS_FILTERS.map((filter) => (
         <button
           key={filter.value}
           type="button"
           onClick={() => onChange(filter.value)}
           className={cn(
-            "h-8 min-w-16 rounded-[5px] px-2 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
-            value === filter.value
-              ? "bg-[var(--surface-2)] text-[var(--fg)]"
-              : "text-[var(--fg-dim)] hover:text-[var(--fg)]",
+            "h-8 min-w-16 rounded-[5px] px-2 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            value === filter.value ? "bg-surface-2 text-fg" : "text-fg-dim hover:text-fg",
           )}
         >
           {filter.label}
@@ -638,8 +636,8 @@ function RoutineListHeader({ count }: { count: number }): React.ReactElement {
   return (
     <div className="flex items-center justify-between gap-3 px-2">
       <div>
-        <p className="label-eyebrow text-[var(--fg-mute)]">automations</p>
-        <p className="mt-1 text-sm text-[var(--fg-dim)]">
+        <p className="label-eyebrow text-fg-mute">automations</p>
+        <p className="mt-1 text-sm text-fg-dim">
           {count.toLocaleString()} routine{count === 1 ? "" : "s"}
         </p>
       </div>
@@ -671,28 +669,27 @@ function RoutineList({
               type="button"
               onClick={() => onSelect(routine.id)}
               className={cn(
-                "flex w-full min-w-0 flex-col gap-2 rounded-md border border-transparent px-3 py-2.5 text-left transition-colors duration-150 hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
-                selectedId === routine.id &&
-                  "border-[var(--hairline)] bg-[var(--surface)] shadow-sm",
+                "flex w-full min-w-0 flex-col gap-2 rounded-md border border-transparent px-3 py-2.5 text-left transition-colors duration-150 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                selectedId === routine.id && "border-hairline bg-surface shadow-sm",
               )}
             >
               <div className="flex min-w-0 items-start justify-between gap-3">
-                <span className="line-clamp-2 min-w-0 text-sm font-medium text-[var(--fg)]">
+                <span className="line-clamp-2 min-w-0 text-sm font-medium text-fg">
                   {routine.name}
                 </span>
                 <RoutineStatusBadge status={routine.status} />
               </div>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--fg-mute)]">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-mute">
                 <span className="truncate font-mono">{routine.id}</span>
                 <span className="font-mono">v{routine.version}</span>
               </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-[var(--fg-mute)]">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-fg-mute">
                 <span>output: {routine.outputMode}</span>
                 <ToolProfileText profile={routine.toolProfile} />
                 {latestRun ? (
                   <TaskStatusChip status={latestRun.taskStatus} runStatus={latestRun.status} />
                 ) : (
-                  <span className="text-[var(--fg-mute)]">no runs</span>
+                  <span className="text-fg-mute">no runs</span>
                 )}
                 {artifactCount > 0 ? (
                   <span className="font-mono">
@@ -717,11 +714,11 @@ function RoutineListEmpty({
 }): React.ReactElement {
   return (
     <div className="px-2 py-10 text-center">
-      <Workflow size={20} strokeWidth={1.5} className="mx-auto text-[var(--fg-mute)]" />
-      <p className="mt-3 text-sm font-medium text-[var(--fg)]">
+      <Workflow size={20} strokeWidth={1.5} className="mx-auto text-fg-mute" />
+      <p className="mt-3 text-sm font-medium text-fg">
         {status === "all" ? "No routines yet" : `No ${status} routines`}
       </p>
-      <p className="mx-auto mt-1 max-w-xs text-xs leading-5 text-[var(--fg-dim)]">
+      <p className="mx-auto mt-1 max-w-xs text-xs leading-5 text-fg-dim">
         A routine is a saved agent automation: a prompt plus input/output schemas, a tool profile,
         optional pre-run jobs, and triggers. Create one to run it manually or on a schedule.
       </p>
@@ -793,16 +790,14 @@ function RoutineDetailPanel({
 
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-[var(--hairline)] pb-4">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-hairline pb-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <RoutineStatusBadge status={detail.status} />
-            <span className="label-eyebrow text-[var(--fg-mute)]">v{detail.version}</span>
+            <span className="label-eyebrow text-fg-mute">v{detail.version}</span>
           </div>
-          <h2 className="mt-2 text-xl font-medium tracking-tight text-[var(--fg)]">
-            {detail.name}
-          </h2>
-          <p className="mt-1 break-all font-mono text-xs text-[var(--fg-mute)]">{detail.id}</p>
+          <h2 className="mt-2 text-xl font-medium tracking-tight text-fg">{detail.name}</h2>
+          <p className="mt-1 break-all font-mono text-xs text-fg-mute">{detail.id}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="outline" disabled={statusBusy} onClick={onEdit}>
@@ -842,9 +837,7 @@ function RoutineDetailPanel({
       </div>
 
       {detail.description ? (
-        <p className="mb-5 max-w-3xl text-sm leading-6 text-[var(--fg-dim)]">
-          {detail.description}
-        </p>
+        <p className="mb-5 max-w-3xl text-sm leading-6 text-fg-dim">{detail.description}</p>
       ) : null}
 
       <div className="mb-5 grid gap-3 md:grid-cols-3">
@@ -900,7 +893,7 @@ function RoutineDetailPanel({
       </Section>
 
       <Section title="Prompt">
-        <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-3 text-xs leading-5 text-[var(--fg)]">
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md border border-hairline bg-surface p-3 text-xs leading-5 text-fg">
           {detail.prompt}
         </pre>
       </Section>
@@ -933,7 +926,7 @@ function RoutineDetailPanel({
               {detail.requiredSkills.map((skill) => (
                 <span
                   key={skill}
-                  className="rounded-sm border border-[var(--hairline)] bg-[var(--surface)] px-2 py-1 font-mono text-xs text-[var(--fg-dim)]"
+                  className="rounded-sm border border-hairline bg-surface px-2 py-1 font-mono text-xs text-fg-dim"
                 >
                   {skill}
                 </span>
@@ -949,11 +942,11 @@ function RoutineDetailPanel({
               {detail.preRunSteps.map((step, index) => (
                 <li
                   key={`${step.jobName}:${index}`}
-                  className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-2.5"
+                  className="rounded-md border border-hairline bg-surface p-2.5"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-2xs text-[var(--fg-mute)]">{index + 1}</span>
-                    <span className="font-mono text-xs text-[var(--fg)]">{step.jobName}</span>
+                    <span className="font-mono text-2xs text-fg-mute">{index + 1}</span>
+                    <span className="font-mono text-xs text-fg">{step.jobName}</span>
                   </div>
                   {Object.keys(step.input).length > 0 ? (
                     <JsonBlock value={step.input} className="mt-2 max-h-40" />
@@ -1007,17 +1000,17 @@ function TriggerList({
     );
   }
   return (
-    <div className="divide-y divide-[var(--hairline)] overflow-hidden rounded-md border border-[var(--hairline)]">
+    <div className="divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
       {schedules.map((schedule) => (
-        <article key={schedule.id} className="bg-[var(--surface)] p-3">
+        <article key={schedule.id} className="bg-surface p-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={schedule.enabled ? "ready" : "muted"} pulse={schedule.enabled}>
               {schedule.enabled ? "enabled" : "paused"}
             </Badge>
-            <span className="truncate text-xs font-medium text-[var(--fg)]">
+            <span className="truncate text-xs font-medium text-fg">
               {schedule.name ?? "(unnamed)"}
             </span>
-            <span className="font-mono text-2xs text-[var(--fg-mute)]">
+            <span className="font-mono text-2xs text-fg-mute">
               {formatTrigger(schedule.trigger)}
             </span>
             <div className="ml-auto flex items-center gap-1.5">
@@ -1055,7 +1048,7 @@ function TriggerList({
               </Button>
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-2xs text-[var(--fg-mute)]">
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-2xs text-fg-mute">
             <span>next {formatDateTime(schedule.nextRunAt)}</span>
             <span>last {formatDateTime(schedule.lastRunAt)}</span>
             {schedule.lastStatus ? <span>status {schedule.lastStatus}</span> : null}
@@ -1073,12 +1066,7 @@ function ToolProfileText({
   profile: RoutineSummary["toolProfile"];
 }): React.ReactElement {
   const tone = toolProfileTone(profile);
-  const className =
-    tone === "bad"
-      ? "text-[var(--bad)]"
-      : tone === "warning"
-        ? "text-[var(--warn)]"
-        : "text-[var(--fg-mute)]";
+  const className = tone === "bad" ? "text-bad" : tone === "warning" ? "text-warn" : "text-fg-mute";
   return (
     <span className={cn("inline-flex items-center gap-1", className)}>
       {tone === "bad" ? <AlertTriangle size={11} strokeWidth={1.75} /> : null}
@@ -1089,9 +1077,9 @@ function ToolProfileText({
 
 function CalloutWarning({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
-    <div className="mb-5 flex gap-2.5 rounded-md border border-[var(--warn)]/40 bg-[var(--warn)]/[0.07] p-3">
-      <AlertTriangle size={15} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--warn)]" />
-      <p className="text-xs leading-5 text-[var(--fg-dim)]">{children}</p>
+    <div className="mb-5 flex gap-2.5 rounded-md border border-warn/40 bg-warn/[0.07] p-3">
+      <AlertTriangle size={15} strokeWidth={1.75} className="mt-0.5 shrink-0 text-warn" />
+      <p className="text-xs leading-5 text-fg-dim">{children}</p>
     </div>
   );
 }
@@ -1102,15 +1090,15 @@ function RunHistory({ runs }: { runs: RoutineRunRecord[] }): React.ReactElement 
   }
   return (
     <div className="space-y-2">
-      <p className="text-2xs leading-5 text-[var(--fg-mute)]">
-        <span className="font-medium text-[var(--fg-dim)]">Run status</span> is the infrastructure
-        outcome (did the session start and exit cleanly).{" "}
-        <span className="font-medium text-[var(--fg-dim)]">Task status</span> is whether the
-        routine's work succeeded — a completed run can still need review. Open a session to confirm.
+      <p className="text-2xs leading-5 text-fg-mute">
+        <span className="font-medium text-fg-dim">Run status</span> is the infrastructure outcome
+        (did the session start and exit cleanly).{" "}
+        <span className="font-medium text-fg-dim">Task status</span> is whether the routine's work
+        succeeded — a completed run can still need review. Open a session to confirm.
       </p>
-      <div className="divide-y divide-[var(--hairline)] overflow-hidden rounded-md border border-[var(--hairline)]">
+      <div className="divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
         {runs.map((run) => (
-          <article key={run.id} className="bg-[var(--surface)] p-3">
+          <article key={run.id} className="bg-surface p-3">
             <div className="flex flex-wrap items-center gap-2">
               <span title="Infrastructure status">
                 <RunStatusBadge status={run.status} />
@@ -1118,14 +1106,12 @@ function RunHistory({ runs }: { runs: RoutineRunRecord[] }): React.ReactElement 
               <span title="Task outcome">
                 <TaskStatusChip status={run.taskStatus} runStatus={run.status} />
               </span>
-              <span className="font-mono text-2xs text-[var(--fg-mute)]">
-                v{run.routineVersion}
-              </span>
-              <span className="ml-auto font-mono text-2xs text-[var(--fg-mute)]">
+              <span className="font-mono text-2xs text-fg-mute">v{run.routineVersion}</span>
+              <span className="ml-auto font-mono text-2xs text-fg-mute">
                 {formatDateTime(run.startedAt)}
               </span>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-2xs text-[var(--fg-mute)]">
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-2xs text-fg-mute">
               <span className="truncate">run {run.id}</span>
               {run.finishedAt ? <span>finished {formatDateTime(run.finishedAt)}</span> : null}
               <span>
@@ -1160,36 +1146,36 @@ function ArtifactList({ artifacts }: { artifacts: RoutineArtifactRecord[] }): Re
         return (
           <article
             key={artifact.id}
-            className="overflow-hidden rounded-md border border-[var(--hairline)] bg-[var(--surface)]"
+            className="overflow-hidden rounded-md border border-hairline bg-surface"
           >
             <button
               type="button"
               onClick={() => setOpenId(open ? null : artifact.id)}
-              className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5 text-left hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+              className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5 text-left hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Badge tone={artifact.validationStatus === "valid" ? "ready" : "bad"}>
                 {artifact.validationStatus}
               </Badge>
               <TaskStatusChip status={artifact.taskStatus} runStatus="completed" />
-              <span className="font-mono text-xs text-[var(--fg-dim)]">
+              <span className="font-mono text-xs text-fg-dim">
                 {artifact.schemaName}@{artifact.schemaVersion}
               </span>
-              <span className="ml-auto font-mono text-2xs text-[var(--fg-mute)]">
+              <span className="ml-auto font-mono text-2xs text-fg-mute">
                 {formatDateTime(artifact.createdAt)}
               </span>
             </button>
             {open ? (
-              <div className="border-t border-[var(--hairline)] p-3">
-                <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-2xs text-[var(--fg-mute)]">
+              <div className="border-t border-hairline p-3">
+                <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-2xs text-fg-mute">
                   <span className="truncate">artifact {artifact.id}</span>
                   {artifact.dedupeKey ? <span>dedupe {artifact.dedupeKey}</span> : null}
                   <SessionRef label="session" sessionId={artifact.sessionId} />
                 </div>
-                <p className="label-eyebrow text-[var(--fg-mute)]">payload</p>
+                <p className="label-eyebrow text-fg-mute">payload</p>
                 <JsonBlock value={artifact.payload} className="mt-1.5 max-h-96" />
                 {artifact.sourceRefs.length > 0 ? (
                   <>
-                    <p className="mt-3 label-eyebrow text-[var(--fg-mute)]">
+                    <p className="mt-3 label-eyebrow text-fg-mute">
                       source refs ({artifact.sourceRefs.length})
                     </p>
                     <JsonBlock value={artifact.sourceRefs} className="mt-1.5 max-h-72" />
@@ -1219,10 +1205,10 @@ function RunNowDialog({
 }): React.ReactElement {
   return (
     <Dialog open={state.open} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="max-w-2xl border-[var(--hairline)] bg-[var(--surface)] text-[var(--fg)]">
+      <DialogContent className="max-w-2xl border-hairline bg-surface text-fg">
         <DialogHeader>
           <DialogTitle className="text-md">Run {routine?.name ?? "routine"}</DialogTitle>
-          <DialogDescription className="text-sm text-[var(--fg-dim)]">
+          <DialogDescription className="text-sm text-fg-dim">
             Provide structured JSON input. It is merged over the routine default input and validated
             against the input schema before the run starts.
           </DialogDescription>
@@ -1237,7 +1223,7 @@ function RunNowDialog({
         ) : null}
 
         <div className="space-y-2">
-          <span className="label-eyebrow text-[var(--fg-mute)]">input json</span>
+          <span className="label-eyebrow text-fg-mute">input json</span>
           <Textarea
             value={state.inputText}
             onChange={(event) => onInputChange(event.target.value)}
@@ -1284,10 +1270,10 @@ function ScheduleDialog({
 }): React.ReactElement {
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="max-w-xl border-[var(--hairline)] bg-[var(--surface)] text-[var(--fg)]">
+      <DialogContent className="max-w-xl border-hairline bg-surface text-fg">
         <DialogHeader>
           <DialogTitle className="text-md">Schedule routine</DialogTitle>
-          <DialogDescription className="text-sm text-[var(--fg-dim)]">
+          <DialogDescription className="text-sm text-fg-dim">
             Adds a recurring trigger that runs this routine locally through the shared scheduler.
             The minimum interval is one hour.
           </DialogDescription>
@@ -1454,12 +1440,12 @@ function RoutineEditorDialog({
 }): React.ReactElement {
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="max-h-[88dvh] max-w-3xl overflow-y-auto border-[var(--hairline)] bg-[var(--surface)] text-[var(--fg)]">
+      <DialogContent className="max-h-[88dvh] max-w-3xl overflow-y-auto border-hairline bg-surface text-fg">
         <DialogHeader>
           <DialogTitle className="text-md">
             {mode === "create" ? "New routine" : `Edit ${initialValues.name || initialValues.id}`}
           </DialogTitle>
-          <DialogDescription className="text-sm text-[var(--fg-dim)]">
+          <DialogDescription className="text-sm text-fg-dim">
             Fields validate as you edit; the server re-validates against the same rules as the CLI.
             Schema, default input, pre-run steps, and publication policy accept JSON.
           </DialogDescription>
@@ -1762,7 +1748,7 @@ function renderJsonField(field: AnyFieldApi, label: string): React.ReactElement 
         aria-invalid={hasError(field.state.meta)}
         className={cn(
           "min-h-24 font-mono text-xs",
-          hasError(field.state.meta) && "border-[var(--bad)]/60 focus-visible:ring-[var(--bad)]",
+          hasError(field.state.meta) && "border-bad/60 focus-visible:ring-bad",
         )}
       />
     </FormField>
@@ -1780,16 +1766,14 @@ function RunResultPanel({ result }: { result: RoutineRunResult }): React.ReactEl
   return (
     <div
       className={cn(
-        "rounded-md border p-3 text-sm text-[var(--fg-dim)]",
-        ok
-          ? "border-[var(--good)]/30 bg-[var(--good)]/[0.06]"
-          : "border-[var(--bad)]/40 bg-[var(--bad)]/[0.06]",
+        "rounded-md border p-3 text-sm text-fg-dim",
+        ok ? "border-good/30 bg-good/[0.06]" : "border-bad/40 bg-bad/[0.06]",
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={ok ? "ready" : "bad"}>{result.status}</Badge>
-        <span className="font-mono text-2xs text-[var(--fg-mute)]">task: {taskStatus}</span>
-        <span className="font-mono text-2xs text-[var(--fg-mute)]">
+        <span className="font-mono text-2xs text-fg-mute">task: {taskStatus}</span>
+        <span className="font-mono text-2xs text-fg-mute">
           {artifactCount} artifact{artifactCount === 1 ? "" : "s"}
         </span>
       </div>
@@ -1816,18 +1800,18 @@ function SessionRef({
     return null;
   }
   return (
-    <span className="inline-flex items-center gap-1 font-mono text-2xs text-[var(--fg-mute)]">
+    <span className="inline-flex items-center gap-1 font-mono text-2xs text-fg-mute">
       <span>{label}</span>
       {linkable ? (
         <Link
           to="/chat/$sessionId"
           params={{ sessionId }}
-          className="truncate text-[var(--accent)] hover:underline"
+          className="truncate text-accent hover:underline"
         >
           {sessionId}
         </Link>
       ) : (
-        <span className="truncate text-[var(--fg-dim)]">{sessionId}</span>
+        <span className="truncate text-fg-dim">{sessionId}</span>
       )}
     </span>
   );
@@ -1848,8 +1832,8 @@ function Section({
     <section className="mb-5">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          {icon ? <span className="text-[var(--fg-mute)]">{icon}</span> : null}
-          <h3 className="label-eyebrow text-[var(--fg-mute)]">{title}</h3>
+          {icon ? <span className="text-fg-mute">{icon}</span> : null}
+          <h3 className="label-eyebrow text-fg-mute">{title}</h3>
         </div>
         {action ?? null}
       </div>
@@ -1869,17 +1853,12 @@ function MetaCell({
   value: string;
   tone?: "default" | "warning" | "bad";
 }): React.ReactElement {
-  const valueClass =
-    tone === "bad"
-      ? "text-[var(--bad)]"
-      : tone === "warning"
-        ? "text-[var(--warn)]"
-        : "text-[var(--fg)]";
+  const valueClass = tone === "bad" ? "text-bad" : tone === "warning" ? "text-warn" : "text-fg";
   return (
-    <div className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] px-3 py-3">
+    <div className="rounded-md border border-hairline bg-surface px-3 py-3">
       <div className="flex items-center gap-2">
-        <span className="text-[var(--fg-mute)]">{icon}</span>
-        <span className="label-eyebrow text-[var(--fg-mute)]">{label}</span>
+        <span className="text-fg-mute">{icon}</span>
+        <span className="label-eyebrow text-fg-mute">{label}</span>
       </div>
       <p className={cn("mt-2 truncate font-mono text-xs", valueClass)} title={value}>
         {value}
@@ -1898,7 +1877,7 @@ function JsonBlock({
   return (
     <pre
       className={cn(
-        "max-h-80 overflow-auto rounded-md border border-[var(--hairline)] bg-[var(--surface)] p-3 text-xs leading-5 text-[var(--fg)]",
+        "max-h-80 overflow-auto rounded-md border border-hairline bg-surface p-3 text-xs leading-5 text-fg",
         className,
       )}
     >
@@ -1909,7 +1888,7 @@ function JsonBlock({
 
 function EmptyNote({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
-    <p className="rounded-md border border-dashed border-[var(--hairline)] px-3 py-2.5 text-xs text-[var(--fg-mute)]">
+    <p className="rounded-md border border-dashed border-hairline px-3 py-2.5 text-xs text-fg-mute">
       {children}
     </p>
   );
@@ -1945,7 +1924,7 @@ function TaskStatusChip({
 }): React.ReactElement {
   if (status === null) {
     return (
-      <span className="font-mono text-2xs text-[var(--fg-mute)]">
+      <span className="font-mono text-2xs text-fg-mute">
         {runStatus === "running" ? "task pending" : "no task status"}
       </span>
     );
@@ -1963,18 +1942,16 @@ function TaskStatusChip({
 
 function ErrorBlock({ label, message }: { label: string; message: string }): React.ReactElement {
   return (
-    <div className="rounded-md border border-[var(--bad)]/40 bg-[var(--bad)]/[0.06] p-3">
-      <p className="font-mono text-xs text-[var(--bad)]">{label}</p>
-      <p className="mt-1 text-sm text-[var(--fg-dim)]">{message}</p>
+    <div className="rounded-md border border-bad/40 bg-bad/[0.06] p-3">
+      <p className="font-mono text-xs text-bad">{label}</p>
+      <p className="mt-1 text-sm text-fg-dim">{message}</p>
     </div>
   );
 }
 
 function InlineError({ message }: { message: string }): React.ReactElement {
   return (
-    <p className="mt-2 rounded-sm bg-[var(--bad)]/10 px-2 py-1.5 font-mono text-2xs text-[var(--bad)]">
-      {message}
-    </p>
+    <p className="mt-2 rounded-sm bg-bad/10 px-2 py-1.5 font-mono text-2xs text-bad">{message}</p>
   );
 }
 
@@ -1982,10 +1959,7 @@ function RoutineListSkeleton(): React.ReactElement {
   return (
     <div className="flex flex-col gap-2">
       {Array.from({ length: 8 }).map((_, index) => (
-        <div
-          key={index}
-          className="rounded-md border border-[var(--hairline)] bg-[var(--surface)] px-3 py-3"
-        >
+        <div key={index} className="rounded-md border border-hairline bg-surface px-3 py-3">
           <Skeleton className={cn("h-4", index % 2 === 0 ? "w-4/5" : "w-2/3")} />
           <Skeleton className="mt-3 h-3 w-1/2" />
         </div>

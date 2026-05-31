@@ -32,7 +32,7 @@ export type QueueItemProps = ComponentProps<"li">;
 export const QueueItem = ({ className, ...props }: QueueItemProps) => (
   <li
     className={cn(
-      "group flex flex-col gap-1 rounded-md px-3 py-1 text-base transition-colors hover:bg-muted",
+      "group flex flex-col gap-1 rounded-md px-3 py-1 text-base transition-colors hover:bg-surface-2",
       className,
     )}
     {...props}
@@ -51,9 +51,7 @@ export const QueueItemIndicator = ({
   <span
     className={cn(
       "mt-0.5 inline-block size-2.5 rounded-full border",
-      completed
-        ? "border-muted-foreground/20 bg-muted-foreground/10"
-        : "border-muted-foreground/50",
+      completed ? "border-fg-mute/20 bg-fg-mute/10" : "border-fg-mute/50",
       className,
     )}
     {...props}
@@ -72,7 +70,7 @@ export const QueueItemContent = ({
   <span
     className={cn(
       "line-clamp-1 grow break-words",
-      completed ? "text-muted-foreground/50 line-through" : "text-muted-foreground",
+      completed ? "text-fg-mute/50 line-through" : "text-fg-mute",
       className,
     )}
     {...props}
@@ -91,7 +89,7 @@ export const QueueItemDescription = ({
   <div
     className={cn(
       "ml-6 text-xs",
-      completed ? "text-muted-foreground/40 line-through" : "text-muted-foreground",
+      completed ? "text-fg-mute/40 line-through" : "text-fg-mute",
       className,
     )}
     {...props}
@@ -109,7 +107,7 @@ export type QueueItemActionProps = Omit<ComponentProps<typeof Button>, "variant"
 export const QueueItemAction = ({ className, ...props }: QueueItemActionProps) => (
   <Button
     className={cn(
-      "size-auto rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted-foreground/10 hover:text-foreground group-hover:opacity-100",
+      "size-auto rounded p-1 text-fg-mute opacity-0 transition-opacity hover:bg-fg-mute/10 hover:text-fg group-hover:opacity-100",
       className,
     )}
     size="icon"
@@ -141,7 +139,10 @@ export type QueueItemFileProps = ComponentProps<"span">;
 
 export const QueueItemFile = ({ children, className, ...props }: QueueItemFileProps) => (
   <span
-    className={cn("flex items-center gap-1 rounded border bg-muted px-2 py-1 text-xs", className)}
+    className={cn(
+      "flex items-center gap-1 rounded border bg-surface-2 px-2 py-1 text-xs",
+      className,
+    )}
     {...props}
   >
     <PaperclipIcon size={12} />
@@ -175,7 +176,7 @@ export const QueueSectionTrigger = ({
   <CollapsibleTrigger asChild>
     <button
       className={cn(
-        "group flex w-full items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-left font-medium text-muted-foreground text-base transition-colors hover:bg-muted",
+        "group flex w-full items-center justify-between rounded-md bg-surface-2/40 px-3 py-2 text-left font-medium text-fg-mute text-base transition-colors hover:bg-surface-2",
         className,
       )}
       type="button"
@@ -219,7 +220,7 @@ export type QueueProps = ComponentProps<"div">;
 export const Queue = ({ className, ...props }: QueueProps) => (
   <div
     className={cn(
-      "flex flex-col gap-2 rounded-xl border border-border bg-background px-3 pt-2 pb-2 shadow-xs",
+      "flex flex-col gap-2 rounded-xl border border-hairline bg-bg px-3 pt-2 pb-2 shadow-xs",
       className,
     )}
     {...props}
