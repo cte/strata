@@ -582,6 +582,62 @@ export function clientId(prefix: string): string {
   return `${prefix}-${globalThis.crypto.randomUUID()}`;
 }
 
+export interface FriendlyChatError {
+  title: string;
+  message: string;
+  requestId: string | null;
+  retryable: boolean;
+}
+
+export function friendlyChatError(rawMessage: string): FriendlyChatError {
+  const parsed = parseModelHttpError(rawMessage);
+  if (parsed !== null) {
+    const title =
+      parsed.status === 429
+        ? "Model rate limit reached"
+        : parsed.provider === "Anthropic"
+          ? "Anthropic request failed"
+          : "Model request failed";
+    return {
+      title,
+      message: parsed.detail,
+      requestId: parsed.requestId,
+      retryable: parsed.status === 429 || parsed.status >= 500,
+    };
+  }
+  return {
+    title: "Run failed",
+    message: rawMessage,
+    requestId: null,
+    retryable:
+      /\b(408|409|429|500|502|503|504)\b|rate.?limit|too many requests|overloaded|service.?unavailable/i.test(
+        rawMessage,
+      ),
+  };
+}
+
+function parseModelHttpError(
+  rawMessage: string,
+): { provider: string; status: number; detail: string; requestId: string | null } | null {
+  const match =
+    /^(?<provider>Anthropic|Model|Codex) request failed with HTTP (?<status>\d{3})(?: \((?<type>[^)]+)\))?: (?<detail>[\s\S]*?)(?: \(request (?<requestId>[^)]+)\))?$/.exec(
+      rawMessage,
+    );
+  if (match?.groups === undefined) {
+    return null;
+  }
+  const status = Number.parseInt(match.groups.status ?? "", 10);
+  if (!Number.isFinite(status)) {
+    return null;
+  }
+  return {
+    provider: match.groups.provider ?? "Model",
+    status,
+    detail: match.groups.detail ?? rawMessage,
+    requestId: match.groups.requestId ?? null,
+  };
+}
+
 export function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }

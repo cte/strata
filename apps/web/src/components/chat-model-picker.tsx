@@ -1,4 +1,4 @@
-import { Check, ChevronDown, LoaderCircle, Plug } from "lucide-react";
+import { Brain, Check, ChevronDown, LoaderCircle, Plug } from "lucide-react";
 import type * as React from "react";
 import { useState } from "react";
 import {
@@ -109,19 +109,11 @@ export function ChatModelPicker({
             ))}
           </ModelSelectorList>
           <ModelSelectorSeparator />
-          <ReasoningEffortSelector
+          <PickerFooter
             currentEffort={currentEffort}
             onReasoningEffortChange={onReasoningEffortChange}
+            onManageProviders={openProviderAuth}
           />
-          <ModelSelectorSeparator />
-          <button
-            type="button"
-            onClick={openProviderAuth}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-fg-dim transition-colors hover:bg-surface-2 hover:text-fg"
-          >
-            <Plug size={13} strokeWidth={1.75} className="shrink-0" />
-            Manage providers…
-          </button>
         </ModelSelectorContent>
       </ModelSelector>
       <ModelAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
@@ -205,38 +197,53 @@ function ProviderModelGroup({
   );
 }
 
-function ReasoningEffortSelector({
+function PickerFooter({
   currentEffort,
   onReasoningEffortChange,
+  onManageProviders,
 }: {
   currentEffort: ChatReasoningEffort;
   onReasoningEffortChange(effort: ChatReasoningEffort): void;
+  onManageProviders(): void;
 }): React.ReactElement {
   return (
-    <div className="p-2">
-      <div className="mb-1.5 text-2xs font-medium tracking-[0.14em] text-fg-mute uppercase">
-        reasoning
+    <div className="flex items-center justify-between gap-3 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <Brain
+          size={14}
+          strokeWidth={1.75}
+          aria-label="Reasoning"
+          className="shrink-0 text-fg-mute"
+        />
+        <div className="flex items-center gap-0.5 rounded-md bg-surface-2 p-0.5">
+          {CHAT_REASONING_EFFORTS.map((effort) => {
+            const selected = currentEffort === effort;
+            return (
+              <button
+                key={effort}
+                type="button"
+                aria-pressed={selected}
+                className={cn(
+                  "rounded px-2 py-1 font-mono text-2xs transition-colors duration-100",
+                  selected ? "bg-surface text-fg shadow-sm" : "text-fg-dim hover:text-fg",
+                )}
+                onClick={() => onReasoningEffortChange(effort)}
+              >
+                {REASONING_LABELS[effort]}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      <div className="grid grid-cols-6 gap-1">
-        {CHAT_REASONING_EFFORTS.map((effort) => {
-          const selected = currentEffort === effort;
-          return (
-            <button
-              key={effort}
-              type="button"
-              className={cn(
-                "h-7 rounded border px-1 text-center font-mono text-2xs transition-colors duration-100",
-                selected
-                  ? "border-accent bg-accent-soft text-fg"
-                  : "border-hairline text-fg-dim hover:border-fg-mute hover:text-fg",
-              )}
-              onClick={() => onReasoningEffortChange(effort)}
-            >
-              {REASONING_LABELS[effort]}
-            </button>
-          );
-        })}
-      </div>
+      <button
+        type="button"
+        onClick={onManageProviders}
+        aria-label="Manage providers"
+        title="Manage providers"
+        className="shrink-0 text-fg-mute transition-colors hover:text-fg"
+      >
+        <Plug size={14} strokeWidth={1.75} />
+      </button>
     </div>
   );
 }

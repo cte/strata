@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeChoice, parseStoredChatModelChoice } from "../useChatModelChoice.js";
+import {
+  choiceFromSessionModel,
+  normalizeChoice,
+  parseStoredChatModelChoice,
+} from "../useChatModelChoice.js";
 
 describe("chat model choice", () => {
   test("parses valid localStorage choices only", () => {
@@ -68,5 +72,37 @@ describe("chat model choice", () => {
         anthropicApiKeyConfigured: false,
       }),
     ).toBe(stored);
+  });
+
+  test("derives a picker choice from provider-prefixed session model names", () => {
+    expect(choiceFromSessionModel("anthropic-claude:claude-sonnet-4-6", [], "low")).toEqual({
+      provider: "anthropic-claude",
+      model: "claude-sonnet-4-6",
+      reasoningEffort: "low",
+    });
+  });
+
+  test("derives a picker choice from provider model lists", () => {
+    expect(
+      choiceFromSessionModel(
+        "gpt-5.5",
+        [
+          {
+            provider: "openai-compatible",
+            models: [{ id: "gpt-5.5", description: "" }],
+          },
+        ],
+        "medium",
+        {
+          provider: "anthropic-claude",
+          model: "claude-sonnet-4-6",
+          reasoningEffort: "low",
+        },
+      ),
+    ).toEqual({
+      provider: "openai-compatible",
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+    });
   });
 });

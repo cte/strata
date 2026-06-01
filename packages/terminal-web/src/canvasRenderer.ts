@@ -23,6 +23,9 @@ interface SelectionPoint {
 /** Extra rows drawn beyond the viewport so quick scrolls stay filled. */
 const OVERSCAN_ROWS = 2;
 
+/** Inner gap (px) between the terminal text and the container edges. */
+const CONTENT_PADDING = 8;
+
 /**
  * Canvas terminal renderer. Mirrors libghostty/ghostty-web's approach: the cell
  * grid (the heavy lifting) lives in libghostty; this draws the authoritative
@@ -161,8 +164,8 @@ export class TerminalCanvasRenderer {
 
   measureFit(fallback: { cols: number; rows: number }): { cols: number; rows: number } {
     if (this.root === null || this.cellWidth <= 0 || this.cellHeight <= 0) return fallback;
-    const innerWidth = this.root.clientWidth;
-    const innerHeight = this.root.clientHeight;
+    const innerWidth = this.root.clientWidth - 2 * CONTENT_PADDING;
+    const innerHeight = this.root.clientHeight - 2 * CONTENT_PADDING;
     if (innerWidth <= 0 || innerHeight <= 0) return fallback;
     return {
       cols: Math.max(2, Math.floor(innerWidth / this.cellWidth)),
@@ -235,18 +238,20 @@ export class TerminalCanvasRenderer {
 
     const scrollbackLen = snapshot.scrollbackCells.length;
     const totalRows = scrollbackLen + snapshot.cells.length;
-    const totalHeight = totalRows * this.cellHeight;
+    // Content height includes top + bottom padding so the scroll range and the
+    // gap below the last row both account for the inset.
+    const contentHeight = totalRows * this.cellHeight + 2 * CONTENT_PADDING;
 
     const clientWidth = root.clientWidth;
-    const clientHeight = root.clientHeight || totalHeight;
+    const clientHeight = root.clientHeight || contentHeight;
 
     // Measure "pinned to the bottom?" against the CURRENT (pre-growth) scroll
     // state — before resizing the spacer — so newly-arrived output keeps us
     // following the bottom the way a real terminal does.
     const follow = root.scrollHeight - root.scrollTop - root.clientHeight <= this.cellHeight + 1;
 
-    sizer.style.height = `${totalHeight}px`;
-    const scrollTop = follow ? Math.max(0, totalHeight - clientHeight) : root.scrollTop;
+    sizer.style.height = `${contentHeight}px`;
+    const scrollTop = follow ? Math.max(0, contentHeight - clientHeight) : root.scrollTop;
 
     // Keep the (absolutely positioned) canvas pinned over the viewport.
     canvas.style.top = `${scrollTop}px`;
@@ -279,10 +284,14 @@ export class TerminalCanvasRenderer {
     this.lastCanvasWidth = pixelWidth;
     this.lastCanvasHeight = pixelHeight;
 
-    const firstRow = Math.max(0, Math.floor(scrollTop / this.cellHeight) - OVERSCAN_ROWS);
+    // Content row R spans [R*cellHeight + CONTENT_PADDING, …] in content space.
+    const firstRow = Math.max(
+      0,
+      Math.floor((scrollTop - CONTENT_PADDING) / this.cellHeight) - OVERSCAN_ROWS,
+    );
     const lastRow = Math.min(
       totalRows - 1,
-      Math.ceil((scrollTop + clientHeight) / this.cellHeight) + OVERSCAN_ROWS,
+      Math.ceil((scrollTop + clientHeight - CONTENT_PADDING) / this.cellHeight) + OVERSCAN_ROWS,
     );
     const cursorRow = scrollbackLen + snapshot.cursor.y;
 
@@ -327,7 +336,7 @@ export class TerminalCanvasRenderer {
     cursorRow: number,
   ): void {
     const theme = this.options.theme;
-    const y = row * this.cellHeight - scrollTop;
+    const y = row * this.cellHeight + CONTENT_PADDING - scrollTop;
     const transparent = (this.options.rootBackground ?? theme.background) === "transparent";
 
     // Clear the whole row first so wide glyphs are never clipped by a neighbor.
@@ -346,7 +355,7 @@ export class TerminalCanvasRenderer {
       const cell = cells?.[x];
       const isCursor = x === snapshot.cursor.x && row === cursorRow;
       const colors = resolveColors(cell?.style, theme, isCursor);
-      const cx = x * this.cellWidth;
+      const cx = CONTENT_PADDING + x * this.cellWidth;
 
       if (colors.background !== null) {
         ctx.fillStyle = colors.background;
@@ -443,8 +452,8 @@ export class TerminalCanvasRenderer {
     if (root === null || snapshot === null || this.cellWidth <= 0) return null;
     const rect = root.getBoundingClientRect();
     const totalRows = snapshot.scrollbackCells.length + snapshot.cells.length;
-    const x = event.clientX - rect.left + root.scrollLeft;
-    const yPx = event.clientY - rect.top + root.scrollTop;
+    const x = event.clientX - rect.left + root.scrollLeft - CONTENT_PADDING;
+    const yPx = event.clientY - rect.top + root.scrollTop - CONTENT_PADDING;
     const row = Math.max(0, Math.min(totalRows - 1, Math.floor(yPx / this.cellHeight)));
     const col = Math.max(0, Math.min(snapshot.cols, Math.floor(x / this.cellWidth)));
     return { row, col };

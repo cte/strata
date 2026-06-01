@@ -3,6 +3,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  HeadContent,
   Link,
   Outlet,
   useMatchRoute,
@@ -17,7 +18,6 @@ import {
   ListTodo,
   MessageSquare,
   Network,
-  Plus,
   Workflow,
 } from "lucide-react";
 
@@ -25,15 +25,7 @@ import type * as React from "react";
 import { useCallback, useEffect, useState } from "react";
 import { ChatSessionListBody, useDeleteChatSession } from "@/components/chat-session-list";
 import { NotFound } from "@/components/not-found";
-import {
-  CommandDialog,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-  CommandShortcut,
-} from "@/components/ui/command";
+import { CommandDialog, CommandInput, CommandList } from "@/components/ui/command";
 import {
   Sidebar,
   SidebarContent,
@@ -71,6 +63,15 @@ import { SettingsMcpsPage } from "@/routes/settings-mcps";
 import { WikiPage } from "@/routes/wiki";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "strata:sidebar:collapsed";
+const APP_TITLE = "Strata";
+
+function pageTitle(...sections: string[]): string {
+  return sections.length === 0 ? APP_TITLE : [...sections, APP_TITLE].join(" · ");
+}
+
+function titleHead(...sections: string[]): { meta: [{ title: string }] } {
+  return { meta: [{ title: pageTitle(...sections) }] };
+}
 
 function RootLayout(): React.ReactElement {
   const queryClient = useQueryClient();
@@ -97,24 +98,42 @@ function RootLayout(): React.ReactElement {
   );
 
   return (
-    <WebAuthGate>
-      <ChatSessionCommandPaletteContext.Provider value={openCommandPalette}>
-        <SidebarProvider
-          open={!sidebarCollapsed}
-          onOpenChange={handleSidebarOpenChange}
-          style={{ "--sidebar-width": "13rem" } as React.CSSProperties}
-        >
-          <AppSidebar />
-          <ChatSessionCommandPalette open={commandPaletteOpen} setOpen={setCommandPaletteOpen} />
-          <SidebarInset>
-            <TopRail />
-            <main className="min-w-0 px-6 py-8 md:px-10 md:py-10">
-              <Outlet />
-            </main>
-          </SidebarInset>
-        </SidebarProvider>
-      </ChatSessionCommandPaletteContext.Provider>
-    </WebAuthGate>
+    <>
+      <HeadContent />
+      <WebAuthGate>
+        <ChatSessionCommandPaletteContext.Provider value={openCommandPalette}>
+          <SidebarProvider
+            open={!sidebarCollapsed}
+            onOpenChange={handleSidebarOpenChange}
+            style={{ "--sidebar-width": "13rem" } as React.CSSProperties}
+          >
+            <AppSidebar />
+            <ChatSessionCommandPalette open={commandPaletteOpen} setOpen={setCommandPaletteOpen} />
+            <SidebarInset>
+              <TopRail />
+              <main className="min-w-0 px-6 py-8 md:px-10 md:py-10">
+                <Outlet />
+              </main>
+            </SidebarInset>
+          </SidebarProvider>
+        </ChatSessionCommandPaletteContext.Provider>
+      </WebAuthGate>
+    </>
+  );
+}
+
+const navGroupLabel =
+  "gap-2.5 px-2 text-2xs font-medium uppercase tracking-[0.13em] text-sidebar-foreground/40";
+
+function NavGroupLabel({ children }: { children: React.ReactNode }): React.ReactElement {
+  return (
+    <SidebarGroupLabel className={navGroupLabel}>
+      <span className="shrink-0">{children}</span>
+      <span
+        aria-hidden="true"
+        className="h-px flex-1 bg-sidebar-foreground/10 group-data-[collapsible=icon]:hidden"
+      />
+    </SidebarGroupLabel>
   );
 }
 
@@ -123,7 +142,7 @@ function AppSidebar(): React.ReactElement {
     <Sidebar collapsible="icon" className="border-r border-hairline">
       <SidebarContent className="gap-0 pt-2">
         <SidebarGroup>
-          <SidebarGroupLabel>Work</SidebarGroupLabel>
+          <NavGroupLabel>Work</NavGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <ChatNavItem />
@@ -133,7 +152,7 @@ function AppSidebar(): React.ReactElement {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Knowledge Base</SidebarGroupLabel>
+          <NavGroupLabel>Knowledge Base</NavGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <NavItem to="/wiki" label="Wiki" icon={BookOpen} />
@@ -143,7 +162,7 @@ function AppSidebar(): React.ReactElement {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Operations</SidebarGroupLabel>
+          <NavGroupLabel>Operations</NavGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <NavItem to="/activity" label="Activity" icon={Activity} />
@@ -154,7 +173,7 @@ function AppSidebar(): React.ReactElement {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Connections</SidebarGroupLabel>
+          <NavGroupLabel>Connections</NavGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <NavItem to="/connectors" label="Connectors" icon={GitPullRequest} />
@@ -206,7 +225,7 @@ function NavItem({
           {isActive ? (
             <span
               aria-hidden="true"
-              className="ml-auto h-1.5 w-1.5 rounded-full bg-accent group-data-[collapsible=icon]:hidden"
+              className="ml-auto h-1.5 w-1.5 rounded-full bg-selection shadow-[0_0_0_3px_color-mix(in_srgb,var(--selection)_22%,transparent)] group-data-[collapsible=icon]:hidden"
             />
           ) : null}
         </Link>
@@ -264,7 +283,7 @@ function ChatNavItem(): React.ReactElement {
           {isActive ? (
             <span
               aria-hidden="true"
-              className="ml-auto h-1.5 w-1.5 rounded-full bg-accent group-data-[collapsible=icon]:hidden"
+              className="ml-auto h-1.5 w-1.5 rounded-full bg-selection shadow-[0_0_0_3px_color-mix(in_srgb,var(--selection)_22%,transparent)] group-data-[collapsible=icon]:hidden"
             />
           ) : null}
         </Link>
@@ -312,16 +331,6 @@ function ChatSessionCommandPalette({
     [navigate, setOpen, setSearchQuery],
   );
 
-  const handleNewChat = useCallback(() => {
-    setOpen(false);
-    setSearchQuery("");
-    void navigate({ to: "/chat" });
-  }, [navigate, setOpen, setSearchQuery]);
-
-  // Only surface the "New chat" action on an empty query, so typing keeps the
-  // first matching session highlighted (Enter opens it, not a new chat).
-  const showNewChat = searchQuery.trim() === "";
-
   return (
     <CommandDialog
       commandProps={{ shouldFilter: false }}
@@ -334,19 +343,7 @@ function ChatSessionCommandPalette({
         onValueChange={setSearchQuery}
         placeholder="Search chat sessions..."
       />
-      <CommandList className="max-h-[min(420px,70dvh)]">
-        {showNewChat ? (
-          <>
-            <CommandGroup>
-              <CommandItem value="new-chat" onSelect={handleNewChat}>
-                <Plus size={14} strokeWidth={1.75} />
-                New chat
-                <CommandShortcut>⌘⇧O</CommandShortcut>
-              </CommandItem>
-            </CommandGroup>
-            <CommandSeparator />
-          </>
-        ) : null}
+      <CommandList className="max-h-[min(420px,70dvh)] px-2 py-2 [&_[cmdk-group]]:px-0">
         <ChatSessionListBody
           sessions={sessions}
           isLoaded={isLoaded}
@@ -374,12 +371,14 @@ function TopRail(): React.ReactElement {
 }
 
 const rootRoute = createRootRoute({
+  head: () => titleHead(),
   component: RootLayout,
 });
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  head: () => titleHead("Chat"),
   component: ChatPage,
   validateSearch: (search): { session?: string } => ({
     ...(typeof search.session === "string" && search.session.length > 0
@@ -391,78 +390,91 @@ const indexRoute = createRoute({
 const chatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/chat",
+  head: () => titleHead("Chat"),
   component: ChatPage,
 });
 
 const chatSessionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/chat/$sessionId",
+  head: () => titleHead("Chat"),
   component: ChatPage,
 });
 
 const wikiRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/wiki",
+  head: () => titleHead("Wiki"),
   component: WikiPage,
 });
 
 const activityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/activity",
+  head: () => titleHead("Activity"),
   component: ActivityPage,
 });
 
 const actionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/actions",
+  head: () => titleHead("Action Items"),
   component: ActionsPage,
 });
 
 const reviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/review",
+  head: () => titleHead("Review"),
   component: ReviewPage,
 });
 
 const routinesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/routines",
+  head: () => titleHead("Routines"),
   component: RoutinesPage,
 });
 
 const retrievalIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/index",
+  head: () => titleHead("Retrieval Index"),
   component: RetrievalIndexPage,
 });
 
 const connectorsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connectors",
+  head: () => titleHead("Connectors"),
   component: ConnectorsPage,
 });
 
 const connectorsNotionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connectors/notion",
+  head: () => titleHead("Notion", "Connectors"),
   component: ConnectorsNotionPage,
 });
 
 const connectorsGranolaRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connectors/granola",
+  head: () => titleHead("Granola", "Connectors"),
   component: ConnectorsGranolaPage,
 });
 
 const connectorsSlackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connectors/slack",
+  head: () => titleHead("Slack", "Connectors"),
   component: ConnectorsSlackPage,
 });
 
 const mcpsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/mcps",
+  head: () => titleHead("MCP"),
   component: SettingsMcpsPage,
 });
 

@@ -880,7 +880,17 @@ export const PromptInput = ({
         type="file"
       />
       <form className={cn("w-full", className)} onSubmit={handleSubmit} ref={formRef} {...props}>
-        <InputGroup className="overflow-hidden">{children}</InputGroup>
+        <InputGroup
+          className={cn(
+            "overflow-hidden",
+            // Teal border on focus plus a soft translucent teal ring as a glow.
+            "has-[[data-slot=input-group-control]:focus-visible]:border-selection",
+            "has-[[data-slot=input-group-control]:focus-visible]:ring-3",
+            "has-[[data-slot=input-group-control]:focus-visible]:ring-selection/25",
+          )}
+        >
+          {children}
+        </InputGroup>
       </form>
     </>
   );

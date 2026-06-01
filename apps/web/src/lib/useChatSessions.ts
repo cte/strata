@@ -7,7 +7,9 @@ export interface UseChatSessionsResult {
   searchQuery: string;
   setSearchQuery(value: string): void;
   sessions: ChatSessionSummary[];
+  allSessions: ChatSessionSummary[];
   isLoaded: boolean;
+  sessionIndexComplete: boolean;
   error: unknown;
   refresh(): void;
 }
@@ -19,9 +21,10 @@ export function useChatSessions(): UseChatSessionsResult {
     queryKey: ["chat", "sessions", "index"],
     queryFn: () => listChatSessions(CHAT_SESSION_INDEX_LIMIT),
   });
+  const allSessions = sessionsQuery.data ?? [];
   const sessions = useMemo(
-    () => filterChatSessionsClientSide(sessionsQuery.data ?? [], searchQuery),
-    [searchQuery, sessionsQuery.data],
+    () => filterChatSessionsClientSide(allSessions, searchQuery),
+    [allSessions, searchQuery],
   );
 
   const refresh = useCallback(() => {
@@ -32,7 +35,9 @@ export function useChatSessions(): UseChatSessionsResult {
     searchQuery,
     setSearchQuery,
     sessions,
+    allSessions,
     isLoaded: !sessionsQuery.isPending,
+    sessionIndexComplete: allSessions.length < CHAT_SESSION_INDEX_LIMIT,
     error: sessionsQuery.error,
     refresh,
   };

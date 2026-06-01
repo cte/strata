@@ -202,6 +202,40 @@ export function normalizeChoice(
   );
 }
 
+export function choiceFromSessionModel(
+  sessionModel: string | null,
+  providerStates: readonly Pick<ChatProviderModelState, "provider" | "models">[],
+  reasoningEffort: ChatReasoningEffort,
+  fallbackChoice: ChatModelChoice | null = null,
+): ChatModelChoice | null {
+  const parsed = parseSessionModelName(sessionModel);
+  if (parsed === null) {
+    return null;
+  }
+  if (parsed.provider !== null) {
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      reasoningEffort,
+    };
+  }
+  const matchedProvider = providerStates.find((state) =>
+    state.models.some((model) => model.id === parsed.model),
+  )?.provider;
+  const provider =
+    matchedProvider ??
+    (fallbackChoice?.model === parsed.model ? fallbackChoice.provider : null) ??
+    inferProviderFromModelName(parsed.model);
+  if (provider === null) {
+    return null;
+  }
+  return {
+    provider,
+    model: parsed.model,
+    reasoningEffort,
+  };
+}
+
 function choiceFromStatus(
   status: ChatModelStatus | null,
   reasoningEffort: ChatReasoningEffort,
@@ -221,9 +255,43 @@ function providerAvailable(provider: ChatProviderName, status: ChatModelStatus):
     return status.codexLoggedIn;
   }
   if (provider === "anthropic-claude") {
-    return status.anthropicLoggedIn;
+    return status.anthropicLoggedIn || status.anthropicApiKeyConfigured;
   }
   return status.apiKeyConfigured;
+}
+
+function parseSessionModelName(
+  raw: string | null,
+): { provider: ChatProviderName | null; model: string } | null {
+  const value = raw?.trim();
+  if (value === undefined || value === "") {
+    return null;
+  }
+  const separator = value.indexOf(":");
+  if (separator === -1) {
+    return { provider: null, model: value };
+  }
+  const prefix = value.slice(0, separator);
+  const model = value.slice(separator + 1);
+  if (!isProviderName(prefix) || model === "") {
+    return { provider: null, model: value };
+  }
+  return { provider: prefix, model };
+}
+
+function inferProviderFromModelName(model: string): ChatProviderName | null {
+  if (model.startsWith("claude-")) {
+    return "anthropic-claude";
+  }
+  if (
+    model.startsWith("gpt-") ||
+    model.startsWith("o1") ||
+    model.startsWith("o3") ||
+    model.startsWith("o4")
+  ) {
+    return "openai-codex";
+  }
+  return null;
 }
 
 function isProviderName(value: unknown): value is ChatProviderName {

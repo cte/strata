@@ -8,8 +8,6 @@ import type { ChatModelChoice } from "@/lib/useChatModelChoice";
 export interface UseChatRunOptions {
   /** Currently-selected session id from the URL (or null for a new chat). */
   urlSessionId: string | null;
-  /** Active model choice; passed on every `submit`. May be null while loading. */
-  selectedModelChoice: ChatModelChoice | null;
   /** Page-level navigation callback. Called with a session id when a new run starts a session, or null for `/clear`. */
   onSessionChange(sessionId: string | null, options?: { replace?: boolean }): void;
 }
@@ -18,6 +16,8 @@ export interface UseChatRunResult {
   /** Currently-loaded session id (lags `urlSessionId` while a load is in flight). */
   sessionId: string | null;
   sessionTitle: string | null;
+  sessionModel: string | null;
+  sessionLoaded: boolean;
   transcript: ChatMessageView[];
   runState: ChatRunState;
   /** A run is advancing this session in another process/tab (not streamed here). */
@@ -29,7 +29,7 @@ export interface UseChatRunResult {
   setError(message: string | null): void;
   usageTotals: TokenUsageTotals;
   /** Submit a new turn. No-op if the viewed session is mid-run or input is empty. */
-  submit(input: ChatSubmitInput): void;
+  submit(input: ChatSubmitInput, modelChoice: ChatModelChoice | null): void;
   /** Cancel the viewed session's active run if any. */
   cancel(): void;
   /** Start a fresh chat (the `/clear` slash command). */
@@ -49,7 +49,7 @@ export interface UseChatRunResult {
  * `urlSessionId` and binds actions to its key.
  */
 export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
-  const { urlSessionId, selectedModelChoice, onSessionChange } = options;
+  const { urlSessionId, onSessionChange } = options;
   const queryClient = useQueryClient();
   const runKey = urlSessionId ?? NEW_CHAT_KEY;
 
@@ -78,6 +78,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
       runKey,
       sessionId: urlSessionId,
       sessionTitle: null,
+      sessionModel: null,
       transcript: [],
       runState: "idle",
       activeRunId: null,
@@ -94,15 +95,15 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
   const view = state ?? fallback;
 
   const submit = useCallback(
-    (input: ChatSubmitInput) => {
+    (input: ChatSubmitInput, modelChoice: ChatModelChoice | null) => {
       chatRunsStore.submit({
         viewKey: runKey,
         input,
-        modelChoice: selectedModelChoice,
+        modelChoice,
         navigate: onSessionChange,
       });
     },
-    [runKey, selectedModelChoice, onSessionChange],
+    [runKey, onSessionChange],
   );
 
   const cancel = useCallback(() => {
@@ -135,6 +136,8 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
   return {
     sessionId: view.sessionId,
     sessionTitle: view.sessionTitle,
+    sessionModel: view.sessionModel,
+    sessionLoaded: view.loaded,
     transcript: view.transcript,
     runState: view.runState,
     externallyRunning: view.externallyRunning,

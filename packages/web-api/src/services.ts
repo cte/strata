@@ -24,6 +24,7 @@ import {
   listChatModels,
   listChatSessions,
   listChatSkills,
+  renameChatSession,
   searchChatSessions,
 } from "./chatServices.js";
 import {
@@ -139,6 +140,7 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
       }
       return deleteChatSession(input, getSessionStore);
     },
+    renameChatSession: (input) => renameChatSession(input, getSessionStore),
     searchChatSessions: (input) => searchChatSessions(input, getSessionStore),
     getWikiTree: (input) => getWikiTree(input, options),
     getWikiPage: (input) => getWikiPage(input, options),
@@ -238,6 +240,7 @@ export {
   listChatModels,
   listChatSessions,
   listChatSkills,
+  renameChatSession,
   searchChatSessions,
 } from "./chatServices.js";
 export {
