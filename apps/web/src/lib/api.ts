@@ -61,6 +61,7 @@ export type ChatSessionDetail = NonNullable<RouterOutput["chat"]["sessions"]["ge
 export type ChatSessionGetInput = RouterInput["chat"]["sessions"]["get"];
 export type ChatToolResultDetail = NonNullable<RouterOutput["chat"]["sessions"]["toolResult"]>;
 export type ChatSessionDeleteResult = RouterOutput["chat"]["sessions"]["delete"];
+export type ChatSessionRenameResult = RouterOutput["chat"]["sessions"]["rename"];
 export type ChatMessageSummary = ChatSessionDetail["messages"][number];
 export type WikiTreeEntry = RouterOutput["wiki"]["tree"]["tree"][number];
 export type WikiPageDetail = RouterOutput["wiki"]["page"];
@@ -359,6 +360,13 @@ export async function forkChatSession(sessionId: string): Promise<ChatSessionDet
 
 export async function deleteChatSession(sessionId: string): Promise<ChatSessionDeleteResult> {
   return trpc.chat.sessions.delete.mutate({ sessionId });
+}
+
+export async function renameChatSession(
+  sessionId: string,
+  title: string,
+): Promise<ChatSessionRenameResult> {
+  return trpc.chat.sessions.rename.mutate({ sessionId, title });
 }
 
 export async function getWikiTree(includeRaw = false): Promise<WikiTreeEntry[]> {

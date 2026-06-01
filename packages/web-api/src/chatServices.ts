@@ -26,6 +26,7 @@ import type {
   ChatSessionDetail,
   ChatSessionForkInput,
   ChatSessionGetInput,
+  ChatSessionRenameInput,
   ChatSessionSummary,
   ChatSessionsListInput,
   ChatSessionsSearchInput,
@@ -241,6 +242,19 @@ export async function deleteChatSession(
     title: result.title,
     traceMethod: result.traceMethod,
   };
+}
+
+export async function renameChatSession(
+  input: ChatSessionRenameInput,
+  getSessionStore: SessionStoreGetter,
+): Promise<ChatSessionSummary> {
+  const store = await getSessionStore();
+  const source = store.getSession(input.sessionId);
+  if (source === undefined || !isChatSessionKind(source.kind)) {
+    throw new Error(`Session not found: ${input.sessionId}`);
+  }
+  store.updateSessionTitle(input.sessionId, input.title);
+  return sessionToChatSummary({ ...source, title: input.title });
 }
 
 export async function searchChatSessions(

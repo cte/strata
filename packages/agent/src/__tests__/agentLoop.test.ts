@@ -472,6 +472,65 @@ describe("runAgentLoop", () => {
     }
   });
 
+  test("retries Anthropic rate limits with retry-after delays", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-anthropic-retry-"));
+    try {
+      const model = new FlakyModelAdapter([
+        new ModelAdapterError(
+          "anthropic_http_error",
+          "Anthropic request failed with HTTP 429 (rate_limit_error): input tokens per minute exceeded",
+          { retryAfterMs: 123 },
+        ),
+        { content: "Recovered after rate limit.", finishReason: "stop", toolCalls: [] },
+      ]);
+
+      const events: AgentRunEvent[] = [];
+      for await (const event of runAgentLoopEvents({
+        question: "Can you recover?",
+        model,
+        repoRoot,
+        modelRetryPolicy: { maxAttempts: 2, initialDelayMs: 0, maxDelayMs: 60_000 },
+      })) {
+        events.push(event);
+      }
+
+      const retry = events.find((event) => event.type === "model.retry");
+      const completed = events.find((event) => event.type === "agent.completed");
+      expect(retry).toMatchObject({ type: "model.retry", delayMs: 123 });
+      expect(completed?.type === "agent.completed" ? completed.result.finalAnswer : "").toBe(
+        "Recovered after rate limit.",
+      );
+      expect(model.requests).toHaveLength(2);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("does not retry terminal rate limit errors", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-terminal-rate-limit-"));
+    try {
+      const model = new FlakyModelAdapter([
+        new ModelAdapterError(
+          "anthropic_http_error",
+          "Anthropic request failed with HTTP 429 (rate_limit_error): Monthly usage limit reached",
+        ),
+        { content: "Should not run.", finishReason: "stop", toolCalls: [] },
+      ]);
+
+      const result = await runAgentLoop({
+        question: "Can you recover?",
+        model,
+        repoRoot,
+        modelRetryPolicy: { maxAttempts: 2, initialDelayMs: 0, maxDelayMs: 0 },
+      });
+
+      expect(result.status).toBe("failed");
+      expect(model.requests).toHaveLength(1);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("retries Pi-style transient network error text", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-network-retry-"));
     try {

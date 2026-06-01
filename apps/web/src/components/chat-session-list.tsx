@@ -11,6 +11,7 @@ import {
   deleteChatSession,
 } from "@/lib/api";
 import { clearLastChatSessionId } from "@/lib/chatLastSession";
+import { CHAT_NEW_TAB_KEY, useChatPinnedTabsStore } from "@/lib/chatPinnedTabs";
 import { useRunningSessionIds } from "@/lib/useChatRun";
 import { cn } from "@/lib/utils";
 
@@ -78,6 +79,7 @@ export function useDeleteChatSession(): (
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const matchRoute = useMatchRoute();
+  const removePinnedSession = useChatPinnedTabsStore((state) => state.removeSession);
   return useCallback(
     async (session: ChatSessionSummary): Promise<ChatSessionDeleteResult> => {
       const result = await deleteChatSession(session.id);
@@ -86,12 +88,21 @@ export function useDeleteChatSession(): (
       await queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
       const match = matchRoute({ to: "/chat/$sessionId" }) as false | { sessionId?: string };
       const activeSessionId = match ? (match.sessionId ?? null) : null;
+      const nextPinnedTab = removePinnedSession(session.id, activeSessionId ?? CHAT_NEW_TAB_KEY);
       if (activeSessionId === session.id) {
-        void navigate({ to: "/chat", replace: true });
+        if (nextPinnedTab?.sessionId === null || nextPinnedTab === null) {
+          void navigate({ to: "/chat", replace: true });
+        } else {
+          void navigate({
+            to: "/chat/$sessionId",
+            params: { sessionId: nextPinnedTab.sessionId },
+            replace: true,
+          });
+        }
       }
       return result;
     },
-    [matchRoute, navigate, queryClient],
+    [matchRoute, navigate, queryClient, removePinnedSession],
   );
 }
 

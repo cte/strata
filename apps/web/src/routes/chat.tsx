@@ -1,3 +1,21 @@
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  type Modifier,
+  PointerSensor,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  horizontalListSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import type { LanguageModelUsage } from "ai";
 import {
@@ -5,6 +23,7 @@ import {
   BookOpen,
   Brain,
   Check,
+  Circle,
   Copy,
   FileText,
   ListTodo,
@@ -24,6 +43,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -55,6 +75,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
+import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
   Message,
   MessageAction,
@@ -107,7 +128,11 @@ import {
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool";
 import { AutocompletePopover } from "@/components/autocomplete-popover";
 import { ChatModelPicker } from "@/components/chat-model-picker";
-import { ChatSessionDeleteConfirm, useDeleteChatSession } from "@/components/chat-session-list";
+import {
+  ChatSessionDeleteConfirm,
+  SessionStatusDot,
+  useDeleteChatSession,
+} from "@/components/chat-session-list";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -137,15 +162,23 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import {
   addChatQueuedMessage,
   type ChatQueueTarget,
+  type ChatSessionSummary,
   clearChatQueuedMessages,
   getChatToolResult,
   invokeChatSkill,
   listChatQueuedMessages,
   removeChatQueuedMessage,
+  renameChatSession,
 } from "@/lib/api";
 import { useOpenChatSessionCommandPalette } from "@/lib/chatCommandPalette";
 import { chatComposerSubmitState } from "@/lib/chatComposer";
 import { writeLastChatSessionId } from "@/lib/chatLastSession";
+import {
+  CHAT_NEW_TAB_KEY,
+  chatTabKeyForSession,
+  type ChatPinnedTab,
+  useChatPinnedTabsStore,
+} from "@/lib/chatPinnedTabs";
 import {
   type QueuedChatMessage,
   queuedChatMessageDescription,
@@ -157,7 +190,9 @@ import {
   type ChatRunState,
   type ChatToolCallView,
   clientId,
+  friendlyChatError,
   MAX_ATTACHMENT_BYTES,
+  sanitizeDisplayText,
 } from "@/lib/chatRunModel";
 import { chatRunsStore } from "@/lib/chatRunsStore";
 import {
@@ -176,7 +211,11 @@ import {
 } from "@/lib/slashCommandProvider";
 import type { AutocompleteItem } from "@/lib/useAutocomplete";
 import { useAutocomplete } from "@/lib/useAutocomplete";
-import { useChatModelChoice } from "@/lib/useChatModelChoice";
+import {
+  choiceFromSessionModel,
+  type ChatModelChoice,
+  useChatModelChoice,
+} from "@/lib/useChatModelChoice";
 import { useChatPromptHistory } from "@/lib/useChatPromptHistory";
 
 import { useChatRun } from "@/lib/useChatRun";
@@ -192,11 +231,27 @@ export function ChatPage(): React.ReactElement {
   const legacySessionId =
     typeof search?.session === "string" && search.session.length > 0 ? search.session : null;
   const urlSessionId = routeSessionId ?? legacySessionId;
-  const [prompt, setPrompt] = useState("");
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [sessionModelOverrides, setSessionModelOverrides] = useState<
+    Record<string, ChatModelChoice>
+  >({});
   const [showCommandHelp, setShowCommandHelp] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const activeTabKey = chatTabKeyForSession(urlSessionId);
+  const prompt = useChatPinnedTabsStore((state) => state.drafts[activeTabKey] ?? "");
+  const setDraft = useChatPinnedTabsStore((state) => state.setDraft);
+  const clearDraft = useChatPinnedTabsStore((state) => state.clearDraft);
+  const activateSessionTab = useChatPinnedTabsStore((state) => state.activateSession);
+  const replaceNewTabWithSession = useChatPinnedTabsStore((state) => state.replaceNewWithSession);
+  const syncPinnedTabs = useChatPinnedTabsStore((state) => state.syncSessions);
+  const { allSessions, isLoaded: sessionsLoaded, sessionIndexComplete } = useChatSessions();
+  const setPrompt = useCallback(
+    (value: string) => {
+      setDraft(activeTabKey, value);
+    },
+    [activeTabKey, setDraft],
+  );
 
   const handleCloseTerminal = useCallback(() => {
     setTerminalOpen(false);
@@ -215,6 +270,22 @@ export function ChatPage(): React.ReactElement {
   } = useChatModelChoice();
   const { record: recordPromptHistory, onKeyDown: onPromptHistoryKeyDown } =
     useChatPromptHistory(setPrompt);
+  useEffect(() => {
+    const session =
+      urlSessionId === null ? null : allSessions.find((entry) => entry.id === urlSessionId);
+    if (urlSessionId === null) {
+      return;
+    }
+    activateSessionTab(urlSessionId, session?.title ?? null);
+  }, [activateSessionTab, allSessions, urlSessionId]);
+
+  useEffect(() => {
+    if (!sessionsLoaded) {
+      return;
+    }
+    syncPinnedTabs(allSessions, { pruneMissing: sessionIndexComplete });
+  }, [allSessions, sessionIndexComplete, sessionsLoaded, syncPinnedTabs]);
+
   const queueRefreshNonce = useSyncExternalStore(
     chatRunsStore.subscribe,
     chatRunsStore.getQueueRefreshVersion,
@@ -254,22 +325,24 @@ export function ChatPage(): React.ReactElement {
         });
         return;
       }
+      replaceNewTabWithSession(newSessionId, null);
       void navigate({
         to: "/chat/$sessionId",
         params: { sessionId: newSessionId },
         replace: options?.replace ?? false,
       });
     },
-    [navigate],
+    [navigate, replaceNewTabWithSession],
   );
 
   const chatRun = useChatRun({
     urlSessionId,
-    selectedModelChoice,
     onSessionChange: handleSessionChange,
   });
   const {
     sessionId,
+    sessionModel,
+    sessionLoaded,
     transcript,
     runState,
     externallyRunning,
@@ -285,6 +358,43 @@ export function ChatPage(): React.ReactElement {
     forkSession,
     loadOlderMessages,
   } = chatRun;
+
+  const activeSessionModelOverride =
+    sessionId === null ? null : (sessionModelOverrides[sessionId] ?? null);
+  const sessionModelChoice = useMemo(
+    () =>
+      activeSessionModelOverride ??
+      choiceFromSessionModel(
+        sessionModel,
+        modelProviderStates,
+        selectedModelChoice?.reasoningEffort ?? "off",
+        selectedModelChoice,
+      ),
+    [activeSessionModelOverride, modelProviderStates, selectedModelChoice, sessionModel],
+  );
+  const effectiveModelChoice =
+    sessionId === null ? selectedModelChoice : (sessionModelChoice ?? selectedModelChoice);
+  const handleModelSelect = useCallback(
+    (choice: ChatModelChoice) => {
+      if (sessionId !== null) {
+        setSessionModelOverrides((current) => ({ ...current, [sessionId]: choice }));
+      }
+      setModelChoice(choice);
+    },
+    [sessionId, setModelChoice],
+  );
+  const handleReasoningEffortChange = useCallback(
+    (effort: ChatModelChoice["reasoningEffort"]) => {
+      if (sessionId !== null && effectiveModelChoice !== null) {
+        setSessionModelOverrides((current) => ({
+          ...current,
+          [sessionId]: { ...effectiveModelChoice, reasoningEffort: effort },
+        }));
+      }
+      setModelReasoningEffort(effort);
+    },
+    [effectiveModelChoice, sessionId, setModelReasoningEffort],
+  );
 
   const queueTarget = useMemo<ChatQueueTarget>(() => {
     if (sessionId !== null) {
@@ -311,9 +421,10 @@ export function ChatPage(): React.ReactElement {
   const isRunning = runState !== "idle";
   // A run is advancing this session in another process/tab; lock the composer
   // since the server allows only one active run per session.
-  const composerDisabled = runState === "cancelling" || externallyRunning;
-  const selectedProvider = selectedModelChoice?.provider ?? null;
-  const selectedModel = selectedModelChoice?.model ?? null;
+  const composerDisabled =
+    runState === "cancelling" || externallyRunning || (urlSessionId !== null && !sessionLoaded);
+  const selectedProvider = effectiveModelChoice?.provider ?? null;
+  const selectedModel = effectiveModelChoice?.model ?? null;
   const contextWindow = useMemo(
     () =>
       selectedProvider === null || selectedModel === null
@@ -339,12 +450,12 @@ export function ChatPage(): React.ReactElement {
           }).then(setQueuedMessages, (error: unknown) => setError(errorMessage(error)));
           return;
         }
-        submit({ message: invocation.prompt, attachments: [] });
+        submit({ message: invocation.prompt, attachments: [] }, effectiveModelChoice);
       } catch (error: unknown) {
         setError(error instanceof Error ? error.message : String(error));
       }
     },
-    [isRunning, queueTarget, setError, submit],
+    [effectiveModelChoice, isRunning, queueTarget, setError, submit],
   );
 
   const handleSlashCommand = useCallback(
@@ -391,10 +502,10 @@ export function ChatPage(): React.ReactElement {
         return;
       }
       recordPromptHistory(value);
-      setPrompt("");
+      clearDraft(activeTabKey);
       handleSlashCommand(value);
     },
-    [handleSlashCommand, recordPromptHistory],
+    [activeTabKey, clearDraft, handleSlashCommand, recordPromptHistory],
   );
 
   const autocomplete = useAutocomplete(promptInputRef, {
@@ -428,7 +539,7 @@ export function ChatPage(): React.ReactElement {
       }
       if (!hasAttachments && message.startsWith("/")) {
         recordPromptHistory(message);
-        setPrompt("");
+        clearDraft(activeTabKey);
         handleSlashCommand(message);
         return;
       }
@@ -436,7 +547,7 @@ export function ChatPage(): React.ReactElement {
         return;
       }
       recordPromptHistory(message);
-      setPrompt("");
+      clearDraft(activeTabKey);
       setShowCommandHelp(false);
       setModelPickerOpen(false);
       if (isRunning) {
@@ -447,9 +558,12 @@ export function ChatPage(): React.ReactElement {
         }).then(setQueuedMessages, (error: unknown) => setError(errorMessage(error)));
         return;
       }
-      submit({ message, attachments });
+      submit({ message, attachments }, effectiveModelChoice);
     },
     [
+      activeTabKey,
+      clearDraft,
+      effectiveModelChoice,
       externallyRunning,
       handleSlashCommand,
       isRunning,
@@ -496,6 +610,11 @@ export function ChatPage(): React.ReactElement {
         : ` / ${selectedModelChoice.reasoningEffort}`;
     return `${selectedModelChoice.provider} / ${selectedModelChoice.model}${effort}`;
   }, [selectedModelChoice]);
+  const [scrollReadyTabKey, setScrollReadyTabKey] = useState(activeTabKey);
+  const conversationContentVisible = sessionLoaded && scrollReadyTabKey === activeTabKey;
+  const handleConversationScrollReady = useCallback((tabKey: string) => {
+    setScrollReadyTabKey(tabKey);
+  }, []);
 
   return (
     <div className="chat-surface relative -mx-6 -my-8 h-[calc(100dvh-2.75rem)] overflow-hidden bg-bg md:-mx-10 md:-my-10">
@@ -506,14 +625,18 @@ export function ChatPage(): React.ReactElement {
       >
         <ResizablePanel id="chat" order={1} minSize={30} className="!overflow-hidden">
           <section className="relative flex h-full min-h-0 min-w-0 flex-col">
-            <ChatSessionToolbar sessionId={urlSessionId} />
+            <ChatPinnedTabBar sessionId={urlSessionId} />
 
             {error === null ? null : <InlineError message={error} />}
             {showCommandHelp ? <CommandHelp onClose={() => setShowCommandHelp(false)} /> : null}
 
             <Conversation className="min-h-0 flex-1">
               <ConversationContent
-                className={cn(transcript.length === 0 ? "min-h-full pb-32" : "pb-56 md:pb-52")}
+                className={cn(
+                  transcript.length === 0 ? "min-h-full pb-32" : "pb-56 md:pb-52",
+                  !conversationContentVisible && "invisible",
+                )}
+                aria-busy={!conversationContentVisible}
               >
                 {transcript.length === 0 ? (
                   urlSessionId === null ? (
@@ -539,19 +662,22 @@ export function ChatPage(): React.ReactElement {
                   </>
                 )}
               </ConversationContent>
-              <ConversationScrollButton />
+              <ConversationSessionScrollReset
+                tabKey={activeTabKey}
+                ready={sessionLoaded}
+                revealed={conversationContentVisible}
+                onReveal={handleConversationScrollReady}
+              />
+              {conversationContentVisible ? <ConversationScrollButton /> : null}
             </Conversation>
 
             <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-3 md:px-6 md:pb-4">
               <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
                 <div className="flex justify-end px-1">
-                  <RunStatusBadge
-                    runState={runState}
-                    runId={activeRunId}
-                    externallyRunning={externallyRunning}
-                  />
+                  <RunStatusBadge runState={runState} externallyRunning={externallyRunning} />
                 </div>
                 <PromptInput
+                  key={activeTabKey}
                   accept="image/*"
                   globalDrop
                   maxFileSize={MAX_ATTACHMENT_BYTES}
@@ -593,12 +719,12 @@ export function ChatPage(): React.ReactElement {
                         </PromptInputActionMenuContent>
                       </PromptInputActionMenu>
                       <ChatModelPicker
-                        choice={selectedModelChoice}
+                        choice={effectiveModelChoice}
                         providerStates={modelProviderStates}
                         open={modelPickerOpen}
                         onOpenChange={setModelPickerOpen}
-                        onSelect={setModelChoice}
-                        onReasoningEffortChange={setModelReasoningEffort}
+                        onSelect={handleModelSelect}
+                        onReasoningEffortChange={handleReasoningEffortChange}
                         disabled={composerDisabled}
                       />
                     </PromptInputTools>
@@ -653,6 +779,58 @@ export function ChatPage(): React.ReactElement {
   );
 }
 
+function ConversationSessionScrollReset({
+  tabKey,
+  ready,
+  revealed,
+  onReveal,
+}: {
+  tabKey: string;
+  ready: boolean;
+  revealed: boolean;
+  onReveal(tabKey: string): void;
+}): null {
+  const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
+  const lastResetKeyRef = useRef<string | null>(null);
+
+  const forceScrollToBottom = useCallback(() => {
+    const scrollElement = scrollRef.current;
+    if (scrollElement === null) {
+      return;
+    }
+    delete state.animation;
+    state.scrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+    void scrollToBottom({ animation: "instant", ignoreEscapes: true });
+  }, [scrollRef, scrollToBottom, state]);
+
+  useLayoutEffect(() => {
+    if (!ready || lastResetKeyRef.current === tabKey) {
+      return;
+    }
+    lastResetKeyRef.current = tabKey;
+    forceScrollToBottom();
+    const frame = window.requestAnimationFrame(() => {
+      if (lastResetKeyRef.current !== tabKey) {
+        return;
+      }
+      forceScrollToBottom();
+      onReveal(tabKey);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [forceScrollToBottom, onReveal, ready, tabKey]);
+
+  useLayoutEffect(() => {
+    if (!revealed || !ready || lastResetKeyRef.current !== tabKey) {
+      return;
+    }
+    forceScrollToBottom();
+    const frame = window.requestAnimationFrame(forceScrollToBottom);
+    return () => window.cancelAnimationFrame(frame);
+  }, [forceScrollToBottom, ready, revealed, tabKey]);
+
+  return null;
+}
+
 async function refreshQueuedMessages(target: ChatQueueTarget): Promise<QueuedChatMessage[]> {
   if (target.sessionId === undefined && target.runId === undefined) {
     return [];
@@ -682,29 +860,97 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Floating top-right toolbar over the chat surface: a single overflow menu with
- * New / Search / Delete session actions. Delete is disabled on a fresh surface
- * (no session yet) and while the session is running.
+ * Chat-local top bar with browser-like pinned session tabs and the existing
+ * session actions overflow menu. Tabs are local browser UI state; closing one
+ * does not delete the underlying session.
  */
-function ChatSessionToolbar({ sessionId }: { sessionId: string | null }): React.ReactElement {
+function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.ReactElement {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const openCommandPalette = useOpenChatSessionCommandPalette();
-  const { sessions } = useChatSessions();
+  const { allSessions: sessions } = useChatSessions();
   const deleteSession = useDeleteChatSession();
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
+  const tabs = useChatPinnedTabsStore((state) => state.tabs);
+  const activeTabKey = chatTabKeyForSession(sessionId);
+  const closeTab = useChatPinnedTabsStore((state) => state.closeTab);
+  const reorderTabs = useChatPinnedTabsStore((state) => state.reorderTabs);
+  const activateSessionTab = useChatPinnedTabsStore((state) => state.activateSession);
+  const renameSessionTab = useChatPinnedTabsStore((state) => state.renameSession);
   const session = useMemo(
     () => (sessionId === null ? null : (sessions.find((entry) => entry.id === sessionId) ?? null)),
     [sessionId, sessions],
   );
   const canDelete = session !== null && session.status !== "running";
+  const tabKeys = useMemo(() => tabs.map((tab) => tab.key), [tabs]);
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const navigateToTab = useCallback(
+    (tab: ChatPinnedTab | null, options?: { replace?: boolean }) => {
+      if (tab === null || tab.sessionId === null) {
+        void navigate({ to: "/chat", replace: options?.replace ?? false });
+        return;
+      }
+      activateSessionTab(tab.sessionId, tab.titleSnapshot);
+      void navigate({
+        to: "/chat/$sessionId",
+        params: { sessionId: tab.sessionId },
+        replace: options?.replace ?? false,
+      });
+    },
+    [activateSessionTab, navigate],
+  );
 
   const handleNewChat = useCallback(() => {
     void navigate({ to: "/chat" });
   }, [navigate]);
+
+  const handleSelectTab = useCallback(
+    (tab: ChatPinnedTab) => {
+      navigateToTab(tab);
+    },
+    [navigateToTab],
+  );
+
+  const handleCloseTab = useCallback(
+    (tab: ChatPinnedTab) => {
+      const next = closeTab(tab.key, activeTabKey);
+      if (tab.key === activeTabKey) {
+        navigateToTab(next, { replace: true });
+      }
+    },
+    [activeTabKey, closeTab, navigateToTab],
+  );
+
+  const handleTabDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const overId = event.over?.id;
+      if (overId === undefined || event.active.id === overId) {
+        return;
+      }
+      reorderTabs(String(event.active.id), String(overId));
+    },
+    [reorderTabs],
+  );
+
+  const handleRenameTab = useCallback(
+    async (tab: ChatPinnedTab, title: string): Promise<void> => {
+      if (tab.sessionId === null) {
+        return;
+      }
+      const renamed = await renameChatSession(tab.sessionId, title);
+      renameSessionTab(renamed.id, renamed.title);
+      chatRunsStore.renameSession(renamed.id, renamed.title);
+      await queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+    },
+    [queryClient, renameSessionTab],
+  );
 
   const handleConfirmOpenChange = useCallback(
     (next: boolean) => {
@@ -757,16 +1003,53 @@ function ChatSessionToolbar({ sessionId }: { sessionId: string | null }): React.
   }, [canDelete, handleNewChat]);
 
   return (
-    <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-1.5 md:right-6">
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline bg-[color-mix(in_oklab,var(--bg)_92%,transparent)] p-1 backdrop-blur-md">
+      <DndContext
+        sensors={dragSensors}
+        collisionDetection={closestCenter}
+        modifiers={CHAT_TAB_DRAG_MODIFIERS}
+        onDragEnd={handleTabDragEnd}
+      >
+        <SortableContext items={tabKeys} strategy={horizontalListSortingStrategy}>
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {tabs.map((tab) => (
+              <ChatPinnedTabButton
+                key={tab.key}
+                tab={tab}
+                active={tab.key === activeTabKey}
+                session={
+                  tab.sessionId === null
+                    ? null
+                    : (sessions.find((entry) => entry.id === tab.sessionId) ?? null)
+                }
+                onSelect={() => handleSelectTab(tab)}
+                onClose={() => handleCloseTab(tab)}
+                onRename={(title) => handleRenameTab(tab, title)}
+              />
+            ))}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="New chat"
+              title="New chat"
+              onClick={handleNewChat}
+              className="h-7 w-7 shrink-0 rounded-md text-fg-dim hover:bg-fg/[0.03] hover:text-fg [&>svg]:!size-3.5"
+            >
+              <Plus size={14} strokeWidth={1.75} />
+            </Button>
+          </div>
+        </SortableContext>
+      </DndContext>
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon"
             aria-label="Session options"
             title="Session options"
-            className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
+            className="h-7 w-7 rounded-md text-fg-dim hover:bg-fg/[0.03] hover:text-fg [&>svg]:!size-3.5"
           >
             <MoreHorizontal size={14} strokeWidth={1.75} />
           </Button>
@@ -813,7 +1096,7 @@ function ChatSessionToolbar({ sessionId }: { sessionId: string | null }): React.
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={confirmOpen} onOpenChange={handleConfirmOpenChange}>
-        <DialogContent className="pointer-events-auto max-w-sm border-hairline bg-bg-elev p-4 text-fg">
+        <DialogContent className="max-w-sm border-hairline bg-bg-elev p-4 text-fg">
           <DialogHeader className="sr-only">
             <DialogTitle>Delete session?</DialogTitle>
             <DialogDescription>
@@ -833,6 +1116,200 @@ function ChatSessionToolbar({ sessionId }: { sessionId: string | null }): React.
   );
 }
 
+const CHAT_TAB_WIDTH_CLASS = "w-44 md:w-52";
+const RESTRICT_CHAT_TAB_DRAG_TO_HORIZONTAL: Modifier = ({ transform }) => ({
+  ...transform,
+  y: 0,
+});
+const CHAT_TAB_DRAG_MODIFIERS = [RESTRICT_CHAT_TAB_DRAG_TO_HORIZONTAL];
+
+function ChatPinnedTabButton({
+  tab,
+  active,
+  session,
+  onSelect,
+  onClose,
+  onRename,
+}: {
+  tab: ChatPinnedTab;
+  active: boolean;
+  session: ChatSessionSummary | null;
+  onSelect(): void;
+  onClose(): void;
+  onRename(title: string): Promise<void>;
+}): React.ReactElement {
+  const snapshotTitle = tab.titleSnapshot.trim();
+  const title =
+    snapshotTitle === ""
+      ? session === null
+        ? tab.key
+        : sanitizeDisplayText(session.title)
+      : snapshotTitle;
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(title);
+  const [saving, setSaving] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const commitInFlightRef = useRef(false);
+  const cancelNextBlurRef = useRef(false);
+  const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
+    id: tab.key,
+    disabled: editing,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftTitle(title);
+    }
+  }, [editing, title]);
+
+  useEffect(() => {
+    if (editing) {
+      window.requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
+    }
+  }, [editing]);
+
+  const beginEditing = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setRenameError(null);
+    setEditing(true);
+  }, []);
+
+  const cancelEditing = useCallback(() => {
+    cancelNextBlurRef.current = true;
+    setDraftTitle(title);
+    setRenameError(null);
+    setEditing(false);
+  }, [title]);
+
+  const commitEditing = useCallback(async () => {
+    if (commitInFlightRef.current) {
+      return;
+    }
+    const nextTitle = draftTitle.trim().replace(/\s+/g, " ");
+    if (nextTitle === "") {
+      setRenameError("Title is required.");
+      inputRef.current?.focus();
+      return;
+    }
+    if (nextTitle === title) {
+      setEditing(false);
+      setRenameError(null);
+      return;
+    }
+    commitInFlightRef.current = true;
+    setSaving(true);
+    setRenameError(null);
+    try {
+      await onRename(nextTitle);
+      setEditing(false);
+    } catch (cause: unknown) {
+      setRenameError(cause instanceof Error ? cause.message : String(cause));
+      inputRef.current?.focus();
+    } finally {
+      commitInFlightRef.current = false;
+      setSaving(false);
+    }
+  }, [draftTitle, onRename, title]);
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "group/tab flex h-8 shrink-0 touch-none items-center gap-1 rounded-md py-0 pr-2 pl-3 text-xs transition-[background-color,color,opacity,box-shadow] duration-150",
+        CHAT_TAB_WIDTH_CLASS,
+        active
+          ? "bg-fg/[0.05] text-fg"
+          : "bg-transparent text-fg-dim hover:bg-fg/[0.03] hover:text-fg active:opacity-70",
+        isDragging && "z-10 opacity-80 shadow-lg shadow-black/30",
+        renameError !== null && "bg-bad/[0.08] text-bad",
+      )}
+      title={renameError ?? undefined}
+    >
+      {editing ? (
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {session === null ? (
+            <Circle aria-hidden="true" size={8} strokeWidth={2} className="shrink-0 text-fg-mute" />
+          ) : (
+            <SessionStatusDot session={session} className="size-1.5" />
+          )}
+          <input
+            ref={inputRef}
+            value={draftTitle}
+            disabled={saving}
+            aria-label="Rename chat tab"
+            onChange={(event) => setDraftTitle(event.currentTarget.value)}
+            onBlur={() => {
+              if (cancelNextBlurRef.current) {
+                cancelNextBlurRef.current = false;
+                return;
+              }
+              void commitEditing();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void commitEditing();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                cancelEditing();
+              }
+            }}
+            onClick={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+            className="min-w-0 flex-1 bg-transparent text-xs text-fg outline-none selection:bg-selection/30 disabled:opacity-60"
+          />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onSelect}
+          onDoubleClick={beginEditing}
+          className="flex min-w-0 flex-1 cursor-grab items-center gap-2 text-left active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          {...attributes}
+          {...listeners}
+        >
+          {session === null ? (
+            <Circle aria-hidden="true" size={8} strokeWidth={2} className="shrink-0 text-fg-mute" />
+          ) : (
+            <SessionStatusDot session={session} className="size-1.5" />
+          )}
+          <span className="truncate">{title}</span>
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label={`Close ${title}`}
+        title="Close tab"
+        disabled={saving}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClose();
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        className={cn(
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-mute transition-[opacity,color,background-color] duration-150 hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+          active || editing
+            ? "opacity-100"
+            : "opacity-0 group-hover/tab:opacity-100 group-focus-within/tab:opacity-100",
+        )}
+      >
+        <X size={12} strokeWidth={1.75} />
+      </button>
+    </div>
+  );
+}
+
 function InlineChatEmptyState(): React.ReactElement {
   return (
     <Empty className="min-h-[280px] border-0 bg-transparent px-4 py-10 text-center">
@@ -842,8 +1319,8 @@ function InlineChatEmptyState(): React.ReactElement {
         </EmptyMedia>
         <EmptyTitle className="text-sm font-medium tracking-tight text-fg">Ready.</EmptyTitle>
         <EmptyDescription className="text-xs leading-normal text-fg-mute">
-          Start a new chat below, or use <KeyboardShortcut>⌘K</KeyboardShortcut> to open the
-          session picker.
+          Start a new chat below, or use <KeyboardShortcut>⌘K</KeyboardShortcut> to open the session
+          picker.
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
@@ -1901,11 +2378,9 @@ function toLanguageModelUsage(usage: TokenUsageTotals): LanguageModelUsage {
 
 function RunStatusBadge({
   runState,
-  runId,
   externallyRunning,
 }: {
   runState: ChatRunState;
-  runId: string | null;
   externallyRunning: boolean;
 }): React.ReactElement {
   if (runState === "idle") {
@@ -1916,11 +2391,16 @@ function RunStatusBadge({
           title="Advanced by the CLI, TUI, or another tab"
         >
           <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-accent" />
-          <span className="label-eyebrow text-fg-dim">running elsewhere</span>
+          <span className="label-status text-fg-dim">running elsewhere</span>
         </span>
       );
     }
-    return <Badge tone="muted">idle</Badge>;
+    return (
+      <span className="inline-flex items-center gap-2">
+        <Circle size={13} strokeWidth={1.75} className="text-fg-mute" />
+        <span className="label-status text-fg-mute">idle</span>
+      </span>
+    );
   }
   return (
     <span className="inline-flex items-center gap-2">
@@ -1931,19 +2411,38 @@ function RunStatusBadge({
       ) : (
         <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-accent" />
       )}
-      <span className="label-eyebrow text-fg-dim">
+      <span
+        className={cn(
+          "label-status text-fg-dim",
+          runState === "starting" || runState === "streaming" ? "animate-pulse" : null,
+        )}
+      >
         {runState === "starting" ? "starting" : runState}
-        {runId === null ? "" : ` ${runId.slice(0, 8)}`}
       </span>
     </span>
   );
 }
 
 function InlineError({ message }: { message: string }): React.ReactElement {
+  const friendly = friendlyChatError(message);
   return (
-    <div className="flex items-start gap-2 border-b border-bad/35 bg-bad/[0.06] px-4 py-2 text-xs text-fg-dim">
-      <AlertCircle size={13} strokeWidth={1.75} className="mt-0.5 shrink-0 text-bad" />
-      <span className="min-w-0 break-words">{message}</span>
+    <div className="border-b border-bad/35 bg-bad/[0.08] px-4 py-3 text-xs text-fg-dim">
+      <div className="flex items-start gap-2 pr-11 md:pr-14">
+        <AlertCircle size={13} strokeWidth={1.75} className="mt-0.5 shrink-0 text-bad" />
+        <div className="min-w-0 space-y-1">
+          <div className="font-medium text-fg">{friendly.title}</div>
+          <p className="max-w-5xl whitespace-pre-wrap break-words leading-5">{friendly.message}</p>
+          <div className="flex flex-wrap items-center gap-2 text-2xs text-fg-mute">
+            {friendly.retryable ? (
+              <span>
+                Strata automatically retries transient provider failures before surfacing this
+                error.
+              </span>
+            ) : null}
+            {friendly.requestId === null ? null : <span>Request {friendly.requestId}</span>}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

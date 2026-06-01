@@ -138,6 +138,38 @@ describe("AnthropicModelAdapter", () => {
     expect(response.content).toBe("Here.");
   });
 
+  test("formats Anthropic HTTP error bodies for display and retry metadata", async () => {
+    const fetchImpl = Object.assign(
+      async () =>
+        new Response(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "rate_limit_error",
+              message: "This request would exceed your organization's rate limit.",
+            },
+            request_id: "req_123",
+          }),
+          { status: 429, headers: { "retry-after": "2" } },
+        ),
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+    const adapter = new AnthropicModelAdapter({
+      credentials: fakeCredentials(),
+      model: "claude-opus-4-8",
+      fetchImpl,
+    });
+
+    await expect(
+      adapter.complete({ messages: [{ role: "user", content: "Hello" }], tools: [] }),
+    ).rejects.toMatchObject({
+      code: "anthropic_http_error",
+      message:
+        "Anthropic request failed with HTTP 429 (rate_limit_error): This request would exceed your organization's rate limit. (request req_123)",
+      retryAfterMs: 2000,
+    });
+  });
+
   test("normalizes replayed tool call ids to Anthropic's allowed id pattern", async () => {
     let capturedBody: JsonObject | undefined;
     const fetchImpl = Object.assign(

@@ -56,6 +56,7 @@ export interface SessionRunState {
   runKey: string;
   sessionId: string | null;
   sessionTitle: string | null;
+  sessionModel: string | null;
   transcript: ChatMessageView[];
   runState: ChatRunState;
   activeRunId: string | null;
@@ -107,6 +108,7 @@ function blankState(key: string): SessionRunState {
     runKey: key,
     sessionId: key === NEW_CHAT_KEY ? null : key,
     sessionTitle: null,
+    sessionModel: null,
     transcript: [],
     runState: "idle",
     activeRunId: null,
@@ -153,6 +155,11 @@ class ChatRunsStore {
 
   setQueryClient(client: QueryClient): void {
     this.queryClient = client;
+  }
+
+  renameSession(sessionId: string, title: string): void {
+    this.update(sessionId, { sessionTitle: sanitizeDisplayText(title) });
+    this.refreshSessions();
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -363,6 +370,7 @@ class ChatRunsStore {
       this.update(sessionId, {
         sessionId: detail.session.id,
         sessionTitle: sanitizeDisplayText(detail.session.title),
+        sessionModel: detail.session.model,
         transcript,
         usageTotals: usageTotalsFromMessages(detail.messages),
         loaded: true,
@@ -608,6 +616,7 @@ class ChatRunsStore {
         this.update(target, {
           sessionId: event.sessionId,
           sessionTitle: sanitizeDisplayText(event.title),
+          sessionModel: event.model,
         });
         navigate(event.sessionId, { replace: true });
         // Surface the new session in the sidebar/cmd-k right away so its live
@@ -774,6 +783,7 @@ class ChatRunsStore {
         this.states.set(detail.session.id, {
           ...blankState(detail.session.id),
           sessionTitle: sanitizeDisplayText(detail.session.title),
+          sessionModel: detail.session.model,
           transcript: messagesToTranscript(detail.messages),
           usageTotals: usageTotalsFromMessages(detail.messages),
           loaded: true,
@@ -870,6 +880,7 @@ class ChatRunsStore {
       this.update(sessionId, {
         sessionId: detail.session.id,
         sessionTitle: sanitizeDisplayText(detail.session.title),
+        sessionModel: detail.session.model,
         transcript,
         usageTotals: usageTotalsFromMessages(detail.messages),
         loaded: true,

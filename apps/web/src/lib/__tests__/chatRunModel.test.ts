@@ -7,6 +7,7 @@ import {
   appendAssistantReasoning,
   type ChatMessageView,
   finalizeAssistantResponse,
+  friendlyChatError,
   messagesToTranscript,
   type TranscriptUpdate,
   transcriptUpdateForStreamEvent,
@@ -23,6 +24,22 @@ describe("agentCompletionMessage", () => {
       "Run was interrupted (server_restarted).",
     );
     assert.equal(agentCompletionMessage("failed", "model_error"), "Run failed (model_error).");
+  });
+});
+
+describe("friendlyChatError", () => {
+  test("summarizes Anthropic rate limit payloads", () => {
+    assert.deepEqual(
+      friendlyChatError(
+        "Anthropic request failed with HTTP 429 (rate_limit_error): This request would exceed your organization's rate limit. (request req_123)",
+      ),
+      {
+        title: "Model rate limit reached",
+        message: "This request would exceed your organization's rate limit.",
+        requestId: "req_123",
+        retryable: true,
+      },
+    );
   });
 });
 

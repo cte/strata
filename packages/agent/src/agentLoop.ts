@@ -18,6 +18,7 @@ import {
 } from "./compaction.js";
 import { ModelAdapterError } from "./model.js";
 import { clampThinkingLevel } from "./modelCapabilities.js";
+import { isTerminalRateLimitMessage } from "./modelRetryClassifier.js";
 import { buildRunContext } from "./runContext.js";
 import type {
   AgentMessage,
@@ -550,7 +551,7 @@ interface NormalizedModelRetryPolicy {
 const DEFAULT_MODEL_RETRY_POLICY: NormalizedModelRetryPolicy = {
   maxAttempts: 4,
   initialDelayMs: 1_000,
-  maxDelayMs: 8_000,
+  maxDelayMs: 60_000,
   backoffFactor: 2,
 };
 
@@ -672,12 +673,25 @@ function modelRetryDecision(
   if (emittedDelta || attempt >= policy.maxAttempts || !isRetryableModelError(error)) {
     return undefined;
   }
-  return { delayMs: modelRetryDelayMs(attempt, policy) };
+  return { delayMs: modelRetryDelayMs(attempt, policy, error) };
 }
 
-function modelRetryDelayMs(attempt: number, policy: NormalizedModelRetryPolicy): number {
-  const rawDelay = policy.initialDelayMs * policy.backoffFactor ** Math.max(0, attempt - 1);
-  return Math.min(policy.maxDelayMs, Math.round(rawDelay));
+function modelRetryDelayMs(
+  attempt: number,
+  policy: NormalizedModelRetryPolicy,
+  error?: unknown,
+): number {
+  const serverDelayMs = retryAfterMsFromError(error);
+  const rawDelay =
+    serverDelayMs ?? policy.initialDelayMs * policy.backoffFactor ** Math.max(0, attempt - 1);
+  return Math.min(policy.maxDelayMs, Math.max(0, Math.round(rawDelay)));
+}
+
+function retryAfterMsFromError(error: unknown): number | undefined {
+  if (!(error instanceof ModelAdapterError) || error.retryAfterMs === undefined) {
+    return undefined;
+  }
+  return Number.isFinite(error.retryAfterMs) ? Math.max(0, error.retryAfterMs) : undefined;
 }
 
 function isRetryableModelError(error: unknown): boolean {
@@ -685,7 +699,14 @@ function isRetryableModelError(error: unknown): boolean {
     return false;
   }
   if (error instanceof ModelAdapterError) {
-    if (error.code === "codex_http_error" || error.code === "model_http_error") {
+    if (isTerminalRateLimitMessage(error.message)) {
+      return false;
+    }
+    if (
+      error.code === "anthropic_http_error" ||
+      error.code === "codex_http_error" ||
+      error.code === "model_http_error"
+    ) {
       const status = httpStatusFromMessage(error.message);
       return (
         (status !== undefined && RETRYABLE_MODEL_HTTP_STATUSES.has(status)) ||
@@ -693,6 +714,7 @@ function isRetryableModelError(error: unknown): boolean {
       );
     }
     return (
+      error.code === "anthropic_stream_error" ||
       error.code === "codex_network_error" ||
       error.code === "model_network_error" ||
       hasRetryableModelErrorText(error.message)

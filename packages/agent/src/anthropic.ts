@@ -121,9 +121,12 @@ export class AnthropicModelAdapter implements ModelAdapter {
     const response = await this.fetchImpl(`${this.baseUrl}/messages`, init);
 
     if (!response.ok) {
+      const errorText = await response.text();
+      const retryAfterMs = retryAfterDelayMs(response.headers);
       throw new ModelAdapterError(
         "anthropic_http_error",
-        `Anthropic request failed with HTTP ${response.status}: ${await response.text()}`,
+        formatAnthropicHttpError(response.status, errorText),
+        retryAfterMs === undefined ? undefined : { retryAfterMs },
       );
     }
     if (response.body === null) {
@@ -140,6 +143,68 @@ export class AnthropicModelAdapter implements ModelAdapter {
       request.onReasoningDelta,
     );
   }
+}
+
+function formatAnthropicHttpError(status: number, errorText: string): string {
+  const parsed = parseAnthropicErrorBody(errorText);
+  if (parsed === undefined) {
+    return `Anthropic request failed with HTTP ${status}: ${errorText}`;
+  }
+  const label = parsed.errorType === undefined ? "error" : parsed.errorType;
+  const requestId = parsed.requestId === undefined ? "" : ` (request ${parsed.requestId})`;
+  return `Anthropic request failed with HTTP ${status} (${label}): ${parsed.message}${requestId}`;
+}
+
+function parseAnthropicErrorBody(
+  errorText: string,
+): { message: string; errorType?: string; requestId?: string } | undefined {
+  try {
+    const parsed = JSON.parse(errorText) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const root = parsed as Record<string, unknown>;
+    const error = root.error;
+    if (typeof error !== "object" || error === null || Array.isArray(error)) {
+      return undefined;
+    }
+    const errorRecord = error as Record<string, unknown>;
+    const message = typeof errorRecord.message === "string" ? errorRecord.message : undefined;
+    if (message === undefined) {
+      return undefined;
+    }
+    const result: { message: string; errorType?: string; requestId?: string } = { message };
+    if (typeof errorRecord.type === "string") {
+      result.errorType = errorRecord.type;
+    }
+    if (typeof root.request_id === "string") {
+      result.requestId = root.request_id;
+    }
+    return result;
+  } catch {
+    return undefined;
+  }
+}
+
+function retryAfterDelayMs(headers: Headers): number | undefined {
+  const retryAfterMs = headers.get("retry-after-ms");
+  if (retryAfterMs !== null) {
+    const millis = Number(retryAfterMs);
+    if (Number.isFinite(millis)) {
+      return Math.max(0, millis);
+    }
+  }
+
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter === null) {
+    return undefined;
+  }
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1000);
+  }
+  const date = Date.parse(retryAfter);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 }
 
 function buildAnthropicRequestBody(

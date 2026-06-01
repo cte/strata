@@ -453,6 +453,13 @@ export const chatSessionDeleteInput = z.object({
 
 export type ChatSessionDeleteInput = z.output<typeof chatSessionDeleteInput>;
 
+export const chatSessionRenameInput = z.object({
+  sessionId: z.string().min(1),
+  title: z.string().trim().min(1).max(200),
+});
+
+export type ChatSessionRenameInput = z.output<typeof chatSessionRenameInput>;
+
 export const chatSessionsSearchInput = z.object({
   query: z.string().min(1),
   limit: z.number().int().min(1).max(100).default(20),
@@ -925,6 +932,7 @@ export interface WebApiServices {
   getChatToolResult(input: ChatToolResultGetInput): Promise<ChatToolResultDetail | null>;
   forkChatSession(input: ChatSessionForkInput): Promise<ChatSessionDetail>;
   deleteChatSession(input: ChatSessionDeleteInput): Promise<ChatSessionDeleteResult>;
+  renameChatSession(input: ChatSessionRenameInput): Promise<ChatSessionSummary>;
   searchChatSessions(input: ChatSessionsSearchInput): Promise<{ sessions: ChatSessionSummary[] }>;
   getWikiTree(input: WikiTreeInput): Promise<{ tree: WikiTreeEntry[] }>;
   getWikiPage(input: WikiPageGetInput): Promise<WikiPageDetail>;
@@ -1073,6 +1081,9 @@ export const appRouter = t.router({
       delete: t.procedure
         .input(chatSessionDeleteInput)
         .mutation(({ ctx, input }) => ctx.services.deleteChatSession(input)),
+      rename: t.procedure
+        .input(chatSessionRenameInput)
+        .mutation(({ ctx, input }) => ctx.services.renameChatSession(input)),
       search: t.procedure
         .input(chatSessionsSearchInput)
         .query(({ ctx, input }) => ctx.services.searchChatSessions(input)),
