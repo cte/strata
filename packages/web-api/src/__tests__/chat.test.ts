@@ -122,13 +122,19 @@ describe("chat service", () => {
       message: "follow-up",
       attachments: [],
     });
-    await collect(first.events);
+    const events = await collect(first.events);
 
     await waitUntil(() => seenConfigs.length === 2);
     expect(seenConfigs[0]).toMatchObject({ question: "first" });
     expect(seenConfigs[0]?.continueSessionId).toBeUndefined();
     expect(seenConfigs[1]?.question).toBe("follow-up");
     expect(seenConfigs[1]?.continueSessionId).toBe("session-1");
+    expect(events).toContainEqual({
+      type: "run.replaced",
+      previousRunId: "run-1",
+      runId: "run-2",
+      sessionId: "session-1",
+    });
   });
 
   test("cleans up active state after agent-loop failure", async () => {

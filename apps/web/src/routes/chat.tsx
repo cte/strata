@@ -23,6 +23,7 @@ import {
   BookOpen,
   Brain,
   Check,
+  ChevronUp,
   Circle,
   Copy,
   FileText,
@@ -159,6 +160,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import type { ImperativePanelHandle } from "react-resizable-panels";
 import {
   addChatQueuedMessage,
   type ChatQueueTarget,
@@ -195,6 +197,7 @@ import {
   sanitizeDisplayText,
 } from "@/lib/chatRunModel";
 import { chatRunsStore } from "@/lib/chatRunsStore";
+import { formatRunElapsed } from "@/lib/chatStreamingStatus";
 import {
   contextUsagePercent,
   contextWindowForModel,
@@ -209,6 +212,7 @@ import {
   parseSlashCommand,
   slashCommandDefinitions,
 } from "@/lib/slashCommandProvider";
+import { spinnerVerbForTurnCycle } from "@/lib/spinnerVerbs";
 import type { AutocompleteItem } from "@/lib/useAutocomplete";
 import { useAutocomplete } from "@/lib/useAutocomplete";
 import {
@@ -237,7 +241,12 @@ export function ChatPage(): React.ReactElement {
     Record<string, ChatModelChoice>
   >({});
   const [showCommandHelp, setShowCommandHelp] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  // `terminalMounted` keeps the PTY session alive: the panel (and its backend
+  // session) only unmounts on an explicit close. `terminalMinimized` just
+  // collapses the panel to a zero-height bar while leaving the shell connected.
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  const [terminalMinimized, setTerminalMinimized] = useState(false);
+  const terminalPanelRef = useRef<ImperativePanelHandle | null>(null);
   const activeTabKey = chatTabKeyForSession(urlSessionId);
   const prompt = useChatPinnedTabsStore((state) => state.drafts[activeTabKey] ?? "");
   const setDraft = useChatPinnedTabsStore((state) => state.setDraft);
@@ -253,8 +262,20 @@ export function ChatPage(): React.ReactElement {
     [activeTabKey, setDraft],
   );
 
+  const handleOpenTerminal = useCallback(() => {
+    setTerminalMounted(true);
+    setTerminalMinimized(false);
+    terminalPanelRef.current?.expand();
+  }, []);
+
+  const handleMinimizeTerminal = useCallback(() => {
+    setTerminalMinimized(true);
+    terminalPanelRef.current?.collapse();
+  }, []);
+
   const handleCloseTerminal = useCallback(() => {
-    setTerminalOpen(false);
+    setTerminalMounted(false);
+    setTerminalMinimized(false);
   }, []);
 
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -347,6 +368,7 @@ export function ChatPage(): React.ReactElement {
     runState,
     externallyRunning,
     activeRunId,
+    activeRunStartedAt,
     error,
     hasMoreBefore,
     olderMessagesLoading,
@@ -610,18 +632,18 @@ export function ChatPage(): React.ReactElement {
         : ` / ${selectedModelChoice.reasoningEffort}`;
     return `${selectedModelChoice.provider} / ${selectedModelChoice.model}${effort}`;
   }, [selectedModelChoice]);
-  const [scrollReadyTabKey, setScrollReadyTabKey] = useState(activeTabKey);
-  const conversationContentVisible = sessionLoaded && scrollReadyTabKey === activeTabKey;
-  const handleConversationScrollReady = useCallback((tabKey: string) => {
-    setScrollReadyTabKey(tabKey);
+  const [restoredScrollTabKey, setRestoredScrollTabKey] = useState(activeTabKey);
+  const conversationContentVisible = sessionLoaded && restoredScrollTabKey === activeTabKey;
+  const handleConversationScrollRestored = useCallback((tabKey: string) => {
+    setRestoredScrollTabKey(tabKey);
   }, []);
 
   return (
-    <div className="chat-surface relative -mx-6 -my-8 h-[calc(100dvh-2.75rem)] overflow-hidden bg-bg md:-mx-10 md:-my-10">
+    <div className="chat-surface relative -mx-6 -my-8 flex h-[calc(100dvh-2.75rem)] flex-col overflow-hidden bg-bg md:-mx-10 md:-my-10">
       <ResizablePanelGroup
         direction="vertical"
         autoSaveId="strata-chat-terminal"
-        className="h-full"
+        className="min-h-0 flex-1"
       >
         <ResizablePanel id="chat" order={1} minSize={30} className="!overflow-hidden">
           <section className="relative flex h-full min-h-0 min-w-0 flex-col">
@@ -662,19 +684,24 @@ export function ChatPage(): React.ReactElement {
                   </>
                 )}
               </ConversationContent>
-              <ConversationSessionScrollReset
+              <ConversationTabBottomController
                 tabKey={activeTabKey}
                 ready={sessionLoaded}
-                revealed={conversationContentVisible}
-                onReveal={handleConversationScrollReady}
+                visible={conversationContentVisible}
+                onRestored={handleConversationScrollRestored}
               />
               {conversationContentVisible ? <ConversationScrollButton /> : null}
             </Conversation>
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-3 md:px-6 md:pb-4">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6 md:pb-[max(1rem,env(safe-area-inset-bottom))]">
               <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
-                <div className="flex justify-end px-1">
-                  <RunStatusBadge runState={runState} externallyRunning={externallyRunning} />
+                <div className="flex justify-start px-1">
+                  <RunStatusBadge
+                    runState={runState}
+                    externallyRunning={externallyRunning}
+                    startedAt={activeRunStartedAt}
+                    turnSeed={activeRunStartedAt ?? activeRunId}
+                  />
                 </div>
                 <PromptInput
                   key={activeTabKey}
@@ -741,57 +768,66 @@ export function ChatPage(): React.ReactElement {
                 </PromptInput>
               </div>
             </div>
-
-            {terminalOpen ? null : (
-              <div className="pointer-events-none absolute right-3 bottom-3 z-30 md:right-6 md:bottom-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  aria-label="Open terminal"
-                  title="Open terminal"
-                  onClick={() => setTerminalOpen(true)}
-                  className="pointer-events-auto h-7 w-7 rounded-md border-hairline bg-bg-elev text-fg-dim shadow-sm hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5"
-                >
-                  <TerminalIcon size={13} strokeWidth={1.75} />
-                </Button>
-              </div>
-            )}
           </section>
         </ResizablePanel>
-        {terminalOpen ? (
+        {terminalMounted ? (
           <>
-            <ResizableHandle withHandle />
+            {terminalMinimized ? null : <ResizableHandle withHandle />}
             <ResizablePanel
+              ref={terminalPanelRef}
               id="terminal"
               order={2}
+              collapsible
+              collapsedSize={0}
               defaultSize={38}
               minSize={12}
               maxSize={85}
+              onCollapse={() => setTerminalMinimized(true)}
+              onExpand={() => setTerminalMinimized(false)}
               className="!overflow-hidden"
             >
-              <TerminalPanel onClose={handleCloseTerminal} />
+              <TerminalPanel onMinimize={handleMinimizeTerminal} onClose={handleCloseTerminal} />
             </ResizablePanel>
           </>
         ) : null}
       </ResizablePanelGroup>
+      {terminalMounted && !terminalMinimized ? null : (
+        <button
+          type="button"
+          onClick={handleOpenTerminal}
+          aria-expanded={false}
+          aria-label={terminalMounted ? "Expand terminal (session running)" : "Open terminal"}
+          title={terminalMounted ? "Expand terminal (session running)" : "Open terminal"}
+          className="flex h-9 shrink-0 items-center gap-2 border-hairline border-t bg-bg-elev px-3 text-fg-dim transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          <TerminalIcon size={13} strokeWidth={1.75} />
+          <span className="text-xs font-medium">Terminal</span>
+          {terminalMounted ? (
+            <span className="flex items-center gap-1.5 text-2xs text-fg-mute">
+              <span className="size-2 shrink-0 rounded-full bg-good" aria-hidden />
+              running
+            </span>
+          ) : null}
+          <ChevronUp size={14} strokeWidth={1.75} className="ml-auto" />
+        </button>
+      )}
     </div>
   );
 }
 
-function ConversationSessionScrollReset({
+function ConversationTabBottomController({
   tabKey,
   ready,
-  revealed,
-  onReveal,
+  visible,
+  onRestored,
 }: {
   tabKey: string;
   ready: boolean;
-  revealed: boolean;
-  onReveal(tabKey: string): void;
+  visible: boolean;
+  onRestored(tabKey: string): void;
 }): null {
   const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
-  const lastResetKeyRef = useRef<string | null>(null);
+  const restoredTabKeyRef = useRef<string | null>(null);
 
   const forceScrollToBottom = useCallback(() => {
     const scrollElement = scrollRef.current;
@@ -804,29 +840,29 @@ function ConversationSessionScrollReset({
   }, [scrollRef, scrollToBottom, state]);
 
   useLayoutEffect(() => {
-    if (!ready || lastResetKeyRef.current === tabKey) {
+    if (!ready || restoredTabKeyRef.current === tabKey) {
       return;
     }
-    lastResetKeyRef.current = tabKey;
+    restoredTabKeyRef.current = tabKey;
     forceScrollToBottom();
     const frame = window.requestAnimationFrame(() => {
-      if (lastResetKeyRef.current !== tabKey) {
+      if (restoredTabKeyRef.current !== tabKey) {
         return;
       }
       forceScrollToBottom();
-      onReveal(tabKey);
+      onRestored(tabKey);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [forceScrollToBottom, onReveal, ready, tabKey]);
+  }, [forceScrollToBottom, onRestored, ready, tabKey]);
 
   useLayoutEffect(() => {
-    if (!revealed || !ready || lastResetKeyRef.current !== tabKey) {
+    if (!visible || !ready || restoredTabKeyRef.current !== tabKey) {
       return;
     }
     forceScrollToBottom();
     const frame = window.requestAnimationFrame(forceScrollToBottom);
     return () => window.cancelAnimationFrame(frame);
-  }, [forceScrollToBottom, ready, revealed, tabKey]);
+  }, [forceScrollToBottom, ready, tabKey, visible]);
 
   return null;
 }
@@ -1116,7 +1152,7 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
   );
 }
 
-const CHAT_TAB_WIDTH_CLASS = "w-44 md:w-52";
+const CHAT_TAB_WIDTH_CLASS = "w-32 sm:w-44 md:w-52";
 const RESTRICT_CHAT_TAB_DRAG_TO_HORIZONTAL: Modifier = ({ transform }) => ({
   ...transform,
   y: 0,
@@ -2379,48 +2415,246 @@ function toLanguageModelUsage(usage: TokenUsageTotals): LanguageModelUsage {
 function RunStatusBadge({
   runState,
   externallyRunning,
+  startedAt,
+  turnSeed,
 }: {
   runState: ChatRunState;
   externallyRunning: boolean;
-}): React.ReactElement {
+  startedAt: string | null;
+  turnSeed: string | null;
+}): React.ReactElement | null {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const live = runState !== "idle" || externallyRunning;
+  const startedMs = useMemo(() => timestampMs(startedAt), [startedAt]);
+  const statusCycle =
+    startedMs === null || !live ? 0 : Math.max(0, Math.floor((nowMs - startedMs) / 30_000));
+  const label = useMemo(
+    () => spinnerVerbForTurnCycle(turnSeed, statusCycle),
+    [turnSeed, statusCycle],
+  );
+
+  useEffect(() => {
+    if (!live) {
+      return;
+    }
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [live, turnSeed]);
+
+  const turnKey = startedAt ?? turnSeed ?? label;
+
   if (runState === "idle") {
     if (externallyRunning) {
       return (
-        <span
-          className="inline-flex items-center gap-2"
+        <StreamingStatusPill
+          label={label}
           title="Advanced by the CLI, TUI, or another tab"
-        >
-          <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-accent" />
-          <span className="label-status text-fg-dim">running elsewhere</span>
-        </span>
+          elapsed={formatRunElapsed(startedAt, nowMs)}
+          typingKey={turnKey}
+        />
       );
     }
+    return null;
+  }
+
+  if (runState === "streaming" || runState === "starting") {
     return (
-      <span className="inline-flex items-center gap-2">
-        <Circle size={13} strokeWidth={1.75} className="text-fg-mute" />
-        <span className="label-status text-fg-mute">idle</span>
-      </span>
+      <StreamingStatusPill
+        label={label}
+        elapsed={formatRunElapsed(startedAt, nowMs)}
+        typingKey={turnKey}
+      />
     );
   }
+
   return (
     <span className="inline-flex items-center gap-2">
-      {runState === "cancelling" ? (
-        <AlertCircle size={13} strokeWidth={1.75} className="text-warn" />
-      ) : runState === "disconnected" ? (
-        <AlertCircle size={13} strokeWidth={1.75} className="text-warn" />
-      ) : (
-        <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-accent" />
-      )}
-      <span
-        className={cn(
-          "label-status text-fg-dim",
-          runState === "starting" || runState === "streaming" ? "animate-pulse" : null,
-        )}
-      >
-        {runState === "starting" ? "starting" : runState}
+      <AlertCircle size={13} strokeWidth={1.75} className="text-warn" />
+      <span className="label-status text-fg-dim">
+        {runState === "cancelling" ? "stopping" : runState}
       </span>
     </span>
   );
+}
+
+function StreamingStatusPill({
+  label,
+  elapsed,
+  title,
+  typingKey,
+}: {
+  label: string;
+  elapsed: string | null;
+  title?: string;
+  typingKey: string;
+}): React.ReactElement {
+  return (
+    <span className="inline-flex items-center gap-2 px-1 py-0.5" title={title}>
+      <span aria-hidden="true" className="streaming-status-dot" />
+      <ShimmeringTypingText
+        className="label-status text-selection"
+        text={label}
+        typingKey={typingKey}
+      />
+      {elapsed === null ? null : (
+        <span className="inline-flex items-center gap-2 font-mono text-xs leading-4 text-fg-mute">
+          {elapsed}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function ShimmeringTypingText({
+  text,
+  className,
+  shimmerWidth = 140,
+  typingKey,
+}: {
+  text: string;
+  className?: string;
+  shimmerWidth?: number;
+  typingKey: string;
+}): React.ReactElement {
+  const displayedText = useTypingText(`${text}...`, typingKey);
+
+  return (
+    <span
+      aria-label={displayedText}
+      className={cn("streaming-text-shimmer relative inline-block", className)}
+      style={{ "--shiny-width": `${shimmerWidth}px` } as React.CSSProperties}
+    >
+      <span className="streaming-text-shimmer-base" aria-hidden="true">
+        {displayedText}
+      </span>
+      <span className="streaming-text-shimmer-glare absolute inset-0" aria-hidden="true">
+        {displayedText}
+      </span>
+    </span>
+  );
+}
+
+type TypingPhase = "idle" | "deleting" | "typing";
+
+interface TypingTextSnapshot {
+  displayedText: string;
+  phase: TypingPhase;
+  targetText: string;
+  updatedAt: number;
+}
+
+const typingTextSnapshots = new Map<string, TypingTextSnapshot>();
+
+function useTypingText(
+  text: string,
+  persistenceKey: string,
+  typeSpeed = 35,
+  deleteSpeed = 18,
+): string {
+  const initialSnapshotRef = useRef(typingTextSnapshots.get(persistenceKey));
+  const [displayedText, setDisplayedText] = useState(
+    () => initialSnapshotRef.current?.displayedText ?? "",
+  );
+  const [phase, setPhase] = useState<TypingPhase>(() => {
+    const snapshot = initialSnapshotRef.current;
+    if (snapshot === undefined) {
+      return "typing";
+    }
+    return snapshot.targetText === text ? snapshot.phase : "deleting";
+  });
+  const previousTextRef = useRef(initialSnapshotRef.current?.targetText ?? text);
+  const persistenceKeyRef = useRef(persistenceKey);
+
+  useEffect(() => {
+    if (persistenceKey === persistenceKeyRef.current) {
+      return;
+    }
+    persistenceKeyRef.current = persistenceKey;
+    const snapshot = typingTextSnapshots.get(persistenceKey);
+    setDisplayedText(snapshot?.displayedText ?? "");
+    setPhase(
+      snapshot === undefined
+        ? "typing"
+        : snapshot.targetText === text
+          ? snapshot.phase
+          : "deleting",
+    );
+    previousTextRef.current = snapshot?.targetText ?? text;
+  }, [persistenceKey, text]);
+
+  useEffect(() => {
+    if (text === previousTextRef.current) {
+      return;
+    }
+    previousTextRef.current = text;
+    setPhase("deleting");
+  }, [text]);
+
+  useEffect(() => {
+    typingTextSnapshots.set(persistenceKey, {
+      displayedText,
+      phase,
+      targetText: text,
+      updatedAt: Date.now(),
+    });
+    pruneTypingTextSnapshots();
+  }, [displayedText, persistenceKey, phase, text]);
+
+  useEffect(() => {
+    if (phase === "idle") {
+      return;
+    }
+
+    const timeout = window.setTimeout(
+      () => {
+        const currentGraphemes = Array.from(displayedText);
+
+        if (phase === "deleting") {
+          if (currentGraphemes.length === 0) {
+            setPhase("typing");
+            return;
+          }
+          setDisplayedText(currentGraphemes.slice(0, -1).join(""));
+          return;
+        }
+
+        const targetGraphemes = Array.from(text);
+        if (currentGraphemes.length >= targetGraphemes.length) {
+          setDisplayedText(text);
+          setPhase("idle");
+          return;
+        }
+        setDisplayedText(targetGraphemes.slice(0, currentGraphemes.length + 1).join(""));
+      },
+      phase === "deleting" ? deleteSpeed : typeSpeed,
+    );
+
+    return () => window.clearTimeout(timeout);
+  }, [deleteSpeed, displayedText, phase, text, typeSpeed]);
+
+  return displayedText;
+}
+
+function pruneTypingTextSnapshots(): void {
+  if (typingTextSnapshots.size <= 20) {
+    return;
+  }
+  const snapshots = [...typingTextSnapshots.entries()].sort(
+    ([, left], [, right]) => right.updatedAt - left.updatedAt,
+  );
+  typingTextSnapshots.clear();
+  for (const [key, snapshot] of snapshots.slice(0, 20)) {
+    typingTextSnapshots.set(key, snapshot);
+  }
+}
+
+function timestampMs(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function InlineError({ message }: { message: string }): React.ReactElement {

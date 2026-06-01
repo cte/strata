@@ -614,14 +614,14 @@ function RoutineStatusToggle({
   onChange(value: RoutineStatusFilter): void;
 }): React.ReactElement {
   return (
-    <div className="grid grid-cols-4 rounded-md border border-hairline p-0.5">
+    <div className="flex flex-wrap rounded-md border border-hairline p-0.5">
       {STATUS_FILTERS.map((filter) => (
         <button
           key={filter.value}
           type="button"
           onClick={() => onChange(filter.value)}
           className={cn(
-            "h-8 min-w-16 rounded-[5px] px-2 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "h-8 min-w-16 flex-1 rounded-[5px] px-2 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             value === filter.value ? "bg-surface-2 text-fg" : "text-fg-dim hover:text-fg",
           )}
         >

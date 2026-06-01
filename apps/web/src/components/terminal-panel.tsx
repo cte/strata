@@ -1,4 +1,4 @@
-import { RotateCcw, X } from "lucide-react";
+import { ChevronDown, RotateCcw, Terminal as TerminalIcon, X } from "lucide-react";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +23,15 @@ const STATUS_META: Record<TerminalStatus, { label: string; dot: string }> = {
  * grid auto-fits to the container via {@link useTerminalSession}'s ResizeObserver,
  * so dragging the panel divider re-fits the shell with no extra wiring here.
  */
-export function TerminalPanel({ onClose }: { onClose: () => void }): React.ReactElement {
+export function TerminalPanel({
+  onMinimize,
+  onClose,
+}: {
+  /** Collapse the panel to the bottom bar while keeping the PTY session alive. */
+  onMinimize: () => void;
+  /** Tear down the PTY session and unmount the panel. */
+  onClose: () => void;
+}): React.ReactElement {
   const terminal = useTerminalSession(DEFAULT_FONT);
   const meta = STATUS_META[terminal.status];
 
@@ -32,22 +40,33 @@ export function TerminalPanel({ onClose }: { onClose: () => void }): React.React
       className="flex h-full min-h-0 flex-col border-t border-hairline bg-bg-elev"
       aria-label="Terminal"
     >
-      <header className="flex h-9 shrink-0 items-center gap-2 border-hairline border-b pr-1.5 pl-3">
-        <span
-          className={cn("size-2 shrink-0 rounded-full", meta.dot)}
-          title={meta.label}
-          aria-hidden
-        />
-        <span className="text-xs font-medium text-fg">Terminal</span>
-        {terminal.shell !== null ? (
-          <span className="min-w-0 truncate text-2xs text-fg-mute" title={terminal.shell}>
-            {terminal.shell}
-          </span>
-        ) : (
-          <span className="text-2xs text-fg-mute">{meta.label}</span>
-        )}
+      <header className="flex h-9 shrink-0 items-center border-hairline border-b pr-1.5">
+        <button
+          type="button"
+          onClick={onMinimize}
+          aria-expanded
+          aria-label="Minimize terminal"
+          title="Minimize terminal (keeps the session running)"
+          className="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-fg-dim transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          <TerminalIcon size={13} strokeWidth={1.75} />
+          <span className="text-xs font-medium text-fg">Terminal</span>
+          {terminal.shell !== null ? (
+            <span className="min-w-0 truncate text-2xs text-fg-mute" title={terminal.shell}>
+              {terminal.shell}
+            </span>
+          ) : (
+            <span className="text-2xs text-fg-mute">{meta.label}</span>
+          )}
+          <span
+            className={cn("ml-1 size-2 shrink-0 rounded-full", meta.dot)}
+            title={meta.label}
+            aria-hidden
+          />
+          <ChevronDown size={14} strokeWidth={1.75} className="ml-auto shrink-0" />
+        </button>
 
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="flex items-center gap-0.5 pl-1.5">
           <ToolbarButton label="Restart session" onClick={terminal.restart}>
             <RotateCcw size={14} strokeWidth={1.75} />
           </ToolbarButton>

@@ -207,6 +207,65 @@ body {
   color: var(--fg-mute);
 }
 
+.streaming-status-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 9999px;
+  background: var(--selection);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--selection) 38%, transparent);
+  animation: streaming-status-dot-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes streaming-status-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.82);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--selection) 30%, transparent);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0.22rem color-mix(in srgb, var(--selection) 0%, transparent);
+  }
+}
+
+.streaming-text-shimmer {
+  transition: width 180ms ease-out;
+}
+
+.streaming-text-shimmer-base {
+  color: color-mix(in srgb, var(--selection) 70%, var(--bg));
+}
+
+.streaming-text-shimmer-glare {
+  background-image: linear-gradient(
+    110deg,
+    transparent 0%,
+    transparent 36%,
+    var(--selection) 50%,
+    transparent 64%,
+    transparent 100%
+  );
+  background-repeat: no-repeat;
+  background-size: var(--shiny-width, 100px) 100%;
+  background-position: calc(-100% - var(--shiny-width, 100px)) 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: streaming-text-shimmer 3s ease-in-out infinite alternate;
+}
+
+@keyframes streaming-text-shimmer {
+  0% {
+    background-position: calc(-100% - var(--shiny-width, 100px)) 0;
+  }
+  100% {
+    background-position: calc(100% + var(--shiny-width, 100px)) 0;
+  }
+}
+
 .chat-surface {
   --chat-text: 13px;
   --chat-text-leading: 1.5rem;
@@ -564,7 +623,8 @@ body {
   .strata-grid,
   .strata-aurora-1,
   .strata-aurora-2,
-  .strata-plate {
+  .strata-plate,
+  .streaming-text-dots > span {
     animation: none !important;
   }
 }

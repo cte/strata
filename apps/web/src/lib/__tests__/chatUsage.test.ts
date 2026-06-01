@@ -4,6 +4,7 @@ import {
   contextUsagePercent,
   contextWindowForModel,
   createTokenUsageTotals,
+  formatTokenUsageCompact,
   formatTokens,
   normalizeModelUsage,
 } from "../chatUsage.js";
@@ -60,6 +61,29 @@ describe("chat usage", () => {
     expect(second.output).toBe(30);
     expect(second.total).toBe(180);
     expect(second.latestContextTokens).toBe(60);
+  });
+
+  test("formats compact per-turn usage", () => {
+    expect(
+      formatTokenUsageCompact({
+        input: 1200,
+        output: 4620,
+        cacheRead: 3000,
+        cacheWrite: 0,
+        total: 8820,
+        cost: 0.0042,
+      }),
+    ).toBe("1.2k in · 4.6k out · 3.0k read · $0.004");
+    expect(
+      formatTokenUsageCompact({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+        cost: 0,
+      }),
+    ).toBeNull();
   });
 
   test("formats tokens and computes context windows", () => {

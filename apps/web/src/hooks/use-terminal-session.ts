@@ -107,6 +107,10 @@ export function useTerminalSession(initialFontSize: number): TerminalSessionCont
 
     const fitAndSyncResize = () => {
       if (disposed) return;
+      // While the panel is minimized (collapsed to a zero-height host) the PTY
+      // session stays alive; skip fitting so we don't push a 0-row resize that
+      // would reflow the shell. We re-fit when the host regains size.
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
       latestSize = terminal.fit();
       const nextKey = sizeKey(latestSize);
       if (sessionId === null || nextKey === lastSentSizeKey) return;

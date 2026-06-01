@@ -14,4 +14,7 @@ export type { AgentRunEvent };
  * importable from the browser without dragging Bun-only modules into the
  * web app's TypeScript compilation.
  */
-export type ChatRunEvent = { type: "run.started"; runId: string } | AgentRunEvent;
+export type ChatRunEvent =
+  | { type: "run.started"; runId: string }
+  | { type: "run.replaced"; runId: string; previousRunId: string; sessionId: string }
+  | AgentRunEvent;

@@ -343,7 +343,7 @@ function ChatSessionCommandPalette({
         onValueChange={setSearchQuery}
         placeholder="Search chat sessions..."
       />
-      <CommandList className="max-h-[min(420px,70dvh)] px-2 py-2 [&_[cmdk-group]]:px-0">
+      <CommandList className="max-h-[min(420px,70dvh)] py-2">
         <ChatSessionListBody
           sessions={sessions}
           isLoaded={isLoaded}

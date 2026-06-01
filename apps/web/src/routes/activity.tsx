@@ -159,7 +159,7 @@ export function ActivityPage(): React.ReactElement {
 
       <section className="flex flex-wrap items-center gap-2">
         <SourceFilter value={source} onChange={setSource} />
-        <div className="ml-auto">
+        <div className="w-full sm:ml-auto sm:w-auto">
           <ResultFilterSelect value={resultFilters} onChange={setResultFilters} />
         </div>
       </section>
@@ -225,7 +225,7 @@ function ResultFilterSelect({
           type="button"
           size="sm"
           variant="secondary"
-          className="min-w-[190px] justify-between px-2.5"
+          className="w-full justify-between px-2.5 sm:w-auto sm:min-w-[190px]"
         >
           <span className="inline-flex min-w-0 items-center gap-2">
             <ListFilter size={13} strokeWidth={2} />
@@ -280,14 +280,14 @@ function SourceFilter({
   onChange(value: IngestActivitySource): void;
 }): React.ReactElement {
   return (
-    <div className="grid grid-cols-4 rounded-md border border-hairline p-0.5">
+    <div className="flex flex-wrap rounded-md border border-hairline p-0.5">
       {SOURCE_FILTERS.map((filter) => (
         <button
           key={filter.value}
           type="button"
           onClick={() => onChange(filter.value)}
           className={cn(
-            "h-8 min-w-16 rounded-[5px] px-2 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "h-8 min-w-16 flex-1 rounded-[5px] px-2 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             value === filter.value ? "bg-surface-2 text-fg" : "text-fg-dim hover:text-fg",
           )}
         >
