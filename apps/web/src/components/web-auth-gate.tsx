@@ -13,14 +13,7 @@ export function WebAuthGate({ children }: { children: React.ReactNode }): React.
   const statusQuery = useWebAuthStatus();
 
   if (statusQuery.isPending) {
-    return (
-      <AuthShell
-        status="pending"
-        statusLabel="Verifying"
-        title="Checking access"
-        description="Verifying this browser session against the local web API."
-      />
-    );
+    return <AuthLoadingShell />;
   }
 
   if (statusQuery.isError) {
@@ -146,13 +139,20 @@ function UnlockForm(): React.ReactElement {
   );
 }
 
-type AuthStatus = "locked" | "pending" | "error";
+type AuthStatus = "locked" | "error";
 
 const statusTone: Record<AuthStatus, { dot: string; text: string }> = {
   locked: { dot: "bg-accent", text: "text-accent" },
-  pending: { dot: "bg-warn", text: "text-warn" },
   error: { dot: "bg-bad", text: "text-bad" },
 };
+
+function AuthLoadingShell(): React.ReactElement {
+  return (
+    <main className="grid min-h-dvh place-items-center bg-bg" aria-busy="true">
+      <span className="dot dot-pulse bg-fg-mute" aria-label="Loading" />
+    </main>
+  );
+}
 
 function AuthShell({
   status,
@@ -181,10 +181,7 @@ function AuthShell({
             <div
               className={`mb-4 inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/60 px-2.5 py-1 font-mono text-2xs ${tone.text}`}
             >
-              <span
-                className={`dot ${tone.dot} ${status === "pending" ? "dot-pulse" : ""}`}
-                aria-hidden="true"
-              />
+              <span className={`dot ${tone.dot}`} aria-hidden="true" />
               <span className="uppercase tracking-[0.16em]">{statusLabel}</span>
             </div>
           ) : null}

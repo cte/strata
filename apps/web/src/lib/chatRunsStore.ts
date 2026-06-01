@@ -60,6 +60,7 @@ export interface SessionRunState {
   transcript: ChatMessageView[];
   runState: ChatRunState;
   activeRunId: string | null;
+  activeRunStartedAt: string | null;
   error: string | null;
   usageTotals: TokenUsageTotals;
   /** True once the persisted transcript has been seeded for this view. */
@@ -83,6 +84,7 @@ interface RunRefs {
   lastEventId: number;
   reconnectAttempts: number;
   runTerminal: boolean;
+  replacingRun: boolean;
 }
 
 /** Indirection so a stream started under the draft key follows its migration. */
@@ -112,6 +114,7 @@ function blankState(key: string): SessionRunState {
     transcript: [],
     runState: "idle",
     activeRunId: null,
+    activeRunStartedAt: null,
     error: null,
     usageTotals: createTokenUsageTotals(),
     loaded: false,
@@ -283,7 +286,14 @@ class ChatRunsStore {
   private refsFor(key: string): RunRefs {
     let refs = this.refs.get(key);
     if (refs === undefined) {
-      refs = { abort: null, runId: null, lastEventId: 0, reconnectAttempts: 0, runTerminal: false };
+      refs = {
+        abort: null,
+        runId: null,
+        lastEventId: 0,
+        reconnectAttempts: 0,
+        runTerminal: false,
+        replacingRun: false,
+      };
       this.refs.set(key, refs);
     }
     return refs;
@@ -463,11 +473,13 @@ class ChatRunsStore {
     refs.lastEventId = 0;
     refs.reconnectAttempts = 0;
     refs.runTerminal = false;
+    refs.replacingRun = false;
     const keyRef: KeyRef = { current: viewKey };
 
     const sentAttachments = input.attachments;
     this.update(viewKey, {
       runState: "starting",
+      activeRunStartedAt: new Date().toISOString(),
       error: null,
       loaded: true,
       externallyRunning: false,
@@ -524,9 +536,16 @@ class ChatRunsStore {
     const key = keyRef.current;
     const streamDisconnected =
       !controller.signal.aborted && refs.runId !== null && !refs.runTerminal;
+    if (refs.replacingRun) {
+      refs.abort = null;
+      refs.runId = null;
+      refs.runTerminal = true;
+      refs.replacingRun = false;
+      return;
+    }
     if (refs.abort === controller) {
       if (refs.runTerminal || controller.signal.aborted) {
-        this.update(key, { runState: "idle", activeRunId: null });
+        this.update(key, { runState: "idle", activeRunId: null, activeRunStartedAt: null });
         refs.runId = null;
       } else if (streamDisconnected) {
         const runId = refs.runId;
@@ -535,7 +554,7 @@ class ChatRunsStore {
         }
         this.update(key, { runState: "disconnected", error: DISCONNECT_MESSAGE });
       } else {
-        this.update(key, { runState: "idle", activeRunId: null });
+        this.update(key, { runState: "idle", activeRunId: null, activeRunStartedAt: null });
         refs.runId = null;
       }
       refs.abort = null;
@@ -570,7 +589,11 @@ class ChatRunsStore {
           return;
         }
         if (refs.runTerminal || controller.signal.aborted) {
-          this.update(keyRef.current, { runState: "idle", activeRunId: null });
+          this.update(keyRef.current, {
+            runState: "idle",
+            activeRunId: null,
+            activeRunStartedAt: null,
+          });
           refs.runId = null;
           refs.abort = null;
           this.refreshSessions();
@@ -609,7 +632,17 @@ class ChatRunsStore {
       case "run.started":
         refs.runId = event.runId;
         refs.runTerminal = false;
-        this.update(key, { activeRunId: event.runId, runState: "streaming" });
+        refs.replacingRun = false;
+        this.update(key, {
+          activeRunId: event.runId,
+          activeRunStartedAt: this.states.get(key)?.activeRunStartedAt ?? new Date().toISOString(),
+          runState: "streaming",
+        });
+        break;
+      case "run.replaced":
+        refs.replacingRun = true;
+        refs.runTerminal = true;
+        this.attachReplacementRun(key, event.runId, event.sessionId);
         break;
       case "session.started": {
         const target = this.migrateToSession(keyRef, event.sessionId);
@@ -675,6 +708,7 @@ class ChatRunsStore {
         this.flushPendingTranscript(key);
         refs.runTerminal = true;
         refs.runId = null;
+        refs.replacingRun = false;
         const sessionId = event.result.sessionId !== "" ? event.result.sessionId : undefined;
         const message =
           event.result.status === "completed"
@@ -683,6 +717,7 @@ class ChatRunsStore {
         this.update(key, {
           runState: "idle",
           activeRunId: null,
+          activeRunStartedAt: null,
           ...(sessionId === undefined ? {} : { sessionId }),
           ...(message === null ? {} : { error: message }),
         });
@@ -698,9 +733,38 @@ class ChatRunsStore {
         this.flushPendingTranscript(key);
         refs.runTerminal = true;
         refs.runId = null;
-        this.update(key, { runState: "idle", activeRunId: null, error: event.message });
+        refs.replacingRun = false;
+        this.update(key, {
+          runState: "idle",
+          activeRunId: null,
+          activeRunStartedAt: null,
+          error: event.message,
+        });
         this.updateTranscript(key, markPendingMessagesErrored);
         break;
+    }
+  }
+
+  private attachReplacementRun(key: string, runId: string, sessionId: string): void {
+    const refs = this.refsFor(key);
+    const controller = new AbortController();
+    refs.abort = controller;
+    refs.runId = runId;
+    refs.lastEventId = 0;
+    refs.reconnectAttempts = 0;
+    refs.runTerminal = false;
+    refs.replacingRun = false;
+    const keyRef: KeyRef = { current: key };
+    this.update(key, {
+      runState: "streaming",
+      activeRunId: runId,
+      activeRunStartedAt: new Date().toISOString(),
+      externallyRunning: false,
+      ...(this.states.get(key)?.sessionId === null ? { sessionId } : {}),
+    });
+    if (!this.resumeStream(keyRef, refs, runId, controller, noopNavigate)) {
+      refs.abort = null;
+      this.update(key, { runState: "disconnected", error: DISCONNECT_MESSAGE });
     }
   }
 
@@ -743,8 +807,9 @@ class ChatRunsStore {
         refs.abort = null;
         refs.runTerminal = true;
         refs.runId = null;
+        refs.replacingRun = false;
       }
-      this.update(key, { runState: "idle", activeRunId: null });
+      this.update(key, { runState: "idle", activeRunId: null, activeRunStartedAt: null });
       this.updateTranscript(key, markPendingMessagesComplete);
       this.refreshSessions();
     };
@@ -925,7 +990,7 @@ class ChatRunsStore {
         if (refs !== undefined && refs.abort !== null) {
           continue; // already streaming this run in this tab
         }
-        void this.attachBackgroundRun(sessionId, run.runId, run.lastEventId ?? 0);
+        void this.attachBackgroundRun(sessionId, run.runId, run.lastEventId ?? 0, run.startedAt);
       }
       // A session we believe is streaming but the server no longer lists as
       // running has finished elsewhere — reconcile its transcript.
@@ -956,6 +1021,7 @@ class ChatRunsStore {
     sessionId: string,
     runId: string,
     lastEventId: number,
+    startedAt: string,
   ): Promise<void> {
     // Bail if a stream is already attached for this session (the view started
     // one, or a previous discovery tick already attached).
@@ -977,8 +1043,14 @@ class ChatRunsStore {
     refs.lastEventId = lastEventId;
     refs.reconnectAttempts = 0;
     refs.runTerminal = false;
+    refs.replacingRun = false;
     const keyRef: KeyRef = { current: sessionId };
-    this.update(sessionId, { runState: "streaming", activeRunId: runId, externallyRunning: false });
+    this.update(sessionId, {
+      runState: "streaming",
+      activeRunId: runId,
+      activeRunStartedAt: this.states.get(sessionId)?.activeRunStartedAt ?? startedAt,
+      externallyRunning: false,
+    });
     if (!this.resumeStream(keyRef, refs, runId, controller, noopNavigate)) {
       refs.abort = null;
       this.update(sessionId, { runState: "disconnected", error: DISCONNECT_MESSAGE });
@@ -1003,7 +1075,12 @@ class ChatRunsStore {
         const resolved = status ?? detail?.session.status ?? "unknown";
         const message =
           resolved === "completed" ? null : agentCompletionMessage(resolved, stoppedReason);
-        this.update(sessionId, { runState: "idle", activeRunId: null, error: message });
+        this.update(sessionId, {
+          runState: "idle",
+          activeRunId: null,
+          activeRunStartedAt: null,
+          error: message,
+        });
         if (resolved !== "completed") {
           this.updateTranscript(
             sessionId,

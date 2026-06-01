@@ -74,6 +74,19 @@ export function formatTokens(count: number): string {
   return `${Math.round(count / 1_000_000)}M`;
 }
 
+export function formatTokenUsageCompact(usage: TokenUsage): string | null {
+  if (usage.input === 0 && usage.output === 0 && usage.cacheRead === 0 && usage.cacheWrite === 0) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (usage.input > 0) parts.push(`${formatTokens(usage.input)} in`);
+  if (usage.output > 0) parts.push(`${formatTokens(usage.output)} out`);
+  if (usage.cacheRead > 0) parts.push(`${formatTokens(usage.cacheRead)} read`);
+  if (usage.cacheWrite > 0) parts.push(`${formatTokens(usage.cacheWrite)} write`);
+  if (usage.cost > 0) parts.push(`$${usage.cost.toFixed(3)}`);
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
 export function contextWindowForModel(
   provider: ChatProviderName,
   model: string,

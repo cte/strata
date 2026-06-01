@@ -401,9 +401,10 @@ class DefaultChatService implements ChatService {
       });
       this.runStore.finishRun(active.runId, finish);
       this.unregisterRun(active);
-      active.events.close();
       if (isContinuableSessionStatus(finish.status) && active.sessionId !== undefined) {
-        void this.drainQueuedMessages(active.sessionId, this.queuedMessageDefaults(input));
+        void this.drainQueuedMessages(active, this.queuedMessageDefaults(input));
+      } else {
+        active.events.close();
       }
     }
   }
@@ -565,15 +566,25 @@ class DefaultChatService implements ChatService {
     return envelopes;
   }
 
-  private async drainQueuedMessages(sessionId: string, defaults: StartChatRunInput): Promise<void> {
+  private async drainQueuedMessages(
+    previousActive: ActiveChatRun,
+    defaults: StartChatRunInput,
+  ): Promise<void> {
+    const sessionId = previousActive.sessionId;
+    if (sessionId === undefined) {
+      return;
+    }
     const next = this.runStore.peekNextQueuedMessage(sessionId);
     if (next === undefined) {
+      previousActive.events.close();
       return;
     }
     if (this.getActiveRunForSession(sessionId) !== undefined) {
+      previousActive.events.close();
       return;
     }
     if (!this.runStore.removeQueuedMessage(next.id)) {
+      previousActive.events.close();
       return;
     }
     await this.recordSessionEvent(sessionId, "web.chat.queue.changed", {
@@ -582,7 +593,14 @@ class DefaultChatService implements ChatService {
       action: "dequeued",
     });
     try {
-      await this.startRun(startInputFromQueuedMessage(next, sessionId, defaults));
+      const nextRun = await this.startRun(startInputFromQueuedMessage(next, sessionId, defaults));
+      this.publishRunEvent(previousActive, {
+        type: "run.replaced",
+        previousRunId: previousActive.runId,
+        runId: nextRun.runId,
+        sessionId,
+      });
+      previousActive.events.close();
     } catch (error: unknown) {
       this.runStore.addQueuedMessage({
         id: next.id,
@@ -604,6 +622,7 @@ class DefaultChatService implements ChatService {
         queuedMessageId: next.id,
         errorMessage: messageFromError(error),
       });
+      previousActive.events.close();
     }
   }
 
@@ -844,6 +863,7 @@ function messageFromError(error: unknown): string {
 
 const KNOWN_CHAT_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "run.started",
+  "run.replaced",
   "session.started",
   "message.user",
   "model.request",

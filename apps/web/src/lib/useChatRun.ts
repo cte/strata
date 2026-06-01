@@ -23,6 +23,7 @@ export interface UseChatRunResult {
   /** A run is advancing this session in another process/tab (not streamed here). */
   externallyRunning: boolean;
   activeRunId: string | null;
+  activeRunStartedAt: string | null;
   error: string | null;
   hasMoreBefore: boolean;
   olderMessagesLoading: boolean;
@@ -82,6 +83,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
       transcript: [],
       runState: "idle",
       activeRunId: null,
+      activeRunStartedAt: null,
       error: null,
       usageTotals: createTokenUsageTotals(),
       loaded: false,
@@ -142,6 +144,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     runState: view.runState,
     externallyRunning: view.externallyRunning,
     activeRunId: view.activeRunId,
+    activeRunStartedAt: view.activeRunStartedAt,
     error: view.error,
     hasMoreBefore: view.hasMoreBefore,
     olderMessagesLoading: view.olderMessagesLoading,
