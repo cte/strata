@@ -10,10 +10,10 @@ import {
 } from "@dnd-kit/core";
 import {
   horizontalListSortingStrategy,
-  verticalListSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
+  verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
@@ -24,6 +24,8 @@ import {
   BookOpen,
   Brain,
   Check,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Circle,
   Copy,
@@ -289,6 +291,7 @@ export function ChatPage(): React.ReactElement {
   const setDraft = useChatPinnedTabsStore((state) => state.setDraft);
   const clearDraft = useChatPinnedTabsStore((state) => state.clearDraft);
   const activateSessionTab = useChatPinnedTabsStore((state) => state.activateSession);
+  const ensureNewTab = useChatPinnedTabsStore((state) => state.ensureNewTab);
   const replaceNewTabWithSession = useChatPinnedTabsStore((state) => state.replaceNewWithSession);
   const syncPinnedTabs = useChatPinnedTabsStore((state) => state.syncSessions);
   const { allSessions, isLoaded: sessionsLoaded, sessionIndexComplete } = useChatSessions();
@@ -335,10 +338,14 @@ export function ChatPage(): React.ReactElement {
     const session =
       urlSessionId === null ? null : allSessions.find((entry) => entry.id === urlSessionId);
     if (urlSessionId === null) {
+      // On the new-chat route, surface a "New session" placeholder tab that
+      // becomes the active tab and converts in place once the first turn
+      // persists the session.
+      ensureNewTab();
       return;
     }
     activateSessionTab(urlSessionId, session?.title ?? null);
-  }, [activateSessionTab, allSessions, urlSessionId]);
+  }, [activateSessionTab, allSessions, ensureNewTab, urlSessionId]);
 
   useEffect(() => {
     if (!sessionsLoaded) {
@@ -1189,7 +1196,7 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
         onDragEnd={handleTabDragEnd}
       >
         <SortableContext items={tabKeys} strategy={horizontalListSortingStrategy}>
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          <ChatTabScroller>
             {tabs.map((tab) => {
               const tabSession =
                 tab.sessionId === null
@@ -1219,7 +1226,7 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
             >
               <Plus size={14} strokeWidth={1.75} />
             </Button>
-          </div>
+          </ChatTabScroller>
         </SortableContext>
       </DndContext>
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -1297,6 +1304,133 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
   );
 }
 
+/**
+ * Horizontal tab strip viewport. Replaces the browser's chunky native
+ * horizontal scrollbar with an elegant treatment: the native scrollbar is
+ * hidden, the over-scrolled edges fade out behind a gradient mask, and small
+ * chevron buttons appear only on the side(s) that can still scroll. Vertical
+ * wheel gestures are translated to horizontal scrolling so a trackpad/mouse can
+ * move through tabs without a visible scrollbar.
+ */
+function ChatTabScroller({ children }: { children: React.ReactNode }): React.ReactElement {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [overflow, setOverflow] = useState<{ start: boolean; end: boolean }>({
+    start: false,
+    end: false,
+  });
+
+  const syncOverflow = useCallback(() => {
+    const el = viewportRef.current;
+    if (el === null) {
+      return;
+    }
+    const max = el.scrollWidth - el.clientWidth;
+    const start = el.scrollLeft > 1;
+    const end = el.scrollLeft < max - 1;
+    setOverflow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (el === null) {
+      return;
+    }
+    syncOverflow();
+    const observer = new ResizeObserver(syncOverflow);
+    observer.observe(el);
+    for (const child of Array.from(el.children)) {
+      observer.observe(child);
+    }
+    return () => observer.disconnect();
+  }, [syncOverflow]);
+
+  const scrollByStep = useCallback((direction: 1 | -1) => {
+    const el = viewportRef.current;
+    if (el === null) {
+      return;
+    }
+    el.scrollBy({ left: direction * Math.max(el.clientWidth * 0.6, 160), behavior: "smooth" });
+  }, []);
+
+  const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    const el = viewportRef.current;
+    if (el === null) {
+      return;
+    }
+    // Translate the dominant vertical wheel delta into horizontal motion so the
+    // strip scrolls without a visible scrollbar. Honor native horizontal wheel
+    // (trackpad) deltas as-is.
+    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+      const max = el.scrollWidth - el.clientWidth;
+      if (max <= 0) {
+        return;
+      }
+      el.scrollLeft += event.deltaY;
+    }
+  }, []);
+
+  return (
+    <div className="relative flex min-w-0 flex-1 items-center">
+      <div
+        ref={viewportRef}
+        onScroll={syncOverflow}
+        onWheel={handleWheel}
+        className={cn(
+          "no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scroll-smooth",
+          // Fade the content out at whichever edge can still scroll, so tabs
+          // dissolve into the bar instead of being hard-cut by a scrollbar.
+          overflow.start && overflow.end && "chat-tab-fade-both",
+          overflow.start && !overflow.end && "chat-tab-fade-start",
+          !overflow.start && overflow.end && "chat-tab-fade-end",
+        )}
+      >
+        {children}
+      </div>
+      <ChatTabScrollChevron
+        side="start"
+        visible={overflow.start}
+        onClick={() => scrollByStep(-1)}
+      />
+      <ChatTabScrollChevron side="end" visible={overflow.end} onClick={() => scrollByStep(1)} />
+    </div>
+  );
+}
+
+/** A subtle, edge-docked scroll affordance that fades in only when scrollable. */
+function ChatTabScrollChevron({
+  side,
+  visible,
+  onClick,
+}: {
+  side: "start" | "end";
+  visible: boolean;
+  onClick(): void;
+}): React.ReactElement {
+  const Icon = side === "start" ? ChevronLeft : ChevronRight;
+  return (
+    <button
+      type="button"
+      aria-hidden={!visible}
+      tabIndex={visible ? 0 : -1}
+      aria-label={side === "start" ? "Scroll tabs left" : "Scroll tabs right"}
+      onClick={onClick}
+      onPointerDown={(event) => event.preventDefault()}
+      className={cn(
+        "absolute top-1/2 z-10 flex size-6 -translate-y-1/2 items-center justify-center rounded-full border border-hairline bg-bg-elev/90 text-fg-dim shadow-sm shadow-black/20 backdrop-blur-sm transition-[opacity,transform,color,background-color] duration-150 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        side === "start" ? "left-0" : "right-0",
+        visible
+          ? "pointer-events-auto opacity-100"
+          : cn(
+              "pointer-events-none opacity-0",
+              side === "start" ? "-translate-x-1" : "translate-x-1",
+            ),
+      )}
+    >
+      <Icon size={14} strokeWidth={2} />
+    </button>
+  );
+}
+
 const CHAT_TAB_WIDTH_CLASS = "w-32 sm:w-44 md:w-52";
 const RESTRICT_CHAT_TAB_DRAG_TO_HORIZONTAL: Modifier = ({ transform }) => ({
   ...transform,
@@ -1335,6 +1469,9 @@ function ChatPinnedTabButton({
         ? tab.key
         : sanitizeDisplayText(session.title)
       : snapshotTitle;
+  // The not-yet-persisted "New session" placeholder has no server row, so
+  // rename/delete don't apply; only drag + close are offered.
+  const isPlaceholder = tab.sessionId === null;
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(title);
   const [saving, setSaving] = useState(false);
@@ -1536,7 +1673,7 @@ function ChatPinnedTabButton({
             <button
               type="button"
               onClick={onSelect}
-              onDoubleClick={beginEditing}
+              onDoubleClick={isPlaceholder ? undefined : beginEditing}
               className="flex min-w-0 flex-1 cursor-default items-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <span className="truncate">{title}</span>
@@ -1544,7 +1681,7 @@ function ChatPinnedTabButton({
           </ChatTabPromptHoverCard>
         </div>
       )}
-      {editing ? null : (
+      {editing || isPlaceholder ? null : (
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
             <button
