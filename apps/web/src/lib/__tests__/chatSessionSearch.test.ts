@@ -43,5 +43,6 @@ function session(input: { id: string; title: string; model?: string }): ChatSess
     endedAt: null,
     status: "completed",
     model: input.model ?? null,
+    firstPrompt: null,
   };
 }

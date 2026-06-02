@@ -1,5 +1,5 @@
 import { ChevronDown, RotateCcw, Terminal as TerminalIcon, X } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import { Button } from "@/components/ui/button";
 import {
   type TerminalSessionController,
@@ -35,6 +35,13 @@ export function TerminalPanel({
   const terminal = useTerminalSession(DEFAULT_FONT);
   const meta = STATUS_META[terminal.status];
 
+  // When the shell process exits, just close the panel (tearing the session
+  // down) instead of surfacing a "Session ended" overlay. Connection errors
+  // still show the overlay so the user can retry without losing the panel.
+  React.useEffect(() => {
+    if (terminal.status === "closed") onClose();
+  }, [terminal.status, onClose]);
+
   return (
     <aside
       className="flex h-full min-h-0 flex-col border-t border-hairline bg-bg-elev"
@@ -51,13 +58,6 @@ export function TerminalPanel({
         >
           <TerminalIcon size={13} strokeWidth={1.75} />
           <span className="text-xs font-medium text-fg">Terminal</span>
-          {terminal.shell !== null ? (
-            <span className="min-w-0 truncate text-2xs text-fg-mute" title={terminal.shell}>
-              {terminal.shell}
-            </span>
-          ) : (
-            <span className="text-2xs text-fg-mute">{meta.label}</span>
-          )}
           <span
             className={cn("ml-1 size-2 shrink-0 rounded-full", meta.dot)}
             title={meta.label}
@@ -123,18 +123,14 @@ function SessionOverlay({
   status: TerminalStatus;
   onRestart: TerminalSessionController["restart"];
 }): React.ReactElement | null {
-  if (status !== "closed" && status !== "error") return null;
-  const ended = status === "closed";
+  // "closed" is handled by auto-closing the panel; only surface connection errors.
+  if (status !== "error") return null;
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-bg/70 backdrop-blur-[1px]">
       <div className="flex flex-col items-center gap-3 rounded-lg border border-hairline bg-bg-elev px-6 py-5 text-center shadow-lg">
-        <p className="text-sm font-medium text-fg">
-          {ended ? "Session ended" : "Connection error"}
-        </p>
+        <p className="text-sm font-medium text-fg">Connection error</p>
         <p className="max-w-56 text-xs leading-5 text-fg-dim">
-          {ended
-            ? "The shell process exited. Start a fresh session to keep working."
-            : "The terminal lost its connection to the local backend."}
+          The terminal lost its connection to the local backend.
         </p>
         <Button type="button" size="sm" variant="outline" onClick={onRestart} className="gap-1.5">
           <RotateCcw size={13} strokeWidth={1.75} />

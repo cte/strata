@@ -111,9 +111,9 @@ function RootLayout(): React.ReactElement {
             <ChatSessionCommandPalette open={commandPaletteOpen} setOpen={setCommandPaletteOpen} />
             <SidebarInset>
               <TopRail />
-              <main className="min-w-0 px-6 py-8 md:px-10 md:py-10">
+              <div className="flex min-h-0 flex-1 flex-col">
                 <Outlet />
-              </main>
+              </div>
             </SidebarInset>
           </SidebarProvider>
         </ChatSessionCommandPaletteContext.Provider>
@@ -358,7 +358,7 @@ function ChatSessionCommandPalette({
 
 function TopRail(): React.ReactElement {
   return (
-    <header className="sticky top-0 z-30 flex h-11 items-center justify-between border-b border-hairline bg-[color-mix(in_oklab,var(--bg)_88%,transparent)] px-4 backdrop-blur-md md:px-6">
+    <header className="z-30 flex h-11 shrink-0 items-center justify-between border-b border-hairline bg-[color-mix(in_oklab,var(--bg)_88%,transparent)] px-4 backdrop-blur-md md:px-6">
       <div className="flex items-center gap-3">
         <SidebarTrigger className="!h-6 !w-6 text-fg-dim hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5" />
       </div>

@@ -5,6 +5,7 @@ import {
   agentCompletionMessage,
   appendAssistantDelta,
   appendAssistantReasoning,
+  appendUserMessageFromEvent,
   type ChatMessageView,
   finalizeAssistantResponse,
   friendlyChatError,
@@ -44,6 +45,38 @@ describe("friendlyChatError", () => {
 });
 
 describe("streaming transcript updates", () => {
+  test("appends streamed queued user messages", () => {
+    const transcript = appendUserMessageFromEvent([], {
+      type: "message.user",
+      content: "steer now",
+    });
+
+    assert.equal(transcript.length, 1);
+    assert.equal(transcript[0]?.role, "user");
+    assert.equal(transcript[0]?.content, "steer now");
+  });
+
+  test("dedupes the optimistic first submitted user message", () => {
+    const existing: ChatMessageView[] = [
+      {
+        id: "user-current",
+        role: "user",
+        content: "hello",
+        status: "complete",
+        toolCalls: [],
+      },
+    ];
+
+    const transcript = appendUserMessageFromEvent(
+      existing,
+      { type: "message.user", content: "hello" },
+      { dedupeLast: true },
+    );
+
+    assert.equal(transcript.length, 1);
+    assert.equal(transcript[0]?.id, "user-current");
+  });
+
   test("final response replaces the streamed assistant message for the same run iteration", () => {
     const streamed = appendAssistantDelta(
       appendAssistantDelta([], "run-1", 1, "Hel"),

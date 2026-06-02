@@ -1,10 +1,13 @@
 import { type AttachmentData, getAttachmentLabel } from "@/components/ai-elements/attachments";
 import type { ChatQueuedMessageSummary } from "@/lib/api";
 
+export type QueuedChatMessageDelivery = "steering" | "follow-up";
+
 export interface QueuedChatMessage {
   id: string;
   message: string;
   attachments: AttachmentData[];
+  delivery: QueuedChatMessageDelivery;
 }
 
 export function queuedChatMessageFromSummary(summary: ChatQueuedMessageSummary): QueuedChatMessage {
@@ -12,6 +15,7 @@ export function queuedChatMessageFromSummary(summary: ChatQueuedMessageSummary):
     id: summary.id,
     message: summary.message,
     attachments: attachmentDataFromJson(summary.attachments),
+    delivery: summary.delivery,
   };
 }
 
@@ -26,12 +30,12 @@ export function queuedChatMessageLabel(message: QueuedChatMessage): string {
 }
 
 export function queuedChatMessageDescription(message: QueuedChatMessage): string | null {
-  if (message.attachments.length === 0) {
-    return null;
+  const parts = [message.delivery === "steering" ? "Steering" : "Queued"];
+  if (message.attachments.length > 0) {
+    const count = message.attachments.length;
+    parts.push(`${count} attachment${count === 1 ? "" : "s"}`);
   }
-
-  const count = message.attachments.length;
-  return `${count} attachment${count === 1 ? "" : "s"}`;
+  return parts.join(" · ");
 }
 
 function attachmentDataFromJson(value: ChatQueuedMessageSummary["attachments"]): AttachmentData[] {

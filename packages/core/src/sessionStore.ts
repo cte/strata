@@ -446,6 +446,22 @@ export class SessionStore {
     return rows.map(messageRowToRecord);
   }
 
+  /**
+   * Content of the oldest `user` message in a session — i.e. the original
+   * prompt that started it. Returns `null` when the session has no user turn
+   * yet. Cheap, indexed single-row lookup safe to call per session in a list.
+   */
+  firstUserPrompt(sessionId: string): string | null {
+    const row = this.drizzle
+      .select({ content: messages.content })
+      .from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, "user")))
+      .orderBy(asc(messages.id))
+      .limit(1)
+      .get();
+    return row?.content ?? null;
+  }
+
   getToolResultMessage(sessionId: string, toolCallId: string): MessageRecord | undefined {
     const row = this.drizzle
       .select()

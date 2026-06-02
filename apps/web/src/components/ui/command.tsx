@@ -31,7 +31,7 @@ const CommandDialog = ({
 }) => {
   return (
     <Dialog {...props}>
-      <DialogContent className="overflow-hidden p-0 [&>button]:hidden">
+      <DialogContent className="overflow-hidden p-0 sm:p-0 [&>button]:hidden">
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <Command
           {...commandProps}

@@ -254,6 +254,36 @@ export function completeToolCall(
   );
 }
 
+export function appendUserMessageFromEvent(
+  messages: ChatMessageView[],
+  event: Extract<ChatStreamEvent, { type: "message.user" }>,
+  options: { dedupeLast?: boolean } = {},
+): ChatMessageView[] {
+  const attachments = attachmentsToAttachmentData(event.attachments);
+  const content = event.content;
+  const last = messages.at(-1);
+  if (options.dedupeLast === true && last?.role === "user") {
+    const lastAttachmentCount = last.attachments?.length ?? 0;
+    const sameContent =
+      last.content === content ||
+      (last.content.trim() === "" && content === "(image attached)" && attachments.length > 0);
+    if (sameContent && lastAttachmentCount === attachments.length) {
+      return messages;
+    }
+  }
+  return [
+    ...messages,
+    {
+      id: clientId("user"),
+      role: "user",
+      content,
+      status: "complete",
+      toolCalls: [],
+      ...(attachments.length === 0 ? {} : { attachments }),
+    },
+  ];
+}
+
 type TranscriptStreamEvent =
   | Extract<ChatStreamEvent, { type: "assistant.delta" }>
   | Extract<ChatStreamEvent, { type: "assistant.reasoning" }>
@@ -541,13 +571,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function attachmentsToAttachmentData(value: ChatMessageSummary["attachments"]): AttachmentData[] {
+function attachmentsToAttachmentData(value: unknown): AttachmentData[] {
   if (!Array.isArray(value)) {
     return [];
   }
   const attachments: AttachmentData[] = [];
   for (const item of value) {
-    if (!isRecord(item) || item.kind !== "image") {
+    if (!isRecord(item)) {
+      continue;
+    }
+    if (
+      item.type === "file" &&
+      typeof item.mediaType === "string" &&
+      typeof item.url === "string"
+    ) {
+      attachments.push({
+        id: typeof item.id === "string" ? item.id : clientId("stored-att"),
+        type: "file",
+        mediaType: item.mediaType,
+        url: item.url,
+        ...(typeof item.filename === "string" ? { filename: item.filename } : {}),
+      });
+      continue;
+    }
+    if (item.kind !== "image") {
       continue;
     }
     const mimeType = typeof item.mimeType === "string" ? item.mimeType : "image/png";

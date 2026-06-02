@@ -150,7 +150,9 @@ export async function listChatSessions(
 ): Promise<{ sessions: ChatSessionSummary[] }> {
   const store = await getSessionStore();
   return {
-    sessions: store.listSessions(input.limit, CHAT_SESSION_KIND_LIST).map(sessionToChatSummary),
+    sessions: store
+      .listSessions(input.limit, CHAT_SESSION_KIND_LIST)
+      .map((session) => sessionToChatSummary(session, store)),
   };
 }
 
@@ -172,7 +174,7 @@ export async function getChatSession(
   }
   const messagePage = store.listMessagePage(session.id, pageOptions);
   return {
-    session: sessionToChatSummary(session),
+    session: sessionToChatSummary(session, store),
     messages: messagesToChatSummaries(messagePage.messages),
     messagePage: {
       hasMoreBefore: messagePage.hasMoreBefore,
@@ -215,7 +217,7 @@ export async function forkChatSession(
   }
   const cloned = await store.cloneSession(input.sessionId);
   return {
-    session: sessionToChatSummary(cloned),
+    session: sessionToChatSummary(cloned, store),
     messages: messagesToChatSummaries(store.listMessages(cloned.id)),
     messagePage: {
       hasMoreBefore: false,
@@ -254,7 +256,7 @@ export async function renameChatSession(
     throw new Error(`Session not found: ${input.sessionId}`);
   }
   store.updateSessionTitle(input.sessionId, input.title);
-  return sessionToChatSummary({ ...source, title: input.title });
+  return sessionToChatSummary({ ...source, title: input.title }, store);
 }
 
 export async function searchChatSessions(
@@ -265,7 +267,7 @@ export async function searchChatSessions(
   return {
     sessions: store
       .searchSessions(input.query, input.limit, CHAT_SESSION_KIND_LIST)
-      .map(sessionToChatSummary),
+      .map((session) => sessionToChatSummary(session, store)),
   };
 }
 
@@ -302,7 +304,7 @@ function isChatSessionKind(kind: string): kind is ChatSessionSummary["kind"] {
   return CHAT_SESSION_KINDS.has(kind);
 }
 
-function sessionToChatSummary(session: SessionRecord): ChatSessionSummary {
+function sessionToChatSummary(session: SessionRecord, store: SessionStore): ChatSessionSummary {
   if (!isChatSessionKind(session.kind)) {
     throw new Error(`Session is not a chat/query session: ${session.id}`);
   }
@@ -314,6 +316,7 @@ function sessionToChatSummary(session: SessionRecord): ChatSessionSummary {
     endedAt: session.endedAt,
     status: session.status,
     model: session.model,
+    firstPrompt: store.firstUserPrompt(session.id),
   };
 }
 

@@ -54,6 +54,8 @@ export type ChatActiveRunSummary = RouterOutput["chat"]["runs"]["active"]["runs"
 export type ChatRunSummary = NonNullable<RouterOutput["chat"]["runs"]["get"]["run"]>;
 export type ChatQueuedMessageSummary = RouterOutput["chat"]["queue"]["list"]["messages"][number];
 export type ChatQueuedMessageAddInput = RouterInput["chat"]["queue"]["add"];
+export type ChatQueuedMessageMoveInput = RouterInput["chat"]["queue"]["move"];
+export type ChatQueuedMessageDeliveryInput = RouterInput["chat"]["queue"]["setDelivery"];
 export type ChatQueueTargetInput = RouterInput["chat"]["queue"]["list"];
 export type ChatQueueTarget = { sessionId?: string; runId?: string };
 export type ChatSessionSummary = RouterOutput["chat"]["sessions"]["list"]["sessions"][number];
@@ -321,6 +323,20 @@ export async function addChatQueuedMessage(
 export async function removeChatQueuedMessage(id: string): Promise<boolean> {
   const body = await trpc.chat.queue.remove.mutate({ id });
   return body.removed;
+}
+
+export async function moveChatQueuedMessage(
+  input: ChatQueuedMessageMoveInput,
+): Promise<ChatQueuedMessageSummary | null> {
+  const body = await trpc.chat.queue.move.mutate(input);
+  return body.message;
+}
+
+export async function setChatQueuedMessageDelivery(
+  input: ChatQueuedMessageDeliveryInput,
+): Promise<ChatQueuedMessageSummary | null> {
+  const body = await trpc.chat.queue.setDelivery.mutate(input);
+  return body.message;
 }
 
 export async function clearChatQueuedMessages(target: ChatQueueTarget): Promise<number> {

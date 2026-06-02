@@ -56,6 +56,7 @@ describe("chat pinned tabs", () => {
           startedAt: new Date(0).toISOString(),
           endedAt: null,
           model: null,
+          firstPrompt: null,
         },
       ],
       { pruneMissing: true },

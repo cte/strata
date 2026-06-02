@@ -27,6 +27,40 @@ const OVERSCAN_ROWS = 2;
 const CONTENT_PADDING = 8;
 
 /**
+ * Distance (px) from the bottom within which the viewport counts as "pinned":
+ * new output auto-follows and scrolling here re-engages follow. Kept small so a
+ * slow scroll up immediately releases the follow lock instead of snapping back.
+ */
+const FOLLOW_THRESHOLD = 2;
+
+/**
+ * Whether the viewport counts as pinned to the bottom: within FOLLOW_THRESHOLD
+ * px of the end of the scroll range. Drives whether new output auto-follows.
+ */
+export function isAtBottom(scrollHeight: number, scrollTop: number, clientHeight: number): boolean {
+  return scrollHeight - scrollTop - clientHeight <= FOLLOW_THRESHOLD;
+}
+
+/**
+ * Whether a render should force the scroll position back to the bottom. We only
+ * re-pin while following AND when content grew or the viewport resized -- never
+ * on a plain user-scroll repaint, which would otherwise fight the user and feel
+ * like scroll resistance near the bottom.
+ */
+export function shouldRepinToBottom(args: {
+  follow: boolean;
+  grewOrResized: boolean;
+  currentScrollTop: number;
+  targetScrollTop: number;
+}): boolean {
+  return (
+    args.follow &&
+    args.grewOrResized &&
+    Math.abs(args.currentScrollTop - args.targetScrollTop) > 0.5
+  );
+}
+
+/**
  * Canvas terminal renderer. Mirrors libghostty/ghostty-web's approach: the cell
  * grid (the heavy lifting) lives in libghostty; this draws the authoritative
  * cells to a `<canvas>`, only repainting rows that actually changed, and only
@@ -51,6 +85,12 @@ export class TerminalCanvasRenderer {
   private lastScrollTop = -1;
   private lastCanvasWidth = 0;
   private lastCanvasHeight = 0;
+  // Content/viewport dimensions at the previous render. We only force the
+  // "stick to the bottom" re-pin when these change (new output grew the
+  // content, or the viewport resized) -- never on a plain user-scroll repaint,
+  // which would otherwise add resistance near the bottom.
+  private lastContentHeight = -1;
+  private lastClientHeight = -1;
 
   // Selection state (content coordinates; col may equal cols for line-end).
   private mouseTracking = false;
@@ -60,10 +100,18 @@ export class TerminalCanvasRenderer {
 
   private scrollRaf = 0;
   private suppressScroll = false;
+  // Whether new output should keep the viewport pinned to the bottom. Driven by
+  // the user's scroll position (below), so scrolling up releases the lock and
+  // scrolling back to the bottom re-engages it.
+  private followBottom = true;
   private readonly handleScroll = () => {
     if (this.suppressScroll) {
       this.suppressScroll = false;
       return;
+    }
+    const root = this.root;
+    if (root !== null) {
+      this.followBottom = isAtBottom(root.scrollHeight, root.scrollTop, root.clientHeight);
     }
     if (this.scrollRaf !== 0 || typeof requestAnimationFrame !== "function") return;
     this.scrollRaf = requestAnimationFrame(() => {
@@ -88,11 +136,13 @@ export class TerminalCanvasRenderer {
   open(container: HTMLElement): HTMLDivElement {
     this.dispose();
 
+    ensureScrollbarStyles();
     const root = document.createElement("div");
     root.tabIndex = 0;
     root.contentEditable = "plaintext-only";
     root.setAttribute("role", "textbox");
     root.setAttribute("aria-label", "Terminal");
+    root.dataset.strataTerminalRoot = "";
     root.spellcheck = false;
     root.style.cssText = [
       "box-sizing:border-box",
@@ -100,6 +150,9 @@ export class TerminalCanvasRenderer {
       "height:100%",
       "width:100%",
       "overflow:auto",
+      // Keep wheel/trackpad scrollback working but hide the native scrollbars
+      // (Firefox + modern Chromium); WebKit is covered by ensureScrollbarStyles.
+      "scrollbar-width:none",
       "outline:none",
       // contenteditable (for IME/key capture) draws a native caret; hide it.
       "caret-color:transparent",
@@ -157,6 +210,10 @@ export class TerminalCanvasRenderer {
     this.ctx = null;
     this.lastSnapshot = null;
     this.rowKeys.clear();
+    this.lastScrollTop = -1;
+    this.lastContentHeight = -1;
+    this.lastClientHeight = -1;
+    this.followBottom = true;
     this.selStart = null;
     this.selEnd = null;
     this.selecting = false;
@@ -245,10 +302,10 @@ export class TerminalCanvasRenderer {
     const clientWidth = root.clientWidth;
     const clientHeight = root.clientHeight || contentHeight;
 
-    // Measure "pinned to the bottom?" against the CURRENT (pre-growth) scroll
-    // state — before resizing the spacer — so newly-arrived output keeps us
-    // following the bottom the way a real terminal does.
-    const follow = root.scrollHeight - root.scrollTop - root.clientHeight <= this.cellHeight + 1;
+    // New output keeps the viewport pinned only when the user is at the bottom.
+    // `followBottom` is maintained by handleScroll from the user's scroll
+    // position, so a slow scroll up releases it instead of snapping back here.
+    const follow = this.followBottom;
 
     sizer.style.height = `${contentHeight}px`;
     const scrollTop = follow ? Math.max(0, contentHeight - clientHeight) : root.scrollTop;
@@ -303,7 +360,21 @@ export class TerminalCanvasRenderer {
       this.drawRow(ctx, cells, row, scrollTop, clientWidth, snapshot, cursorRow);
     }
 
-    if (follow && Math.abs(root.scrollTop - scrollTop) > 0.5) {
+    // Re-pin to the bottom only when content grew or the viewport resized. On a
+    // user-driven scroll repaint nothing here changed, so we leave the browser's
+    // scroll position alone and avoid fighting the user near the bottom.
+    const grewOrResized =
+      contentHeight !== this.lastContentHeight || clientHeight !== this.lastClientHeight;
+    this.lastContentHeight = contentHeight;
+    this.lastClientHeight = clientHeight;
+    if (
+      shouldRepinToBottom({
+        follow,
+        grewOrResized,
+        currentScrollTop: root.scrollTop,
+        targetScrollTop: scrollTop,
+      })
+    ) {
       this.suppressScroll = true;
       root.scrollTop = scrollTop;
     }
@@ -523,4 +594,20 @@ function cellStyleKey(cell: TerminalCell | undefined): string {
   }${s?.underline ? 1 : 0}${s?.strikethrough ? 1 : 0}${s?.inverse ? 1 : 0}${
     s?.invisible ? 1 : 0
   },${cell?.hyperlink ?? ""}]`;
+}
+
+/**
+ * WebKit/Blink ignore `scrollbar-width:none`, so hide the scroll root's
+ * scrollbars with a one-time injected `::-webkit-scrollbar` rule. Idempotent
+ * via a stable id; no-ops outside the DOM.
+ */
+function ensureScrollbarStyles(): void {
+  if (typeof document === "undefined") return;
+  const id = "strata-terminal-scrollbar-style";
+  if (document.getElementById(id) !== null) return;
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent =
+    "[data-strata-terminal-root]::-webkit-scrollbar{width:0;height:0;display:none}";
+  document.head.append(style);
 }

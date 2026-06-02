@@ -6,6 +6,7 @@ import { nowIso, safeJsonStringify } from "@strata/core/events";
 import { QueueChangeStore, type QueueChangeTarget } from "./queueChangeStore.js";
 
 export type ChatRunStatus = "running" | "completed" | "failed" | "interrupted";
+export type ChatQueuedMessageDelivery = "steering" | "follow-up";
 
 export interface ChatRunRecord {
   runId: string;
@@ -40,10 +41,12 @@ export interface ChatQueuedMessageRecord {
   runId?: string;
   message: string;
   attachments: JsonValue;
+  delivery: ChatQueuedMessageDelivery;
   provider?: string;
   model?: string;
   reasoningEffort?: string;
   createdAt: string;
+  position: number;
 }
 
 export type ChatQueueTarget = QueueChangeTarget;
@@ -52,9 +55,11 @@ export interface AddChatQueuedMessageInput extends ChatQueueTarget {
   id: string;
   message: string;
   attachments?: JsonValue;
+  delivery?: ChatQueuedMessageDelivery;
   provider?: string;
   model?: string;
   reasoningEffort?: string;
+  position?: number;
 }
 
 export interface FinishChatRunInput {
@@ -232,13 +237,14 @@ export class ChatRunStore {
       throw new Error("Queued message requires a session id or run id.");
     }
     const ts = nowIso();
+    const position = input.position ?? this.nextQueuedMessagePosition(input);
     this.db
       .query(
         `
           insert into web_chat_queued_messages (
-            id, session_id, run_id, message, attachments_json,
-            provider, model, reasoning_effort, created_at
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, session_id, run_id, message, attachments_json, delivery,
+            provider, model, reasoning_effort, created_at, position
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -247,10 +253,12 @@ export class ChatRunStore {
         input.runId ?? null,
         input.message,
         safeJsonStringify(input.attachments ?? []),
+        input.delivery ?? "follow-up",
         input.provider ?? null,
         input.model ?? null,
         input.reasoningEffort ?? null,
         ts,
+        position,
       );
     this.recordQueueChange(input);
     return this.requiredQueuedMessage(input.id);
@@ -290,6 +298,43 @@ export class ChatRunStore {
     return removed;
   }
 
+  moveQueuedMessage(id: string, beforeId: string | null): ChatQueuedMessageRecord | undefined {
+    const moving = this.getQueuedMessage(id);
+    if (moving === undefined) {
+      return undefined;
+    }
+    const target = queueTargetFromQueuedMessage(moving);
+    const currentRows = this.queuedMessageRows(target).filter((row) => row.id !== id);
+    let targetIndex =
+      beforeId === null ? currentRows.length : currentRows.findIndex((row) => row.id === beforeId);
+    if (targetIndex === -1) {
+      targetIndex = currentRows.length;
+    }
+    const orderedIds = currentRows.map((row) => row.id);
+    orderedIds.splice(targetIndex, 0, id);
+    const update = this.db.query("update web_chat_queued_messages set position = ? where id = ?");
+    for (const [index, queuedId] of orderedIds.entries()) {
+      update.run(index + 1, queuedId);
+    }
+    this.recordQueueChange(target);
+    return this.getQueuedMessage(id);
+  }
+
+  setQueuedMessageDelivery(
+    id: string,
+    delivery: ChatQueuedMessageDelivery,
+  ): ChatQueuedMessageRecord | undefined {
+    const existing = this.getQueuedMessage(id);
+    if (existing === undefined) {
+      return undefined;
+    }
+    this.db
+      .query("update web_chat_queued_messages set delivery = ? where id = ?")
+      .run(delivery, id);
+    this.recordQueueChange(queueTargetFromQueuedMessage(existing));
+    return this.getQueuedMessage(id);
+  }
+
   migrateQueuedMessagesToSession(runId: string, sessionId: string): number {
     const result = this.db
       .query(
@@ -314,7 +359,7 @@ export class ChatRunStore {
           select *
           from web_chat_queued_messages
           where session_id = ?
-          order by created_at asc, id asc
+          order by position asc, created_at asc, id asc
           limit 1
         `,
       )
@@ -399,7 +444,7 @@ export class ChatRunStore {
             select *
             from web_chat_queued_messages
             where session_id = ? or run_id = ?
-            order by created_at asc, id asc
+            order by position asc, created_at asc, id asc
           `,
         )
         .all(target.sessionId, target.runId) as ChatQueuedMessageRow[];
@@ -411,7 +456,7 @@ export class ChatRunStore {
             select *
             from web_chat_queued_messages
             where session_id = ?
-            order by created_at asc, id asc
+            order by position asc, created_at asc, id asc
           `,
         )
         .all(target.sessionId) as ChatQueuedMessageRow[];
@@ -426,10 +471,50 @@ export class ChatRunStore {
           select *
           from web_chat_queued_messages
           where run_id = ?
-          order by created_at asc, id asc
+          order by position asc, created_at asc, id asc
         `,
       )
       .all(runId) as ChatQueuedMessageRow[];
+  }
+
+  private nextQueuedMessagePosition(target: ChatQueueTarget): number {
+    if (target.sessionId === undefined && target.runId === undefined) {
+      return 1;
+    }
+    const queryMax = (where: string, ...values: string[]): number => {
+      const row = this.db
+        .query(
+          `select coalesce(max(position), 0) as position from web_chat_queued_messages where ${where}`,
+        )
+        .get(...values) as { position: number } | null;
+      return (row?.position ?? 0) + 1;
+    };
+    if (target.sessionId !== undefined && target.runId !== undefined) {
+      return queryMax("session_id = ? or run_id = ?", target.sessionId, target.runId);
+    }
+    if (target.sessionId !== undefined) {
+      return queryMax("session_id = ?", target.sessionId);
+    }
+    return queryMax("run_id = ?", target.runId as string);
+  }
+
+  private ensureQueuedMessageColumns(): void {
+    const columns = this.tableColumns("web_chat_queued_messages");
+    if (!columns.has("delivery")) {
+      this.db.run(
+        "alter table web_chat_queued_messages add column delivery text not null default 'follow-up'",
+      );
+    }
+    if (!columns.has("position")) {
+      this.db.run(
+        "alter table web_chat_queued_messages add column position integer not null default 0",
+      );
+    }
+  }
+
+  private tableColumns(tableName: string): Set<string> {
+    const rows = this.db.query(`pragma table_info(${tableName})`).all() as Array<{ name: string }>;
+    return new Set(rows.map((row) => row.name));
   }
 
   private ensureSchema(): void {
@@ -475,20 +560,23 @@ export class ChatRunStore {
         run_id text,
         message text not null,
         attachments_json text not null,
+        delivery text not null default 'follow-up',
         provider text,
         model text,
         reasoning_effort text,
         created_at text not null,
+        position integer not null default 0,
         check (session_id is not null or run_id is not null)
       )
     `);
+    this.ensureQueuedMessageColumns();
     this.db.run(`
       create index if not exists idx_web_chat_queued_messages_session
-      on web_chat_queued_messages(session_id, created_at, id)
+      on web_chat_queued_messages(session_id, position, created_at, id)
     `);
     this.db.run(`
       create index if not exists idx_web_chat_queued_messages_run
-      on web_chat_queued_messages(run_id, created_at, id)
+      on web_chat_queued_messages(run_id, position, created_at, id)
     `);
   }
 
@@ -600,10 +688,12 @@ interface ChatQueuedMessageRow {
   run_id: string | null;
   message: string;
   attachments_json: string;
+  delivery: ChatQueuedMessageDelivery;
   provider: string | null;
   model: string | null;
   reasoning_effort: string | null;
   created_at: string;
+  position: number;
 }
 
 function rowToRun(row: ChatRunRow): ChatRunRecord {
@@ -639,9 +729,18 @@ function rowToQueuedMessage(row: ChatQueuedMessageRow): ChatQueuedMessageRecord 
     ...(row.run_id === null ? {} : { runId: row.run_id }),
     message: row.message,
     attachments: JSON.parse(row.attachments_json) as JsonValue,
+    delivery: row.delivery === "steering" ? "steering" : "follow-up",
     ...(row.provider === null ? {} : { provider: row.provider }),
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.reasoning_effort === null ? {} : { reasoningEffort: row.reasoning_effort }),
     createdAt: row.created_at,
+    position: row.position,
+  };
+}
+
+function queueTargetFromQueuedMessage(message: ChatQueuedMessageRecord): ChatQueueTarget {
+  return {
+    ...(message.sessionId === undefined ? {} : { sessionId: message.sessionId }),
+    ...(message.runId === undefined ? {} : { runId: message.runId }),
   };
 }

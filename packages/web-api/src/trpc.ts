@@ -281,6 +281,8 @@ export interface ChatSessionSummary {
   endedAt: string | null;
   status: ChatSessionStatus;
   model: string | null;
+  /** Original user prompt that started the session, or null if none yet. */
+  firstPrompt: string | null;
 }
 
 export interface ChatMessageSummary {
@@ -334,10 +336,12 @@ export interface ChatQueuedMessageSummary {
   runId?: string;
   message: string;
   attachments: BrowserJsonValue;
+  delivery: "steering" | "follow-up";
   provider?: string;
   model?: string;
   reasoningEffort?: string;
   createdAt: string;
+  position: number;
 }
 
 export interface ChatActiveRunSummary {
@@ -484,14 +488,19 @@ export const chatQueueTargetInput = z
 
 export type ChatQueueTargetInput = z.output<typeof chatQueueTargetInput>;
 
-export const chatQueueAddInput = chatQueueTargetInput.extend({
-  id: z.string().min(1),
-  message: z.string().min(1),
-  attachments: z.array(z.any()).default([]),
-  provider: z.enum(["openai-codex", "openai-compatible", "anthropic-claude"]).optional(),
-  model: z.string().min(1).optional(),
-  reasoningEffort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
-});
+export const chatQueueAddInput = chatQueueTargetInput
+  .extend({
+    id: z.string().min(1),
+    message: z.string(),
+    attachments: z.array(z.any()).default([]),
+    delivery: z.enum(["steering", "follow-up"]).default("follow-up"),
+    provider: z.enum(["openai-codex", "openai-compatible", "anthropic-claude"]).optional(),
+    model: z.string().min(1).optional(),
+    reasoningEffort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
+  })
+  .refine((value) => value.message.trim() !== "" || value.attachments.length > 0, {
+    message: "message or attachments are required.",
+  });
 
 export type ChatQueueAddInput = z.output<typeof chatQueueAddInput>;
 
@@ -500,6 +509,20 @@ export const chatQueueRemoveInput = z.object({
 });
 
 export type ChatQueueRemoveInput = z.output<typeof chatQueueRemoveInput>;
+
+export const chatQueueMoveInput = z.object({
+  id: z.string().min(1),
+  beforeId: z.string().min(1).nullable(),
+});
+
+export type ChatQueueMoveInput = z.output<typeof chatQueueMoveInput>;
+
+export const chatQueueDeliveryInput = z.object({
+  id: z.string().min(1),
+  delivery: z.enum(["steering", "follow-up"]),
+});
+
+export type ChatQueueDeliveryInput = z.output<typeof chatQueueDeliveryInput>;
 
 export const chatFilesListInput = z.object({
   query: z.string().default(""),
@@ -926,6 +949,12 @@ export interface WebApiServices {
   listChatQueuedMessages(input: ChatQueueTargetInput): { messages: ChatQueuedMessageSummary[] };
   addChatQueuedMessage(input: ChatQueueAddInput): Promise<ChatQueuedMessageSummary>;
   removeChatQueuedMessage(input: ChatQueueRemoveInput): Promise<{ removed: boolean }>;
+  moveChatQueuedMessage(
+    input: ChatQueueMoveInput,
+  ): Promise<{ message: ChatQueuedMessageSummary | null }>;
+  setChatQueuedMessageDelivery(
+    input: ChatQueueDeliveryInput,
+  ): Promise<{ message: ChatQueuedMessageSummary | null }>;
   clearChatQueuedMessages(input: ChatQueueTargetInput): Promise<{ removed: number }>;
   listChatSessions(input: ChatSessionsListInput): Promise<{ sessions: ChatSessionSummary[] }>;
   getChatSession(input: ChatSessionGetInput): Promise<ChatSessionDetail | null>;
@@ -1061,6 +1090,12 @@ export const appRouter = t.router({
       remove: t.procedure
         .input(chatQueueRemoveInput)
         .mutation(({ ctx, input }) => ctx.services.removeChatQueuedMessage(input)),
+      move: t.procedure
+        .input(chatQueueMoveInput)
+        .mutation(({ ctx, input }) => ctx.services.moveChatQueuedMessage(input)),
+      setDelivery: t.procedure
+        .input(chatQueueDeliveryInput)
+        .mutation(({ ctx, input }) => ctx.services.setChatQueuedMessageDelivery(input)),
       clear: t.procedure
         .input(chatQueueTargetInput)
         .mutation(({ ctx, input }) => ctx.services.clearChatQueuedMessages(input)),

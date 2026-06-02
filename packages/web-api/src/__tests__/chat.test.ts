@@ -101,7 +101,7 @@ describe("chat service", () => {
     expect(service.getActiveRunForSession("session-1")).toBeUndefined();
   });
 
-  test("queued messages are persisted before Pi-style continuation", async () => {
+  test("queued follow-up messages are persisted before Pi-style continuation", async () => {
     const repoRoot = testRepoRoot();
     const seenConfigs: AgentRunConfig[] = [];
     const service = createChatService({
@@ -121,6 +121,7 @@ describe("chat service", () => {
       sessionId: "session-1",
       message: "follow-up",
       attachments: [],
+      delivery: "follow-up",
     });
     const events = await collect(first.events);
 
@@ -135,6 +136,73 @@ describe("chat service", () => {
       runId: "run-2",
       sessionId: "session-1",
     });
+  });
+
+  test("queued steering messages are drained into the active agent run", async () => {
+    let seenConfig: AgentRunConfig | undefined;
+    const releaseRun = createDeferred<void>();
+    const service = createChatService({
+      ...baseOptions(),
+      createRunId: () => "run-1",
+      runAgentLoopEvents: async function* (config) {
+        seenConfig = config;
+        yield sessionStarted("session-1");
+        await releaseRun.promise;
+        const steering = await config.getSteeringMessages?.();
+        for (const message of steering ?? []) {
+          yield { type: "message.user", content: message.content };
+        }
+        yield completed("session-1");
+      },
+    });
+
+    const run = await service.startRun({ message: "first" });
+    const iterator = run.events[Symbol.asyncIterator]();
+    await expect(nextEvent(iterator)).resolves.toEqual({ type: "run.started", runId: "run-1" });
+    await expect(nextEvent(iterator)).resolves.toEqual(sessionStarted("session-1"));
+
+    await service.addQueuedMessage({
+      id: "queued-1",
+      sessionId: "session-1",
+      message: "steer now",
+      attachments: [],
+      delivery: "steering",
+    });
+    expect(service.listQueuedMessages({ sessionId: "session-1" })).toHaveLength(1);
+
+    releaseRun.resolve();
+    await expect(nextEvent(iterator)).resolves.toEqual({
+      type: "message.user",
+      content: "steer now",
+    });
+    await expect(nextEvent(iterator)).resolves.toEqual(completed("session-1"));
+    await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+    expect(seenConfig?.getSteeringMessages).toEqual(expect.any(Function));
+    expect(service.listQueuedMessages({ sessionId: "session-1" })).toHaveLength(0);
+  });
+
+  test("queued messages can be reordered before delivery", async () => {
+    const service = createChatService(baseOptions());
+    await service.addQueuedMessage({
+      id: "queued-1",
+      sessionId: "session-1",
+      message: "first",
+      attachments: [],
+      delivery: "follow-up",
+    });
+    await service.addQueuedMessage({
+      id: "queued-2",
+      sessionId: "session-1",
+      message: "second",
+      attachments: [],
+      delivery: "follow-up",
+    });
+
+    await service.moveQueuedMessage("queued-2", "queued-1");
+
+    expect(
+      service.listQueuedMessages({ sessionId: "session-1" }).map((message) => message.id),
+    ).toEqual(["queued-2", "queued-1"]);
   });
 
   test("cleans up active state after agent-loop failure", async () => {
