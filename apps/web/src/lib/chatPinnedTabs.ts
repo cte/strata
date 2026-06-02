@@ -1,10 +1,12 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 import type { PersistStorage, StorageValue } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import type { ChatSessionSummary } from "@/lib/api";
 import { sanitizeDisplayText } from "@/lib/chatRunModel";
 
 export const CHAT_NEW_TAB_KEY = "new";
+/** Title shown on the placeholder tab for a not-yet-persisted new chat. */
+export const CHAT_NEW_TAB_TITLE = "New session";
 const STORAGE_KEY = "strata:chat:pinned-tabs";
 const memoryValues = new Map<string, string>();
 
@@ -34,6 +36,7 @@ export interface ChatPinnedTab {
 interface ChatPinnedTabsState {
   tabs: ChatPinnedTab[];
   drafts: Record<string, string>;
+  ensureNewTab(now?: number): void;
   activateSession(sessionId: string, title?: string | null, now?: number): void;
   replaceNewWithSession(sessionId: string, title?: string | null, now?: number): void;
   closeTab(key: string, activeKey: string): ChatPinnedTab | null;
@@ -50,6 +53,9 @@ export const useChatPinnedTabsStore = create<ChatPinnedTabsState>()(
     (set, get) => ({
       tabs: [],
       drafts: {},
+      ensureNewTab(now = Date.now()) {
+        set((state) => ({ tabs: ensureNewTabPresent(state.tabs, now) }));
+      },
       activateSession(sessionId, title, now = Date.now()) {
         set((state) => ({ tabs: activateSessionTab(state.tabs, sessionId, title, now) }));
       },
@@ -92,12 +98,11 @@ export const useChatPinnedTabsStore = create<ChatPinnedTabsState>()(
         set((state) => ({ drafts: omitKey(state.drafts, key) }));
       },
       syncSessions(sessions, options) {
+        // Keep the not-yet-persisted placeholder (sessionId === null) so a fresh
+        // "New session" tab survives sessions-list refreshes; the sync helper
+        // passes it through untouched and only reconciles persisted tabs.
         set((state) => ({
-          tabs: syncPinnedTabsWithSessions(
-            state.tabs.filter((tab) => tab.sessionId !== null),
-            sessions,
-            options?.pruneMissing ?? false,
-          ),
+          tabs: syncPinnedTabsWithSessions(state.tabs, sessions, options?.pruneMissing ?? false),
         }));
       },
     }),
@@ -111,6 +116,26 @@ export const useChatPinnedTabsStore = create<ChatPinnedTabsState>()(
 
 export function chatTabKeyForSession(sessionId: string | null): string {
   return sessionId ?? CHAT_NEW_TAB_KEY;
+}
+
+/**
+ * Ensures a single placeholder tab for the not-yet-persisted new chat exists.
+ * Idempotent: if a `CHAT_NEW_TAB_KEY` tab is already present it is left in
+ * place (order and `activatedAt` preserved) so repeated calls don't churn it.
+ */
+function ensureNewTabPresent(tabs: ChatPinnedTab[], now: number): ChatPinnedTab[] {
+  if (tabs.some((tab) => tab.key === CHAT_NEW_TAB_KEY)) {
+    return tabs;
+  }
+  return [
+    ...tabs,
+    {
+      key: CHAT_NEW_TAB_KEY,
+      sessionId: null,
+      titleSnapshot: CHAT_NEW_TAB_TITLE,
+      activatedAt: now,
+    },
+  ];
 }
 
 function activateSessionTab(
@@ -135,14 +160,27 @@ function replaceNewTabWithSession(
   title: string | null | undefined,
   now: number,
 ): ChatPinnedTab[] {
+  // Already pinned (e.g. a second submit) — just refresh it in place.
   const existingIndex = tabs.findIndex((tab) => tab.sessionId === sessionId);
-  const existing = existingIndex >= 0 ? tabs[existingIndex] : undefined;
-  const snapshot = titleSnapshot(title, sessionId, existing?.titleSnapshot);
   if (existingIndex >= 0) {
+    const existing = tabs[existingIndex];
+    const snapshot = titleSnapshot(title, sessionId, existing?.titleSnapshot);
     return tabs.map((tab) =>
       tab.sessionId === sessionId ? { ...tab, titleSnapshot: snapshot, activatedAt: now } : tab,
     );
   }
+  // Convert the placeholder tab in place so the persisted session keeps the
+  // slot (and order) the user was already looking at.
+  const placeholderIndex = tabs.findIndex((tab) => tab.key === CHAT_NEW_TAB_KEY);
+  if (placeholderIndex >= 0) {
+    const snapshot = titleSnapshot(title, sessionId, undefined);
+    return tabs.map((tab) =>
+      tab.key === CHAT_NEW_TAB_KEY
+        ? { key: sessionId, sessionId, titleSnapshot: snapshot, activatedAt: now }
+        : tab,
+    );
+  }
+  const snapshot = titleSnapshot(title, sessionId, undefined);
   return [...tabs, { key: sessionId, sessionId, titleSnapshot: snapshot, activatedAt: now }];
 }
 
@@ -192,7 +230,9 @@ function syncPinnedTabsWithSessions(
   const sessionsById = new Map(sessions.map((session) => [session.id, session]));
   return tabs.flatMap((tab) => {
     if (tab.sessionId === null) {
-      return [];
+      // Preserve the not-yet-persisted "New session" placeholder; it has no
+      // server row to reconcile against and must outlive list refreshes.
+      return [tab];
     }
     const session = sessionsById.get(tab.sessionId);
     if (session === undefined) {

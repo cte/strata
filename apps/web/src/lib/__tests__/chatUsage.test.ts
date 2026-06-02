@@ -4,8 +4,8 @@ import {
   contextUsagePercent,
   contextWindowForModel,
   createTokenUsageTotals,
-  formatTokenUsageCompact,
   formatTokens,
+  formatTokenUsageCompact,
   normalizeModelUsage,
 } from "../chatUsage.js";
 

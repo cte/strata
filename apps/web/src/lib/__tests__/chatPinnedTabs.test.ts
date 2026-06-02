@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHAT_NEW_TAB_KEY, useChatPinnedTabsStore } from "@/lib/chatPinnedTabs";
+import { CHAT_NEW_TAB_KEY, CHAT_NEW_TAB_TITLE, useChatPinnedTabsStore } from "@/lib/chatPinnedTabs";
 
 const store = useChatPinnedTabsStore;
 
@@ -27,6 +27,42 @@ describe("chat pinned tabs", () => {
       { key: "session-1", sessionId: "session-1", titleSnapshot: "Started", activatedAt: 2 },
     ]);
     expect(store.getState().drafts).toEqual({ "session-1": "hello" });
+  });
+
+  test("ensureNewTab adds a single placeholder and is idempotent", () => {
+    resetStore();
+    store.getState().activateSession("a", "Alpha", 1);
+    store.getState().ensureNewTab(2);
+    store.getState().ensureNewTab(3);
+
+    expect(store.getState().tabs).toEqual([
+      { key: "a", sessionId: "a", titleSnapshot: "Alpha", activatedAt: 1 },
+      { key: CHAT_NEW_TAB_KEY, sessionId: null, titleSnapshot: CHAT_NEW_TAB_TITLE, activatedAt: 2 },
+    ]);
+  });
+
+  test("converts the placeholder in place when the first turn persists", () => {
+    resetStore();
+    store.getState().activateSession("a", "Alpha", 1);
+    store.getState().ensureNewTab(2);
+    store.getState().setDraft(CHAT_NEW_TAB_KEY, "hello");
+    store.getState().replaceNewWithSession("session-1", "Started", 3);
+
+    // Placeholder keeps its slot (after "a") rather than appending anew.
+    expect(store.getState().tabs).toEqual([
+      { key: "a", sessionId: "a", titleSnapshot: "Alpha", activatedAt: 1 },
+      { key: "session-1", sessionId: "session-1", titleSnapshot: "Started", activatedAt: 3 },
+    ]);
+    expect(store.getState().drafts).toEqual({ "session-1": "hello" });
+  });
+
+  test("sync preserves the not-yet-persisted placeholder", () => {
+    resetStore();
+    store.getState().ensureNewTab(1);
+
+    store.getState().syncSessions([], { pruneMissing: true });
+
+    expect(store.getState().tabs.map((tab) => tab.key)).toEqual([CHAT_NEW_TAB_KEY]);
   });
 
   test("closing the active tab chooses the nearest tab to the left", () => {

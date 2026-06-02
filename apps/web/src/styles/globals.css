@@ -492,6 +492,52 @@ body {
   border: 1px solid var(--hairline);
 }
 
+/*
+ * Hide the native scrollbar while keeping the element scrollable. Used by the
+ * chat tab strip, which replaces the chunky platform scrollbar with edge fades
+ * and chevron affordances (see ChatTabScroller).
+ */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge/IE */
+}
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/*
+ * Edge fades for the chat tab strip. The mask dissolves tab content into the
+ * bar on whichever side can still scroll, signalling more tabs without a
+ * scrollbar. Width tracks the chevron affordance so the button never sits on a
+ * hard content edge.
+ */
+.chat-tab-fade-start {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 2.25rem);
+  mask-image: linear-gradient(to right, transparent 0, #000 2.25rem);
+}
+.chat-tab-fade-end {
+  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 2.25rem);
+  mask-image: linear-gradient(to left, transparent 0, #000 2.25rem);
+}
+.chat-tab-fade-both {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 2.25rem,
+    #000 calc(100% - 2.25rem),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 2.25rem,
+    #000 calc(100% - 2.25rem),
+    transparent 100%
+  );
+}
+
 .hairline-b {
   border-bottom: 1px solid var(--hairline);
 }
