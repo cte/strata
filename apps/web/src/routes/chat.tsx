@@ -1,15 +1,16 @@
 import {
   closestCenter,
   DndContext,
+  type DragEndEvent,
   KeyboardSensor,
   type Modifier,
   PointerSensor,
-  type DragEndEvent,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
 import {
   horizontalListSortingStrategy,
+  verticalListSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
@@ -27,6 +28,7 @@ import {
   Circle,
   Copy,
   FileText,
+  GripVertical,
   ListTodo,
   LoaderCircle,
   MessageSquare,
@@ -50,6 +52,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import type { ImperativePanelHandle } from "react-resizable-panels";
+import { useStickToBottomContext } from "use-stick-to-bottom";
 import type { AttachmentData } from "@/components/ai-elements/attachments";
 import {
   Attachment,
@@ -76,7 +80,6 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
-import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
   Message,
   MessageAction,
@@ -159,8 +162,8 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import type { ImperativePanelHandle } from "react-resizable-panels";
 import {
   addChatQueuedMessage,
   type ChatQueueTarget,
@@ -169,24 +172,27 @@ import {
   getChatToolResult,
   invokeChatSkill,
   listChatQueuedMessages,
+  moveChatQueuedMessage,
   removeChatQueuedMessage,
   renameChatSession,
+  setChatQueuedMessageDelivery,
 } from "@/lib/api";
 import { useOpenChatSessionCommandPalette } from "@/lib/chatCommandPalette";
 import { chatComposerSubmitState } from "@/lib/chatComposer";
 import { writeLastChatSessionId } from "@/lib/chatLastSession";
 import {
-  CHAT_NEW_TAB_KEY,
-  chatTabKeyForSession,
-  type ChatPinnedTab,
-  useChatPinnedTabsStore,
-} from "@/lib/chatPinnedTabs";
-import {
   type QueuedChatMessage,
+  type QueuedChatMessageDelivery,
   queuedChatMessageDescription,
   queuedChatMessageFromSummary,
   queuedChatMessageLabel,
 } from "@/lib/chatMessageQueue";
+import {
+  CHAT_NEW_TAB_KEY,
+  type ChatPinnedTab,
+  chatTabKeyForSession,
+  useChatPinnedTabsStore,
+} from "@/lib/chatPinnedTabs";
 import {
   type ChatMessageView,
   type ChatRunState,
@@ -216,8 +222,8 @@ import { spinnerVerbForTurnCycle } from "@/lib/spinnerVerbs";
 import type { AutocompleteItem } from "@/lib/useAutocomplete";
 import { useAutocomplete } from "@/lib/useAutocomplete";
 import {
-  choiceFromSessionModel,
   type ChatModelChoice,
+  choiceFromSessionModel,
   useChatModelChoice,
 } from "@/lib/useChatModelChoice";
 import { useChatPromptHistory } from "@/lib/useChatPromptHistory";
@@ -225,6 +231,37 @@ import { useChatPromptHistory } from "@/lib/useChatPromptHistory";
 import { useChatRun } from "@/lib/useChatRun";
 import { useChatSessions } from "@/lib/useChatSessions";
 import { cn } from "@/lib/utils";
+
+/**
+ * Publishes a measured element's border-box height as a CSS custom property on
+ * `targetRef`, so a floating/absolute element can reserve exact space inside a
+ * sibling's scroll flow instead of a hand-tuned constant. Returns the ref to
+ * attach to the element being measured.
+ */
+function usePublishedHeight(
+  targetRef: React.RefObject<HTMLElement | null>,
+  property: string,
+): React.RefObject<HTMLDivElement | null> {
+  const measuredRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const measured = measuredRef.current;
+    const target = targetRef.current;
+    if (measured === null || target === null) {
+      return;
+    }
+    const publish = () => {
+      target.style.setProperty(property, `${Math.ceil(measured.getBoundingClientRect().height)}px`);
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(measured);
+    return () => {
+      observer.disconnect();
+      target.style.removeProperty(property);
+    };
+  }, [targetRef, property]);
+  return measuredRef;
+}
 
 export function ChatPage(): React.ReactElement {
   const navigate = useNavigate();
@@ -279,6 +316,9 @@ export function ChatPage(): React.ReactElement {
   }, []);
 
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const requestScrollToBottomRef = useRef<(() => void) | null>(null);
+  const chatSectionRef = useRef<HTMLElement | null>(null);
+  const composerRef = usePublishedHeight(chatSectionRef, "--composer-h");
   const autocompleteProviders = useMemo(
     () => [createSkillCommandProvider(), createSlashCommandProvider(), createFileMentionProvider()],
     [],
@@ -469,6 +509,7 @@ export function ChatPage(): React.ReactElement {
             id: clientId("queued"),
             message: invocation.prompt,
             attachments: [],
+            delivery: queuedDeliveryForSubmission(),
           }).then(setQueuedMessages, (error: unknown) => setError(errorMessage(error)));
           return;
         }
@@ -545,7 +586,7 @@ export function ChatPage(): React.ReactElement {
       }
       onPromptHistoryKeyDown(event, prompt);
     },
-    [autocomplete, onPromptHistoryKeyDown, prompt],
+    [autocomplete, isRunning, onPromptHistoryKeyDown, prompt],
   );
 
   const handleSubmit = useCallback(
@@ -572,11 +613,15 @@ export function ChatPage(): React.ReactElement {
       clearDraft(activeTabKey);
       setShowCommandHelp(false);
       setModelPickerOpen(false);
+      // Re-engage stick-to-bottom so the just-sent message stays in view when
+      // the user had scrolled up; a no-op if already pinned to the bottom.
+      requestScrollToBottomRef.current?.();
       if (isRunning) {
         void enqueueChatMessage(queueTarget, {
           id: clientId("queued"),
           message,
           attachments,
+          delivery: queuedDeliveryForSubmission(),
         }).then(setQueuedMessages, (error: unknown) => setError(errorMessage(error)));
         return;
       }
@@ -617,6 +662,36 @@ export function ChatPage(): React.ReactElement {
     });
   }, []);
 
+  const handleReorderQueuedMessage = useCallback(
+    (id: string, beforeId: string | null) => {
+      setQueuedMessages((current) => reorderQueuedMessages(current, id, beforeId));
+      void moveChatQueuedMessage({ id, beforeId }).then(
+        () => refreshQueuedMessages(queueTarget).then(setQueuedMessages),
+        (error: unknown) => {
+          setError(errorMessage(error));
+          void refreshQueuedMessages(queueTarget).then(setQueuedMessages);
+        },
+      );
+    },
+    [queueTarget, setError],
+  );
+
+  const handleQueuedMessageDeliveryChange = useCallback(
+    (id: string, delivery: QueuedChatMessageDelivery) => {
+      setQueuedMessages((current) =>
+        current.map((message) => (message.id === id ? { ...message, delivery } : message)),
+      );
+      void setChatQueuedMessageDelivery({ id, delivery }).then(
+        () => refreshQueuedMessages(queueTarget).then(setQueuedMessages),
+        (error: unknown) => {
+          setError(errorMessage(error));
+          void refreshQueuedMessages(queueTarget).then(setQueuedMessages);
+        },
+      );
+    },
+    [queueTarget, setError],
+  );
+
   const handleCancel = useCallback(() => {
     void clearChatQueuedMessages(queueTarget).then(() => setQueuedMessages([]));
     cancel();
@@ -639,14 +714,14 @@ export function ChatPage(): React.ReactElement {
   }, []);
 
   return (
-    <div className="chat-surface relative -mx-6 -my-8 flex h-[calc(100dvh-2.75rem)] flex-col overflow-hidden bg-bg md:-mx-10 md:-my-10">
+    <div className="chat-surface relative flex min-h-0 flex-1 flex-col overflow-hidden bg-bg">
       <ResizablePanelGroup
         direction="vertical"
         autoSaveId="strata-chat-terminal"
         className="min-h-0 flex-1"
       >
         <ResizablePanel id="chat" order={1} minSize={30} className="!overflow-hidden">
-          <section className="relative flex h-full min-h-0 min-w-0 flex-col">
+          <section ref={chatSectionRef} className="relative flex h-full min-h-0 min-w-0 flex-col">
             <ChatPinnedTabBar sessionId={urlSessionId} />
 
             {error === null ? null : <InlineError message={error} />}
@@ -655,7 +730,11 @@ export function ChatPage(): React.ReactElement {
             <Conversation className="min-h-0 flex-1">
               <ConversationContent
                 className={cn(
-                  transcript.length === 0 ? "min-h-full pb-32" : "pb-56 md:pb-52",
+                  // Empty state keeps ConversationContent's default pb; the transcript
+                  // branch zeroes it so the in-flow composer spacer below is the ONLY
+                  // bottom reservation (otherwise the base pb-32 stacks with the spacer
+                  // and leaves a large dead gap above the composer).
+                  transcript.length === 0 ? "min-h-full" : "pb-0",
                   !conversationContentVisible && "invisible",
                 )}
                 aria-busy={!conversationContentVisible}
@@ -681,6 +760,20 @@ export function ChatPage(): React.ReactElement {
                     {transcript.map((message) => (
                       <TranscriptMessage key={message.id} message={message} sessionId={sessionId} />
                     ))}
+                    {/*
+                     * Reserve space for the absolutely-positioned composer as a real
+                     * layout child rather than paddingBottom on the scroll content.
+                     * use-stick-to-bottom observes the content BOX height (contentRect
+                     * excludes padding), so composer-height changes published to
+                     * --composer-h must grow an in-flow element to trigger its resize
+                     * observer and re-pin to the bottom. A padding-based reservation is
+                     * invisible to it and makes autoscroll flaky.
+                     */}
+                    <div
+                      aria-hidden="true"
+                      className="shrink-0"
+                      style={{ height: "calc(var(--composer-h, 13rem) + 1rem)" }}
+                    />
                   </>
                 )}
               </ConversationContent>
@@ -689,11 +782,15 @@ export function ChatPage(): React.ReactElement {
                 ready={sessionLoaded}
                 visible={conversationContentVisible}
                 onRestored={handleConversationScrollRestored}
+                scrollRequestRef={requestScrollToBottomRef}
               />
               {conversationContentVisible ? <ConversationScrollButton /> : null}
             </Conversation>
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6 md:pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <div
+              ref={composerRef}
+              className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6 md:pb-[max(1rem,env(safe-area-inset-bottom))]"
+            >
               <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
                 <div className="flex justify-start px-1">
                   <RunStatusBadge
@@ -723,7 +820,9 @@ export function ChatPage(): React.ReactElement {
                   />
                   <ChatPromptHeader
                     queuedMessages={queuedMessages}
+                    onDeliveryChange={handleQueuedMessageDeliveryChange}
                     onRemoveQueuedMessage={handleRemoveQueuedMessage}
+                    onReorderQueuedMessage={handleReorderQueuedMessage}
                   />
                   <PromptInputBody>
                     <PromptInputTextarea
@@ -803,10 +902,7 @@ export function ChatPage(): React.ReactElement {
           <TerminalIcon size={13} strokeWidth={1.75} />
           <span className="text-xs font-medium">Terminal</span>
           {terminalMounted ? (
-            <span className="flex items-center gap-1.5 text-2xs text-fg-mute">
-              <span className="size-2 shrink-0 rounded-full bg-good" aria-hidden />
-              running
-            </span>
+            <span className="ml-1 size-2 shrink-0 rounded-full bg-good" aria-hidden />
           ) : null}
           <ChevronUp size={14} strokeWidth={1.75} className="ml-auto" />
         </button>
@@ -820,14 +916,30 @@ function ConversationTabBottomController({
   ready,
   visible,
   onRestored,
+  scrollRequestRef,
 }: {
   tabKey: string;
   ready: boolean;
   visible: boolean;
   onRestored(tabKey: string): void;
+  scrollRequestRef: React.RefObject<(() => void) | null>;
 }): null {
   const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
   const restoredTabKeyRef = useRef<string | null>(null);
+
+  // Expose a smooth "scroll to bottom unless already there" to ChatPage, which
+  // lives outside the StickToBottom context and so can't read it directly.
+  useEffect(() => {
+    scrollRequestRef.current = () => {
+      if (state.isAtBottom) {
+        return;
+      }
+      void scrollToBottom();
+    };
+    return () => {
+      scrollRequestRef.current = null;
+    };
+  }, [scrollRequestRef, scrollToBottom, state]);
 
   const forceScrollToBottom = useCallback(() => {
     const scrollElement = scrollRef.current;
@@ -887,8 +999,31 @@ async function enqueueChatMessage(
     id: message.id,
     message: message.message,
     attachments: message.attachments,
+    delivery: message.delivery,
   });
   return refreshQueuedMessages(target);
+}
+
+function queuedDeliveryForSubmission(): QueuedChatMessageDelivery {
+  return "follow-up";
+}
+
+function reorderQueuedMessages(
+  messages: QueuedChatMessage[],
+  id: string,
+  beforeId: string | null,
+): QueuedChatMessage[] {
+  const moving = messages.find((message) => message.id === id);
+  if (moving === undefined) {
+    return messages;
+  }
+  const remaining = messages.filter((message) => message.id !== id);
+  const index =
+    beforeId === null
+      ? remaining.length
+      : remaining.findIndex((message) => message.id === beforeId);
+  const insertAt = index === -1 ? remaining.length : index;
+  return [...remaining.slice(0, insertAt), moving, ...remaining.slice(insertAt)];
 }
 
 function errorMessage(error: unknown): string {
@@ -988,6 +1123,13 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
     [queryClient, renameSessionTab],
   );
 
+  const handleDeleteTab = useCallback(
+    async (tabSession: ChatSessionSummary): Promise<void> => {
+      await deleteSession(tabSession);
+    },
+    [deleteSession],
+  );
+
   const handleConfirmOpenChange = useCallback(
     (next: boolean) => {
       if (deleting) {
@@ -1048,21 +1190,24 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
       >
         <SortableContext items={tabKeys} strategy={horizontalListSortingStrategy}>
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-            {tabs.map((tab) => (
-              <ChatPinnedTabButton
-                key={tab.key}
-                tab={tab}
-                active={tab.key === activeTabKey}
-                session={
-                  tab.sessionId === null
-                    ? null
-                    : (sessions.find((entry) => entry.id === tab.sessionId) ?? null)
-                }
-                onSelect={() => handleSelectTab(tab)}
-                onClose={() => handleCloseTab(tab)}
-                onRename={(title) => handleRenameTab(tab, title)}
-              />
-            ))}
+            {tabs.map((tab) => {
+              const tabSession =
+                tab.sessionId === null
+                  ? null
+                  : (sessions.find((entry) => entry.id === tab.sessionId) ?? null);
+              return (
+                <ChatPinnedTabButton
+                  key={tab.key}
+                  tab={tab}
+                  active={tab.key === activeTabKey}
+                  session={tabSession}
+                  onSelect={() => handleSelectTab(tab)}
+                  onClose={() => handleCloseTab(tab)}
+                  onRename={(title) => handleRenameTab(tab, title)}
+                  onDelete={tabSession === null ? undefined : () => handleDeleteTab(tabSession)}
+                />
+              );
+            })}
             <Button
               type="button"
               variant="ghost"
@@ -1159,6 +1304,13 @@ const RESTRICT_CHAT_TAB_DRAG_TO_HORIZONTAL: Modifier = ({ transform }) => ({
 });
 const CHAT_TAB_DRAG_MODIFIERS = [RESTRICT_CHAT_TAB_DRAG_TO_HORIZONTAL];
 
+/** Shared styling for the small icon buttons docked at the right edge of a tab. */
+const CHAT_TAB_ACTION_BUTTON_CLASS =
+  "flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-mute transition-[opacity,color,background-color] duration-150 hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40";
+/** Hover/focus reveal for the rename and drag-handle buttons (close stays visible when active). */
+const CHAT_TAB_ACTION_REVEAL_CLASS =
+  "opacity-0 group-hover/tab:opacity-100 group-focus-within/tab:opacity-100";
+
 function ChatPinnedTabButton({
   tab,
   active,
@@ -1166,6 +1318,7 @@ function ChatPinnedTabButton({
   onSelect,
   onClose,
   onRename,
+  onDelete,
 }: {
   tab: ChatPinnedTab;
   active: boolean;
@@ -1173,6 +1326,7 @@ function ChatPinnedTabButton({
   onSelect(): void;
   onClose(): void;
   onRename(title: string): Promise<void>;
+  onDelete?: (() => Promise<void>) | undefined;
 }): React.ReactElement {
   const snapshotTitle = tab.titleSnapshot.trim();
   const title =
@@ -1185,6 +1339,11 @@ function ChatPinnedTabButton({
   const [draftTitle, setDraftTitle] = useState(title);
   const [saving, setSaving] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const canDelete = onDelete !== undefined && session !== null && session.status !== "running";
   const inputRef = useRef<HTMLInputElement | null>(null);
   const commitInFlightRef = useRef(false);
   const cancelNextBlurRef = useRef(false);
@@ -1212,12 +1371,52 @@ function ChatPinnedTabButton({
     }
   }, [editing]);
 
-  const beginEditing = useCallback((event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
+  const startRename = useCallback(() => {
     setRenameError(null);
     setEditing(true);
   }, []);
+
+  const beginEditing = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startRename();
+    },
+    [startRename],
+  );
+
+  const handleConfirmOpenChange = useCallback(
+    (next: boolean) => {
+      if (deleting) {
+        return;
+      }
+      setConfirmOpen(next);
+      if (!next) {
+        setDeleteError(null);
+      }
+    },
+    [deleting],
+  );
+
+  const confirmDelete = useCallback(() => {
+    if (onDelete === undefined || !canDelete || deleting) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    void onDelete().then(
+      () => {
+        // The pinned tab is removed on success, unmounting this component;
+        // these resets are harmless if it is already gone.
+        setDeleting(false);
+        setConfirmOpen(false);
+      },
+      (cause: unknown) => {
+        setDeleteError(cause instanceof Error ? cause.message : String(cause));
+        setDeleting(false);
+      },
+    );
+  }, [canDelete, deleting, onDelete]);
 
   const cancelEditing = useCallback(() => {
     cancelNextBlurRef.current = true;
@@ -1307,21 +1506,89 @@ function ChatPinnedTabButton({
           />
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={onSelect}
-          onDoubleClick={beginEditing}
-          className="flex min-w-0 flex-1 cursor-grab items-center gap-2 text-left active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          {...attributes}
-          {...listeners}
-        >
-          {session === null ? (
-            <Circle aria-hidden="true" size={8} strokeWidth={2} className="shrink-0 text-fg-mute" />
-          ) : (
-            <SessionStatusDot session={session} className="size-1.5" />
-          )}
-          <span className="truncate">{title}</span>
-        </button>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* Leading slot: status dot at rest, drag handle on hover/focus. */}
+          <span className="relative flex size-4 shrink-0 items-center justify-center">
+            <span
+              aria-hidden="true"
+              className="flex items-center justify-center transition-opacity duration-150 group-hover/tab:opacity-0 group-focus-within/tab:opacity-0"
+            >
+              {session === null ? (
+                <Circle size={8} strokeWidth={2} className="text-fg-mute" />
+              ) : (
+                <SessionStatusDot session={session} className="size-1.5" />
+              )}
+            </span>
+            <button
+              type="button"
+              aria-label={`Reorder ${title}`}
+              title="Drag to reorder"
+              disabled={saving}
+              onClick={(event) => event.stopPropagation()}
+              className="absolute inset-0 flex cursor-grab items-center justify-center rounded text-fg-mute opacity-0 transition-opacity duration-150 hover:text-fg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing disabled:pointer-events-none group-hover/tab:opacity-100 group-focus-within/tab:opacity-100"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical size={12} strokeWidth={1.75} />
+            </button>
+          </span>
+          <ChatTabPromptHoverCard prompt={session?.firstPrompt ?? null}>
+            <button
+              type="button"
+              onClick={onSelect}
+              onDoubleClick={beginEditing}
+              className="flex min-w-0 flex-1 cursor-default items-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span className="truncate">{title}</span>
+            </button>
+          </ChatTabPromptHoverCard>
+        </div>
+      )}
+      {editing ? null : (
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={`${title} options`}
+              title="Tab options"
+              disabled={saving}
+              onPointerDown={(event) => event.stopPropagation()}
+              className={cn(
+                CHAT_TAB_ACTION_BUTTON_CLASS,
+                menuOpen ? "opacity-100" : CHAT_TAB_ACTION_REVEAL_CLASS,
+              )}
+            >
+              <MoreHorizontal size={12} strokeWidth={1.75} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40 border-hairline bg-bg-elev text-fg">
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                setMenuOpen(false);
+                startRename();
+              }}
+              className="gap-2 text-xs"
+            >
+              <PencilLine size={13} strokeWidth={1.75} />
+              Rename
+            </DropdownMenuItem>
+            {onDelete === undefined ? null : (
+              <DropdownMenuItem
+                disabled={!canDelete}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  setMenuOpen(false);
+                  setConfirmOpen(true);
+                }}
+                className="gap-2 text-xs text-bad focus:bg-bad/10 focus:text-bad"
+              >
+                <Trash2 size={13} strokeWidth={1.75} />
+                Delete
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
       <button
         type="button"
@@ -1334,15 +1601,69 @@ function ChatPinnedTabButton({
         }}
         onPointerDown={(event) => event.stopPropagation()}
         className={cn(
-          "flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-mute transition-[opacity,color,background-color] duration-150 hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
-          active || editing
-            ? "opacity-100"
-            : "opacity-0 group-hover/tab:opacity-100 group-focus-within/tab:opacity-100",
+          CHAT_TAB_ACTION_BUTTON_CLASS,
+          active || editing || menuOpen ? "opacity-100" : CHAT_TAB_ACTION_REVEAL_CLASS,
         )}
       >
         <X size={12} strokeWidth={1.75} />
       </button>
+      {onDelete === undefined ? null : (
+        <Dialog open={confirmOpen} onOpenChange={handleConfirmOpenChange}>
+          <DialogContent className="max-w-sm border-hairline bg-bg-elev p-4 text-fg">
+            <DialogHeader className="sr-only">
+              <DialogTitle>Delete session?</DialogTitle>
+              <DialogDescription>This permanently removes the chat session.</DialogDescription>
+            </DialogHeader>
+            <ChatSessionDeleteConfirm
+              title={title}
+              deleting={deleting}
+              error={deleteError}
+              onCancel={() => handleConfirmOpenChange(false)}
+              onConfirm={confirmDelete}
+            />
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
+  );
+}
+
+/** Max characters of the original prompt shown in a tab hover card. */
+const CHAT_TAB_PROMPT_PREVIEW_LIMIT = 280;
+
+function truncatePromptPreview(prompt: string, limit = CHAT_TAB_PROMPT_PREVIEW_LIMIT): string {
+  const collapsed = prompt.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= limit) {
+    return collapsed;
+  }
+  return `${collapsed.slice(0, limit).trimEnd()}\u2026`;
+}
+
+/**
+ * Wraps a tab's title button so hovering reveals the original prompt that
+ * started the session, truncated when long. Sessions without a stored prompt
+ * (e.g. a brand-new tab) render the trigger without a hover card.
+ */
+function ChatTabPromptHoverCard({
+  prompt,
+  children,
+}: {
+  prompt: string | null;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const preview = prompt === null ? "" : truncatePromptPreview(prompt);
+  if (preview === "") {
+    return <>{children}</>;
+  }
+  return (
+    <HoverCard openDelay={400} closeDelay={120}>
+      <HoverCardTrigger asChild>{children}</HoverCardTrigger>
+      <HoverCardContent align="start" side="bottom" className="w-80 max-w-[min(24rem,90vw)] p-3">
+        <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-fg-dim">
+          {preview}
+        </p>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -1397,10 +1718,14 @@ function KeyboardShortcut({ children }: { children: React.ReactNode }): React.Re
 
 function ChatPromptHeader({
   queuedMessages,
+  onDeliveryChange,
   onRemoveQueuedMessage,
+  onReorderQueuedMessage,
 }: {
   queuedMessages: QueuedChatMessage[];
+  onDeliveryChange(id: string, delivery: QueuedChatMessageDelivery): void;
   onRemoveQueuedMessage(id: string): void;
+  onReorderQueuedMessage(id: string, beforeId: string | null): void;
 }): React.ReactElement | null {
   const attachments = usePromptInputAttachments();
   if (queuedMessages.length === 0 && attachments.files.length === 0) {
@@ -1409,7 +1734,12 @@ function ChatPromptHeader({
   return (
     <PromptInputHeader className="flex-col items-stretch gap-2">
       {queuedMessages.length === 0 ? null : (
-        <QueuedPromptMessages messages={queuedMessages} onRemoveMessage={onRemoveQueuedMessage} />
+        <QueuedPromptMessages
+          messages={queuedMessages}
+          onDeliveryChange={onDeliveryChange}
+          onRemoveMessage={onRemoveQueuedMessage}
+          onReorderMessage={onReorderQueuedMessage}
+        />
       )}
       {attachments.files.length === 0 ? null : (
         <Attachments variant="grid" className="ml-0 self-start">
@@ -1431,11 +1761,36 @@ function ChatPromptHeader({
 
 function QueuedPromptMessages({
   messages,
+  onDeliveryChange,
   onRemoveMessage,
+  onReorderMessage,
 }: {
   messages: QueuedChatMessage[];
+  onDeliveryChange(id: string, delivery: QueuedChatMessageDelivery): void;
   onRemoveMessage(id: string): void;
+  onReorderMessage(id: string, beforeId: string | null): void;
 }): React.ReactElement {
+  const itemIds = useMemo(() => messages.map((message) => message.id), [messages]);
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const activeId = String(event.active.id);
+      const overId = event.over?.id;
+      if (overId === undefined || activeId === String(overId)) {
+        return;
+      }
+      const newIndex = itemIds.indexOf(String(overId));
+      if (newIndex === -1) {
+        return;
+      }
+      const remainingIds = itemIds.filter((id) => id !== activeId);
+      onReorderMessage(activeId, remainingIds[newIndex] ?? null);
+    },
+    [itemIds, onReorderMessage],
+  );
   return (
     <Queue className="w-full rounded-md border-hairline bg-transparent px-2 py-1.5 shadow-none">
       <QueueSection defaultOpen>
@@ -1443,15 +1798,24 @@ function QueuedPromptMessages({
           <QueueSectionLabel count={messages.length} label="Queued" />
         </QueueSectionTrigger>
         <QueueSectionContent>
-          <QueueList className="mt-1 -mb-0">
-            {messages.map((message) => (
-              <QueuedPromptMessage
-                key={message.id}
-                message={message}
-                onRemove={() => onRemoveMessage(message.id)}
-              />
-            ))}
-          </QueueList>
+          <DndContext
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+            sensors={dragSensors}
+          >
+            <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+              <QueueList className="mt-1 -mb-0">
+                {messages.map((message) => (
+                  <QueuedPromptMessage
+                    key={message.id}
+                    message={message}
+                    onDeliveryChange={(delivery) => onDeliveryChange(message.id, delivery)}
+                    onRemove={() => onRemoveMessage(message.id)}
+                  />
+                ))}
+              </QueueList>
+            </SortableContext>
+          </DndContext>
         </QueueSectionContent>
       </QueueSection>
     </Queue>
@@ -1460,20 +1824,59 @@ function QueuedPromptMessages({
 
 function QueuedPromptMessage({
   message,
+  onDeliveryChange,
   onRemove,
 }: {
   message: QueuedChatMessage;
+  onDeliveryChange(delivery: QueuedChatMessageDelivery): void;
   onRemove(): void;
 }): React.ReactElement {
   const description = queuedChatMessageDescription(message);
+  const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
+    id: message.id,
+  });
   return (
-    <QueueItem className="px-1.5 py-1.5 text-xs hover:bg-surface-2">
+    <QueueItem
+      ref={setNodeRef}
+      className={cn(
+        "px-1.5 py-1.5 text-xs hover:bg-surface-2",
+        isDragging && "relative z-10 bg-surface-2 shadow-sm",
+      )}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+    >
       <div className="flex min-w-0 items-start gap-2">
+        <QueueItemAction
+          aria-label="Reorder queued message"
+          className="mt-0.5 cursor-grab touch-none opacity-100 [&>svg]:!size-3 active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={12} strokeWidth={1.75} />
+        </QueueItemAction>
         <QueueItemIndicator className="mt-[0.45rem] size-2 shrink-0 border-fg-mute/60" />
         <QueueItemContent className="min-w-0 text-xs leading-5 text-fg">
           {queuedChatMessageLabel(message)}
         </QueueItemContent>
         <QueueItemActions className="ml-auto shrink-0">
+          {message.delivery === "follow-up" ? (
+            <QueueItemAction
+              aria-label="Upgrade queued message to steering"
+              className="px-1.5 text-2xs opacity-100"
+              onClick={() => onDeliveryChange("steering")}
+              title="Steer the active run with this message"
+            >
+              Steer
+            </QueueItemAction>
+          ) : (
+            <QueueItemAction
+              aria-label="Downgrade steering message to queued follow-up"
+              className="px-1.5 text-2xs opacity-100"
+              onClick={() => onDeliveryChange("follow-up")}
+              title="Send after the active run finishes"
+            >
+              Queue
+            </QueueItemAction>
+          )}
           <QueueItemAction
             aria-label="Remove queued message"
             className="opacity-100 [&>svg]:!size-3"
@@ -1483,13 +1886,11 @@ function QueuedPromptMessage({
           </QueueItemAction>
         </QueueItemActions>
       </div>
-      {description === null ? null : (
-        <QueueItemDescription className="ml-4 text-xs leading-4 text-fg-mute">
-          {description}
-        </QueueItemDescription>
-      )}
+      <QueueItemDescription className="ml-12 text-xs leading-4 text-fg-mute">
+        {description}
+      </QueueItemDescription>
       {message.attachments.length === 0 ? null : (
-        <QueueItemAttachment className="ml-4 mt-1 gap-1.5">
+        <QueueItemAttachment className="ml-12 mt-1 gap-1.5">
           {message.attachments.map((attachment) => (
             <QueuedPromptAttachment key={attachment.id} attachment={attachment} />
           ))}

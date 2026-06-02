@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type AgentAttachment,
+  type AgentMessage,
   type AgentRunConfig,
   type AgentRunEvent,
   type AgentRunResult,
@@ -25,6 +26,7 @@ import { createToolRegistryWithPacks, type ToolPack, type ToolRegistry } from "@
 
 import {
   type AddChatQueuedMessageInput,
+  type ChatQueuedMessageDelivery,
   type ChatQueuedMessageRecord,
   type ChatQueueTarget,
   type ChatRunEventRecord,
@@ -82,6 +84,11 @@ export interface ChatService {
   listQueuedMessages(target: ChatQueueTarget): ChatQueuedMessageRecord[];
   addQueuedMessage(input: AddChatQueuedMessageInput): Promise<ChatQueuedMessageRecord>;
   removeQueuedMessage(id: string): Promise<boolean>;
+  moveQueuedMessage(id: string, beforeId: string | null): Promise<ChatQueuedMessageRecord | null>;
+  setQueuedMessageDelivery(
+    id: string,
+    delivery: ChatQueuedMessageDelivery,
+  ): Promise<ChatQueuedMessageRecord | null>;
   clearQueuedMessages(target: ChatQueueTarget): Promise<number>;
   subscribeRunEvents(
     runId: string,
@@ -322,6 +329,28 @@ class DefaultChatService implements ChatService {
     return removed;
   }
 
+  async moveQueuedMessage(
+    id: string,
+    beforeId: string | null,
+  ): Promise<ChatQueuedMessageRecord | null> {
+    const record = this.runStore.moveQueuedMessage(id, beforeId);
+    if (record !== undefined) {
+      await this.recordQueueChanged(record, "moved");
+    }
+    return record ?? null;
+  }
+
+  async setQueuedMessageDelivery(
+    id: string,
+    delivery: ChatQueuedMessageDelivery,
+  ): Promise<ChatQueuedMessageRecord | null> {
+    const record = this.runStore.setQueuedMessageDelivery(id, delivery);
+    if (record !== undefined) {
+      await this.recordQueueChanged(record, "updated");
+    }
+    return record ?? null;
+  }
+
   async clearQueuedMessages(target: ChatQueueTarget): Promise<number> {
     const count = this.runStore.clearQueuedMessages(target);
     if (count > 0) {
@@ -435,6 +464,8 @@ class DefaultChatService implements ChatService {
       repoRoot: this.repoRoot,
       signal: active.controller.signal,
       tools,
+      getSteeringMessages: () => this.drainQueuedMessagesForAgent(active, "steering"),
+      getFollowUpMessages: () => this.drainQueuedMessagesForAgent(active, "follow-up"),
     };
 
     if (input.continueSessionId !== undefined) {
@@ -566,6 +597,42 @@ class DefaultChatService implements ChatService {
     return envelopes;
   }
 
+  private drainQueuedMessagesForAgent(
+    active: ActiveChatRun,
+    delivery: ChatQueuedMessageDelivery,
+  ): AgentMessage[] {
+    const sessionId = active.sessionId;
+    if (sessionId === undefined) {
+      return [];
+    }
+    const messages: AgentMessage[] = [];
+    for (const queued of this.runStore.listQueuedMessages({ sessionId })) {
+      if (queued.delivery !== delivery) {
+        continue;
+      }
+      if (!this.runStore.removeQueuedMessage(queued.id)) {
+        continue;
+      }
+      void this.recordSessionEvent(sessionId, "web.chat.queue.changed", {
+        sessionId,
+        runId: active.runId,
+        queuedMessageId: queued.id,
+        action: "dequeued",
+        delivery,
+      });
+      const attachments = attachmentsFromQueuedMessage(queued);
+      messages.push({
+        role: "user",
+        content:
+          queued.message.trim() === "" && attachments !== undefined
+            ? "(image attached)"
+            : queued.message,
+        ...(attachments === undefined ? {} : { attachments }),
+      });
+    }
+    return messages;
+  }
+
   private async drainQueuedMessages(
     previousActive: ActiveChatRun,
     defaults: StartChatRunInput,
@@ -607,6 +674,8 @@ class DefaultChatService implements ChatService {
         sessionId,
         message: next.message,
         attachments: next.attachments,
+        delivery: next.delivery,
+        position: next.position,
         ...(next.provider === undefined ? {} : { provider: next.provider }),
         ...(next.model === undefined ? {} : { model: next.model }),
         ...(next.reasoningEffort === undefined ? {} : { reasoningEffort: next.reasoningEffort }),
@@ -628,7 +697,7 @@ class DefaultChatService implements ChatService {
 
   private async recordQueueChanged(
     target: ChatQueueTarget,
-    action: "added" | "removed" | "cleared",
+    action: "added" | "removed" | "moved" | "updated" | "cleared",
   ): Promise<boolean> {
     if (target.sessionId === undefined) {
       return false;
@@ -674,8 +743,12 @@ function startInputFromQueuedMessage(
   sessionId: string,
   defaults: StartChatRunInput,
 ): StartChatRunInput {
+  const attachments = attachmentsFromQueuedMessage(queued);
   const input: StartChatRunInput = {
-    message: queued.message,
+    message:
+      queued.message.trim() === "" && attachments !== undefined
+        ? "(image attached)"
+        : queued.message,
     continueSessionId: sessionId,
   };
   if (queued.provider !== undefined) {
@@ -692,7 +765,6 @@ function startInputFromQueuedMessage(
   } else if (defaults.reasoningEffort !== undefined) {
     input.reasoningEffort = defaults.reasoningEffort;
   }
-  const attachments = attachmentsFromQueuedMessage(queued);
   if (attachments !== undefined) {
     input.attachments = attachments;
   }

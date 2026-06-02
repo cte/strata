@@ -19,7 +19,7 @@ export function NotFound(): React.ReactElement {
   const path = typeof window !== "undefined" ? window.location.pathname : "";
 
   return (
-    <section className="relative grid min-h-[calc(100dvh-9rem)] place-items-center overflow-hidden rounded-md border border-hairline bg-bg-elev/40 px-6 py-12">
+    <section className="relative grid min-h-0 flex-1 place-items-center overflow-hidden bg-bg-elev/40 px-6 py-12">
       <ConsoleBackdrop />
       <div className="relative z-10 flex w-full max-w-md flex-col items-center text-center">
         <div className="relative">

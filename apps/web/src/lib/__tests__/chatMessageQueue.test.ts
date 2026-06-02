@@ -22,7 +22,7 @@ describe("chat message queue", () => {
     ]);
 
     assert.equal(queuedChatMessageLabel(queued), "screenshot.png");
-    assert.equal(queuedChatMessageDescription(queued), "1 attachment");
+    assert.equal(queuedChatMessageDescription(queued), "Steering · 1 attachment");
   });
 
   test("maps durable queue summaries into prompt queue messages", () => {
@@ -40,11 +40,14 @@ describe("chat message queue", () => {
         },
         { bad: true },
       ],
+      delivery: "follow-up",
       createdAt: "2026-05-26T00:00:00.000Z",
+      position: 1,
     } satisfies ChatQueuedMessageSummary);
 
     assert.equal(queued.id, "queued-1");
     assert.equal(queued.message, "follow up");
+    assert.equal(queued.delivery, "follow-up");
     assert.deepEqual(
       queued.attachments.map((attachment) => attachment.id),
       ["att-1"],
@@ -57,5 +60,6 @@ function message(value: string, id = value, attachments: AttachmentData[] = []):
     id,
     message: value,
     attachments,
+    delivery: "steering",
   };
 }

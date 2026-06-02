@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import {
   agentCompletionMessage,
+  appendUserMessageFromEvent,
   type ChatMessageView,
   type ChatRunState,
   type ChatSubmitInput,
@@ -658,6 +659,9 @@ class ChatRunsStore {
         break;
       }
       case "message.user":
+        this.updateTranscript(key, (current) =>
+          appendUserMessageFromEvent(current, event, { dedupeLast: true }),
+        );
         break;
       case "model.request":
       case "model.retry":

@@ -127,6 +127,10 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     addChatQueuedMessage: (input) => chat.addQueuedMessage(queueAddInput(input)),
     removeChatQueuedMessage: (input) =>
       chat.removeQueuedMessage(input.id).then((removed) => ({ removed })),
+    moveChatQueuedMessage: (input) =>
+      chat.moveQueuedMessage(input.id, input.beforeId).then((message) => ({ message })),
+    setChatQueuedMessageDelivery: (input) =>
+      chat.setQueuedMessageDelivery(input.id, input.delivery).then((message) => ({ message })),
     clearChatQueuedMessages: (input) =>
       chat.clearQueuedMessages(queueTarget(input)).then((removed) => ({ removed })),
     listChatSessions: (input) => listChatSessions(input, getSessionStore),
@@ -224,6 +228,7 @@ function queueAddInput(input: ChatQueueAddInput) {
     id: input.id,
     message: input.message,
     attachments: input.attachments,
+    delivery: input.delivery,
     ...(input.provider === undefined ? {} : { provider: input.provider }),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),

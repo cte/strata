@@ -30,16 +30,23 @@ export function PageContainer({
   className?: string;
   children: React.ReactNode;
 }): React.ReactElement {
+  // The shell gives us a fixed-height flex slot (see SidebarInset). Standard
+  // pages scroll inside this container; `fill` pages hand a full-height,
+  // non-scrolling column to master/detail layouts that manage their own scroll.
   return (
     <div
-      className={cn(
-        "mx-auto w-full min-w-0",
-        WIDTH_CLASS[width],
-        fill ? "flex h-[calc(100dvh-7rem)] flex-col gap-5" : "space-y-6",
-        className,
-      )}
+      className={cn("flex min-h-0 flex-1 flex-col", fill ? "overflow-hidden" : "overflow-y-auto")}
     >
-      {children}
+      <div
+        className={cn(
+          "mx-auto w-full min-w-0 px-6 py-8 md:px-10 md:py-10",
+          WIDTH_CLASS[width],
+          fill ? "flex min-h-0 flex-1 flex-col gap-5" : "space-y-6",
+          className,
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }

@@ -210,6 +210,32 @@ describe("SessionStore.listMessagePage", () => {
   });
 });
 
+describe("SessionStore.firstUserPrompt", () => {
+  test("returns the oldest user message and ignores system/assistant turns", async () => {
+    await withTempStore(async (store) => {
+      const session = await store.createSession({ kind: "chat", title: "Prompted" });
+      await store.appendMessage({ sessionId: session.id, role: "system", content: "context" });
+      await store.appendMessage({
+        sessionId: session.id,
+        role: "user",
+        content: "the original prompt",
+      });
+      await store.appendMessage({ sessionId: session.id, role: "assistant", content: "reply" });
+      await store.appendMessage({ sessionId: session.id, role: "user", content: "a follow-up" });
+
+      expect(store.firstUserPrompt(session.id)).toBe("the original prompt");
+    });
+  });
+
+  test("returns null when the session has no user turn yet", async () => {
+    await withTempStore(async (store) => {
+      const session = await store.createSession({ kind: "chat", title: "Empty" });
+      await store.appendMessage({ sessionId: session.id, role: "system", content: "context" });
+      expect(store.firstUserPrompt(session.id)).toBeNull();
+    });
+  });
+});
+
 describe("SessionStore.sessionChangesSince", () => {
   test("reports distinct changed sessions and advances the high-water mark", async () => {
     await withTempStore(async (store) => {
