@@ -32,6 +32,11 @@ export interface AgentMessage {
   toolCallId?: string;
   toolCalls?: AgentToolCall[];
   /**
+   * Optional caller-owned id used only for UI/event correlation. Model adapters
+   * ignore it when converting messages to provider payloads.
+   */
+  clientMessageId?: string;
+  /**
    * Multimodal attachments associated with this message. Adapters convert them
    * into provider-specific content parts; if absent, the message is sent as
    * plain text exactly as before.
@@ -180,7 +185,12 @@ export type ToolResultContent = JsonValue;
 
 export type AgentRunEvent =
   | { type: "session.started"; sessionId: string; title: string; model: string }
-  | { type: "message.user"; content: string; attachments?: AgentAttachment[] }
+  | {
+      type: "message.user";
+      content: string;
+      attachments?: AgentAttachment[];
+      clientMessageId?: string;
+    }
   | { type: "model.request"; iteration: number; messageCount: number; attempt?: number }
   | {
       type: "model.retry";

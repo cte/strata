@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import {
   agentCompletionMessage,
+  appendPendingUserMessageFromEvent,
   appendUserMessageFromEvent,
   type ChatMessageView,
   type ChatRunState,
@@ -658,6 +659,9 @@ class ChatRunsStore {
         this.refreshSessions();
         break;
       }
+      case "message.user.pending":
+        this.updateTranscript(key, (current) => appendPendingUserMessageFromEvent(current, event));
+        break;
       case "message.user":
         this.updateTranscript(key, (current) =>
           appendUserMessageFromEvent(current, event, { dedupeLast: true }),

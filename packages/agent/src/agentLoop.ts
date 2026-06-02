@@ -974,6 +974,9 @@ async function appendQueuedMessages(
       if (message.attachments !== undefined && message.attachments.length > 0) {
         event.attachments = message.attachments;
       }
+      if (message.clientMessageId !== undefined) {
+        event.clientMessageId = message.clientMessageId;
+      }
       events.push(event);
     } else {
       await appendInitialMessage(store, sessionId, message);

@@ -316,6 +316,9 @@ class DefaultChatService implements ChatService {
 
   async addQueuedMessage(input: AddChatQueuedMessageInput): Promise<ChatQueuedMessageRecord> {
     const record = this.runStore.addQueuedMessage(input);
+    if (record.delivery === "steering") {
+      this.publishPendingQueuedMessage(record);
+    }
     await this.recordQueueChanged(input, "added");
     return record;
   }
@@ -344,8 +347,12 @@ class DefaultChatService implements ChatService {
     id: string,
     delivery: ChatQueuedMessageDelivery,
   ): Promise<ChatQueuedMessageRecord | null> {
+    const previous = this.runStore.getQueuedMessage(id);
     const record = this.runStore.setQueuedMessageDelivery(id, delivery);
     if (record !== undefined) {
+      if (previous?.delivery !== record.delivery && record.delivery === "steering") {
+        this.publishPendingQueuedMessage(record);
+      }
       await this.recordQueueChanged(record, "updated");
     }
     return record ?? null;
@@ -464,8 +471,10 @@ class DefaultChatService implements ChatService {
       repoRoot: this.repoRoot,
       signal: active.controller.signal,
       tools,
-      getSteeringMessages: () => this.drainQueuedMessagesForAgent(active, "steering"),
-      getFollowUpMessages: () => this.drainQueuedMessagesForAgent(active, "follow-up"),
+      getSteeringMessages: () =>
+        this.drainQueuedMessagesForRun(active.sessionId, active.runId, "steering"),
+      getFollowUpMessages: () =>
+        this.drainQueuedMessagesForRun(active.sessionId, active.runId, "follow-up"),
     };
 
     if (input.continueSessionId !== undefined) {
@@ -597,11 +606,11 @@ class DefaultChatService implements ChatService {
     return envelopes;
   }
 
-  private drainQueuedMessagesForAgent(
-    active: ActiveChatRun,
+  private drainQueuedMessagesForRun(
+    sessionId: string | undefined,
+    runId: string | undefined,
     delivery: ChatQueuedMessageDelivery,
   ): AgentMessage[] {
-    const sessionId = active.sessionId;
     if (sessionId === undefined) {
       return [];
     }
@@ -615,7 +624,7 @@ class DefaultChatService implements ChatService {
       }
       void this.recordSessionEvent(sessionId, "web.chat.queue.changed", {
         sessionId,
-        runId: active.runId,
+        ...(runId === undefined ? {} : { runId }),
         queuedMessageId: queued.id,
         action: "dequeued",
         delivery,
@@ -623,10 +632,8 @@ class DefaultChatService implements ChatService {
       const attachments = attachmentsFromQueuedMessage(queued);
       messages.push({
         role: "user",
-        content:
-          queued.message.trim() === "" && attachments !== undefined
-            ? "(image attached)"
-            : queued.message,
+        content: queuedMessageContent(queued, attachments),
+        clientMessageId: queued.id,
         ...(attachments === undefined ? {} : { attachments }),
       });
     }
@@ -693,6 +700,21 @@ class DefaultChatService implements ChatService {
       });
       previousActive.events.close();
     }
+  }
+
+  private publishPendingQueuedMessage(record: ChatQueuedMessageRecord): void {
+    let active: ActiveChatRun | undefined;
+    if (record.sessionId !== undefined) {
+      const runId = this.runIdsBySessionId.get(record.sessionId);
+      active = runId === undefined ? undefined : this.runsById.get(runId);
+    }
+    if (active === undefined && record.runId !== undefined) {
+      active = this.runsById.get(record.runId);
+    }
+    if (active === undefined) {
+      return;
+    }
+    this.publishRunEvent(active, pendingUserEventFromQueuedMessage(record));
   }
 
   private async recordQueueChanged(
@@ -769,6 +791,28 @@ function startInputFromQueuedMessage(
     input.attachments = attachments;
   }
   return input;
+}
+
+function queuedMessageContent(
+  queued: ChatQueuedMessageRecord,
+  attachments: AgentAttachment[] | undefined,
+): string {
+  return queued.message.trim() === "" && attachments !== undefined
+    ? "(image attached)"
+    : queued.message;
+}
+
+function pendingUserEventFromQueuedMessage(queued: ChatQueuedMessageRecord): ChatRunEvent {
+  const attachments = attachmentsFromQueuedMessage(queued);
+  const event: ChatRunEvent = {
+    type: "message.user.pending",
+    content: queuedMessageContent(queued, attachments),
+    clientMessageId: queued.id,
+  };
+  if (attachments !== undefined) {
+    event.attachments = attachments;
+  }
+  return event;
 }
 
 function attachmentsFromQueuedMessage(
@@ -938,6 +982,7 @@ const KNOWN_CHAT_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "run.replaced",
   "session.started",
   "message.user",
+  "message.user.pending",
   "model.request",
   "model.retry",
   "assistant.delta",

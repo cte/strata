@@ -32,6 +32,8 @@ export interface ChatMessageView {
   toolCalls: ChatToolCallView[];
   runId?: string;
   iteration?: number;
+  clientMessageId?: string;
+  pendingKind?: "steering";
   attachments?: AttachmentData[];
   usage?: TokenUsage;
 }
@@ -254,6 +256,29 @@ export function completeToolCall(
   );
 }
 
+export function appendPendingUserMessageFromEvent(
+  messages: ChatMessageView[],
+  event: Extract<ChatStreamEvent, { type: "message.user.pending" }>,
+): ChatMessageView[] {
+  if (messages.some((message) => message.clientMessageId === event.clientMessageId)) {
+    return messages;
+  }
+  const attachments = attachmentsToAttachmentData(event.attachments);
+  return [
+    ...messages,
+    {
+      id: `pending-user-${event.clientMessageId}`,
+      role: "user",
+      content: event.content,
+      status: "streaming",
+      toolCalls: [],
+      clientMessageId: event.clientMessageId,
+      pendingKind: "steering",
+      ...(attachments.length === 0 ? {} : { attachments }),
+    },
+  ];
+}
+
 export function appendUserMessageFromEvent(
   messages: ChatMessageView[],
   event: Extract<ChatStreamEvent, { type: "message.user" }>,
@@ -261,6 +286,14 @@ export function appendUserMessageFromEvent(
 ): ChatMessageView[] {
   const attachments = attachmentsToAttachmentData(event.attachments);
   const content = event.content;
+  if (event.clientMessageId !== undefined) {
+    const index = messages.findIndex(
+      (message) => message.clientMessageId === event.clientMessageId,
+    );
+    if (index !== -1) {
+      return confirmUserMessageAt(messages, index, event.clientMessageId, content, attachments);
+    }
+  }
   const last = messages.at(-1);
   if (options.dedupeLast === true && last?.role === "user") {
     const lastAttachmentCount = last.attachments?.length ?? 0;
@@ -268,7 +301,13 @@ export function appendUserMessageFromEvent(
       last.content === content ||
       (last.content.trim() === "" && content === "(image attached)" && attachments.length > 0);
     if (sameContent && lastAttachmentCount === attachments.length) {
-      return messages;
+      return confirmUserMessageAt(
+        messages,
+        messages.length - 1,
+        event.clientMessageId,
+        content,
+        attachments,
+      );
     }
   }
   return [
@@ -279,9 +318,34 @@ export function appendUserMessageFromEvent(
       content,
       status: "complete",
       toolCalls: [],
+      ...(event.clientMessageId === undefined ? {} : { clientMessageId: event.clientMessageId }),
       ...(attachments.length === 0 ? {} : { attachments }),
     },
   ];
+}
+
+function confirmUserMessageAt(
+  messages: ChatMessageView[],
+  index: number,
+  clientMessageId: string | undefined,
+  content: string,
+  attachments: AttachmentData[],
+): ChatMessageView[] {
+  return messages.map((message, messageIndex) => {
+    if (messageIndex !== index || message.role !== "user") {
+      return message;
+    }
+    const { attachments: existingAttachments, pendingKind: _pendingKind, ...rest } = message;
+    const nextAttachments = attachments.length === 0 ? (existingAttachments ?? []) : attachments;
+    return {
+      ...rest,
+      content,
+      status: "complete",
+      toolCalls: [],
+      ...(clientMessageId === undefined ? {} : { clientMessageId }),
+      ...(nextAttachments.length === 0 ? {} : { attachments: nextAttachments }),
+    };
+  });
 }
 
 type TranscriptStreamEvent =

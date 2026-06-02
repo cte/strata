@@ -5,6 +5,7 @@ import {
   agentCompletionMessage,
   appendAssistantDelta,
   appendAssistantReasoning,
+  appendPendingUserMessageFromEvent,
   appendUserMessageFromEvent,
   type ChatMessageView,
   finalizeAssistantResponse,
@@ -54,6 +55,29 @@ describe("streaming transcript updates", () => {
     assert.equal(transcript.length, 1);
     assert.equal(transcript[0]?.role, "user");
     assert.equal(transcript[0]?.content, "steer now");
+  });
+
+  test("confirms pending steered user messages by client message id", () => {
+    const pending = appendPendingUserMessageFromEvent([], {
+      type: "message.user.pending",
+      content: "steer now",
+      clientMessageId: "queued-1",
+    });
+
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.status, "streaming");
+    assert.equal(pending[0]?.pendingKind, "steering");
+
+    const confirmed = appendUserMessageFromEvent(pending, {
+      type: "message.user",
+      content: "steer now",
+      clientMessageId: "queued-1",
+    });
+
+    assert.equal(confirmed.length, 1);
+    assert.equal(confirmed[0]?.id, "pending-user-queued-1");
+    assert.equal(confirmed[0]?.status, "complete");
+    assert.equal(confirmed[0]?.pendingKind, undefined);
   });
 
   test("dedupes the optimistic first submitted user message", () => {
