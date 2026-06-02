@@ -323,7 +323,7 @@ Initial behavior:
 - After `session.started`, the UI stores the returned `sessionId`.
 - Follow-up messages in the same browser conversation pass `continueSessionId`.
 - Reloading a prior session uses `chat.sessions.get` to reconstruct the transcript.
-- While a run is active, additional prompt submissions persist in the web-chat queue. Enter defaults to `steering` and is drained by the shared agent loop's `getSteeringMessages` hook after the current assistant/tool batch, so the user turn appears in the live transcript without starting a separate run. Explicit `follow-up` queue entries continue the same session after the active run reaches a terminal state. Stop clears queued messages before cancelling the active run.
+- While a run is active, additional prompt submissions persist in the web-chat queue as normal follow-ups by default. The queue row has an explicit **Steer** action: promoting it to `steering` hides it from the queue, renders it as a pending user bubble in the transcript, and drains it through the shared agent loop's `getSteeringMessages` hook after the current assistant/tool batch. The agent loop echoes the queued message's `clientMessageId` on the canonical `message.user` event so the browser can confirm the pending bubble instead of duplicating it. Follow-up queue entries continue the same session after the active run reaches a terminal state. Stop clears queued messages before cancelling the active run.
 - When a planned `user.ask` request is pending, the question card owns its own answer controls; normal prompt submissions should continue to mean queued follow-up chat messages, not implicit answers to the question.
 
 Later behavior:

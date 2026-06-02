@@ -138,7 +138,7 @@ describe("chat service", () => {
     });
   });
 
-  test("queued steering messages are drained into the active agent run", async () => {
+  test("queued messages promoted to steering render pending and drain into the active run", async () => {
     let seenConfig: AgentRunConfig | undefined;
     const releaseRun = createDeferred<void>();
     const service = createChatService({
@@ -150,7 +150,13 @@ describe("chat service", () => {
         await releaseRun.promise;
         const steering = await config.getSteeringMessages?.();
         for (const message of steering ?? []) {
-          yield { type: "message.user", content: message.content };
+          yield {
+            type: "message.user",
+            content: message.content,
+            ...(message.clientMessageId === undefined
+              ? {}
+              : { clientMessageId: message.clientMessageId }),
+          };
         }
         yield completed("session-1");
       },
@@ -166,14 +172,25 @@ describe("chat service", () => {
       sessionId: "session-1",
       message: "steer now",
       attachments: [],
-      delivery: "steering",
+      delivery: "follow-up",
     });
     expect(service.listQueuedMessages({ sessionId: "session-1" })).toHaveLength(1);
+
+    await expect(service.setQueuedMessageDelivery("queued-1", "steering")).resolves.toMatchObject({
+      id: "queued-1",
+      delivery: "steering",
+    });
+    await expect(nextEvent(iterator)).resolves.toEqual({
+      type: "message.user.pending",
+      content: "steer now",
+      clientMessageId: "queued-1",
+    });
 
     releaseRun.resolve();
     await expect(nextEvent(iterator)).resolves.toEqual({
       type: "message.user",
       content: "steer now",
+      clientMessageId: "queued-1",
     });
     await expect(nextEvent(iterator)).resolves.toEqual(completed("session-1"));
     await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });

@@ -803,7 +803,9 @@ describe("runAgentLoop", () => {
         tools,
         getSteeringMessages: () => {
           steeringPolls += 1;
-          return steeringPolls === 2 ? [{ role: "user", content: "steer now" }] : [];
+          return steeringPolls === 2
+            ? [{ role: "user", content: "steer now", clientMessageId: "queued-1" }]
+            : [];
         },
       })) {
         events.push(event);
@@ -820,7 +822,11 @@ describe("runAgentLoop", () => {
         "user",
       ]);
       expect(secondRequest?.at(-1)?.content).toBe("steer now");
-      expect(events).toContainEqual({ type: "message.user", content: "steer now" });
+      expect(events).toContainEqual({
+        type: "message.user",
+        content: "steer now",
+        clientMessageId: "queued-1",
+      });
     } finally {
       await rm(repoRoot, { force: true, recursive: true });
     }

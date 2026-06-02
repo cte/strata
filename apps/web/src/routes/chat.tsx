@@ -593,7 +593,7 @@ export function ChatPage(): React.ReactElement {
       }
       onPromptHistoryKeyDown(event, prompt);
     },
-    [autocomplete, isRunning, onPromptHistoryKeyDown, prompt],
+    [autocomplete, onPromptHistoryKeyDown, prompt],
   );
 
   const handleSubmit = useCallback(
@@ -683,12 +683,15 @@ export function ChatPage(): React.ReactElement {
     [queueTarget, setError],
   );
 
-  const handleQueuedMessageDeliveryChange = useCallback(
-    (id: string, delivery: QueuedChatMessageDelivery) => {
+  const handleSteerQueuedMessage = useCallback(
+    (id: string) => {
       setQueuedMessages((current) =>
-        current.map((message) => (message.id === id ? { ...message, delivery } : message)),
+        current.map((message) =>
+          message.id === id ? { ...message, delivery: "steering" } : message,
+        ),
       );
-      void setChatQueuedMessageDelivery({ id, delivery }).then(
+      requestScrollToBottomRef.current?.();
+      void setChatQueuedMessageDelivery({ id, delivery: "steering" }).then(
         () => refreshQueuedMessages(queueTarget).then(setQueuedMessages),
         (error: unknown) => {
           setError(errorMessage(error));
@@ -703,6 +706,15 @@ export function ChatPage(): React.ReactElement {
     void clearChatQueuedMessages(queueTarget).then(() => setQueuedMessages([]));
     cancel();
   }, [cancel, queueTarget]);
+
+  const visibleQueuedMessages = useMemo(
+    () => queuedMessages.filter((message) => message.delivery === "follow-up"),
+    [queuedMessages],
+  );
+  const displayedTranscript = useMemo(
+    () => transcriptWithPendingSteering(transcript, queuedMessages),
+    [queuedMessages, transcript],
+  );
 
   const modelLine = useMemo(() => {
     if (selectedModelChoice === null) {
@@ -746,7 +758,7 @@ export function ChatPage(): React.ReactElement {
                 )}
                 aria-busy={!conversationContentVisible}
               >
-                {transcript.length === 0 ? (
+                {displayedTranscript.length === 0 ? (
                   urlSessionId === null ? (
                     <InlineChatEmptyState />
                   ) : (
@@ -764,7 +776,7 @@ export function ChatPage(): React.ReactElement {
                         onClick={loadOlderMessages}
                       />
                     ) : null}
-                    {transcript.map((message) => (
+                    {displayedTranscript.map((message) => (
                       <TranscriptMessage key={message.id} message={message} sessionId={sessionId} />
                     ))}
                     {/*
@@ -826,8 +838,8 @@ export function ChatPage(): React.ReactElement {
                     onSelect={autocomplete.select}
                   />
                   <ChatPromptHeader
-                    queuedMessages={queuedMessages}
-                    onDeliveryChange={handleQueuedMessageDeliveryChange}
+                    queuedMessages={visibleQueuedMessages}
+                    onSteerQueuedMessage={handleSteerQueuedMessage}
                     onRemoveQueuedMessage={handleRemoveQueuedMessage}
                     onReorderQueuedMessage={handleReorderQueuedMessage}
                   />
@@ -1013,6 +1025,37 @@ async function enqueueChatMessage(
 
 function queuedDeliveryForSubmission(): QueuedChatMessageDelivery {
   return "follow-up";
+}
+
+function transcriptWithPendingSteering(
+  transcript: ChatMessageView[],
+  queuedMessages: QueuedChatMessage[],
+): ChatMessageView[] {
+  const existingClientIds = new Set(
+    transcript
+      .map((message) => message.clientMessageId)
+      .filter((id): id is string => id !== undefined),
+  );
+  const pending = queuedMessages
+    .filter((message) => message.delivery === "steering" && !existingClientIds.has(message.id))
+    .map(queuedSteeringMessageToTranscript);
+  return pending.length === 0 ? transcript : [...transcript, ...pending];
+}
+
+function queuedSteeringMessageToTranscript(message: QueuedChatMessage): ChatMessageView {
+  return {
+    id: `pending-user-${message.id}`,
+    role: "user",
+    content:
+      message.message.trim() === "" && message.attachments.length > 0
+        ? "(image attached)"
+        : message.message,
+    status: "streaming",
+    toolCalls: [],
+    clientMessageId: message.id,
+    pendingKind: "steering",
+    ...(message.attachments.length === 0 ? {} : { attachments: message.attachments }),
+  };
 }
 
 function reorderQueuedMessages(
@@ -1855,12 +1898,12 @@ function KeyboardShortcut({ children }: { children: React.ReactNode }): React.Re
 
 function ChatPromptHeader({
   queuedMessages,
-  onDeliveryChange,
+  onSteerQueuedMessage,
   onRemoveQueuedMessage,
   onReorderQueuedMessage,
 }: {
   queuedMessages: QueuedChatMessage[];
-  onDeliveryChange(id: string, delivery: QueuedChatMessageDelivery): void;
+  onSteerQueuedMessage(id: string): void;
   onRemoveQueuedMessage(id: string): void;
   onReorderQueuedMessage(id: string, beforeId: string | null): void;
 }): React.ReactElement | null {
@@ -1873,9 +1916,9 @@ function ChatPromptHeader({
       {queuedMessages.length === 0 ? null : (
         <QueuedPromptMessages
           messages={queuedMessages}
-          onDeliveryChange={onDeliveryChange}
           onRemoveMessage={onRemoveQueuedMessage}
           onReorderMessage={onReorderQueuedMessage}
+          onSteerMessage={onSteerQueuedMessage}
         />
       )}
       {attachments.files.length === 0 ? null : (
@@ -1898,14 +1941,14 @@ function ChatPromptHeader({
 
 function QueuedPromptMessages({
   messages,
-  onDeliveryChange,
   onRemoveMessage,
   onReorderMessage,
+  onSteerMessage,
 }: {
   messages: QueuedChatMessage[];
-  onDeliveryChange(id: string, delivery: QueuedChatMessageDelivery): void;
   onRemoveMessage(id: string): void;
   onReorderMessage(id: string, beforeId: string | null): void;
+  onSteerMessage(id: string): void;
 }): React.ReactElement {
   const itemIds = useMemo(() => messages.map((message) => message.id), [messages]);
   const dragSensors = useSensors(
@@ -1946,8 +1989,8 @@ function QueuedPromptMessages({
                   <QueuedPromptMessage
                     key={message.id}
                     message={message}
-                    onDeliveryChange={(delivery) => onDeliveryChange(message.id, delivery)}
                     onRemove={() => onRemoveMessage(message.id)}
+                    onSteer={() => onSteerMessage(message.id)}
                   />
                 ))}
               </QueueList>
@@ -1961,12 +2004,12 @@ function QueuedPromptMessages({
 
 function QueuedPromptMessage({
   message,
-  onDeliveryChange,
   onRemove,
+  onSteer,
 }: {
   message: QueuedChatMessage;
-  onDeliveryChange(delivery: QueuedChatMessageDelivery): void;
   onRemove(): void;
+  onSteer(): void;
 }): React.ReactElement {
   const description = queuedChatMessageDescription(message);
   const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
@@ -1995,25 +2038,14 @@ function QueuedPromptMessage({
           {queuedChatMessageLabel(message)}
         </QueueItemContent>
         <QueueItemActions className="ml-auto shrink-0">
-          {message.delivery === "follow-up" ? (
-            <QueueItemAction
-              aria-label="Upgrade queued message to steering"
-              className="px-1.5 text-2xs opacity-100"
-              onClick={() => onDeliveryChange("steering")}
-              title="Steer the active run with this message"
-            >
-              Steer
-            </QueueItemAction>
-          ) : (
-            <QueueItemAction
-              aria-label="Downgrade steering message to queued follow-up"
-              className="px-1.5 text-2xs opacity-100"
-              onClick={() => onDeliveryChange("follow-up")}
-              title="Send after the active run finishes"
-            >
-              Queue
-            </QueueItemAction>
-          )}
+          <QueueItemAction
+            aria-label="Steer the active run with this queued message"
+            className="px-1.5 text-2xs opacity-100"
+            onClick={onSteer}
+            title="Move into the transcript and steer the active run"
+          >
+            Steer
+          </QueueItemAction>
           <QueueItemAction
             aria-label="Remove queued message"
             className="opacity-100 [&>svg]:!size-3"
@@ -2139,6 +2171,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
             )}
           </MessageContent>
         )}
+        {message.pendingKind === "steering" ? (
+          <div className="mt-1 text-2xs leading-4 text-fg-mute">Steering when Strata is ready…</div>
+        ) : null}
         {message.toolCalls.length === 0 ? null : (
           <div className="mt-2 flex w-full flex-col gap-2">
             {message.toolCalls.map((tool) => (
