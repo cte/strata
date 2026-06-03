@@ -62,6 +62,7 @@ export type ChatSessionSummary = RouterOutput["chat"]["sessions"]["list"]["sessi
 export type ChatSessionDetail = NonNullable<RouterOutput["chat"]["sessions"]["get"]>;
 export type ChatSessionGetInput = RouterInput["chat"]["sessions"]["get"];
 export type ChatToolResultDetail = NonNullable<RouterOutput["chat"]["sessions"]["toolResult"]>;
+export type ChatSessionCompactResult = RouterOutput["chat"]["sessions"]["compact"];
 export type ChatSessionDeleteResult = RouterOutput["chat"]["sessions"]["delete"];
 export type ChatSessionRenameResult = RouterOutput["chat"]["sessions"]["rename"];
 export type ChatMessageSummary = ChatSessionDetail["messages"][number];
@@ -372,6 +373,10 @@ export async function getChatToolResult(
 
 export async function forkChatSession(sessionId: string): Promise<ChatSessionDetail> {
   return trpc.chat.sessions.fork.mutate({ sessionId });
+}
+
+export async function compactChatSession(sessionId: string): Promise<ChatSessionCompactResult> {
+  return trpc.chat.sessions.compact.mutate({ sessionId });
 }
 
 export async function deleteChatSession(sessionId: string): Promise<ChatSessionDeleteResult> {

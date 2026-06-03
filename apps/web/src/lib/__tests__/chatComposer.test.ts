@@ -62,4 +62,17 @@ describe("chat composer submit state", () => {
       { disabled: true },
     );
   });
+
+  test("locks the composer during manual compaction without showing stop", () => {
+    assert.deepEqual(
+      chatComposerSubmitState({
+        prompt: "follow up",
+        attachmentCount: 0,
+        runState: "idle",
+        externallyRunning: false,
+        compacting: true,
+      }),
+      { disabled: true },
+    );
+  });
 });

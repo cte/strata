@@ -1359,6 +1359,75 @@ describe("web api", () => {
     }
   });
 
+  test("manually compacts chat sessions through tRPC", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    try {
+      const store = await SessionStore.open(repoRoot);
+      let sessionId = "";
+      try {
+        const session = await store.createSession({
+          kind: "chat",
+          title: "Long browser chat",
+          model: "openai-compatible:gpt-test",
+        });
+        sessionId = session.id;
+        await store.appendMessage({
+          sessionId,
+          role: "user",
+          content: "Please summarize this long thread.",
+        });
+        await store.appendMessage({
+          sessionId,
+          role: "assistant",
+          content: "Here is a long answer.",
+          usage: { input: 100, output: 50, total: 150, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        });
+        await store.endSession(sessionId, "completed");
+      } finally {
+        store.close();
+      }
+
+      const handler = createWebApiHandler({
+        repoRoot,
+        env: WEB_AUTH_OFF,
+        createModelAdapter: async (options) => ({
+          ...fakeModel,
+          name: `${options.provider}:${options.model}`,
+          complete: async () => ({
+            content: "## Goal\nmanual summary",
+            finishReason: "stop",
+            toolCalls: [],
+          }),
+        }),
+      });
+      const { client, close } = createTestClient(handler);
+      try {
+        await expect(client.chat.sessions.compact.mutate({ sessionId })).resolves.toMatchObject({
+          sessionId,
+          summary: "## Goal\nmanual summary",
+          messagesSummarized: 2,
+          incremental: false,
+        });
+
+        const compactedStore = await SessionStore.open(repoRoot);
+        try {
+          expect(
+            compactedStore.listEvents(sessionId, "compaction.started").at(-1)?.payload,
+          ).toMatchObject({ reason: "manual", model: "openai-compatible:gpt-test" });
+          expect(
+            compactedStore.listEvents(sessionId, "compaction.completed").at(-1)?.payload,
+          ).toMatchObject({ reason: "manual", summary: "## Goal\nmanual summary" });
+        } finally {
+          compactedStore.close();
+        }
+      } finally {
+        close();
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("streams chat run events as server-sent events and cleans up after completion", async () => {
     const handler = createWebApiHandler({
       ...chatTestOptions(),

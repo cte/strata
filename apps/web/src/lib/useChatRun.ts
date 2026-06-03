@@ -20,6 +20,8 @@ export interface UseChatRunResult {
   sessionLoaded: boolean;
   transcript: ChatMessageView[];
   runState: ChatRunState;
+  /** A manual compaction request is in flight for this session. */
+  compacting: boolean;
   /** A run is advancing this session in another process/tab (not streamed here). */
   externallyRunning: boolean;
   activeRunId: string | null;
@@ -33,6 +35,8 @@ export interface UseChatRunResult {
   submit(input: ChatSubmitInput, modelChoice: ChatModelChoice | null): void;
   /** Cancel the viewed session's active run if any. */
   cancel(): void;
+  /** Manually compact the viewed session. */
+  compactSession(): void;
   /** Start a fresh chat (the `/clear` slash command). */
   clearSession(): void;
   /** Fork the viewed session into a new one and switch to it. */
@@ -82,6 +86,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
       sessionModel: null,
       transcript: [],
       runState: "idle",
+      compacting: false,
       activeRunId: null,
       activeRunStartedAt: null,
       error: null,
@@ -110,6 +115,10 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
 
   const cancel = useCallback(() => {
     chatRunsStore.cancel(runKey);
+  }, [runKey]);
+
+  const compactSession = useCallback(() => {
+    chatRunsStore.compact(runKey);
   }, [runKey]);
 
   const clearSession = useCallback(() => {
@@ -142,6 +151,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     sessionLoaded: view.loaded,
     transcript: view.transcript,
     runState: view.runState,
+    compacting: view.compacting,
     externallyRunning: view.externallyRunning,
     activeRunId: view.activeRunId,
     activeRunStartedAt: view.activeRunStartedAt,
@@ -152,6 +162,7 @@ export function useChatRun(options: UseChatRunOptions): UseChatRunResult {
     usageTotals: view.usageTotals,
     submit,
     cancel,
+    compactSession,
     clearSession,
     forkSession,
     loadOlderMessages,

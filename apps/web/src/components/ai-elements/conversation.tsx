@@ -93,7 +93,7 @@ export const ConversationScrollButton = ({
       onClick={handleScrollToBottom}
       aria-label="Scroll to latest"
       className={cn(
-        "absolute bottom-24 left-1/2 z-10 h-8 w-8 -translate-x-1/2 rounded-full border-hairline-strong bg-bg-elev text-fg-dim shadow-md shadow-black/30 hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5",
+        "absolute bottom-24 left-1/2 z-10 h-8 w-8 -translate-x-1/2 rounded-full border border-hairline-strong bg-bg-elev text-fg-dim shadow-md shadow-black/30 hover:border-hairline hover:bg-surface-2 hover:text-fg [&>svg]:!size-3.5",
         className,
       )}
       {...props}

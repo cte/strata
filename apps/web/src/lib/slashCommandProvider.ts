@@ -1,6 +1,6 @@
 import type { AutocompleteProvider, AutocompleteSuggestions } from "@/lib/useAutocomplete";
 
-export type ChatSlashCommandName = "clear" | "fork" | "help" | "model" | "skill";
+export type ChatSlashCommandName = "clear" | "compact" | "fork" | "help" | "model" | "skill";
 
 export interface SlashCommandDefinition {
   name: ChatSlashCommandName;
@@ -14,6 +14,7 @@ export interface ParsedSlashCommand {
 
 export const CHAT_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
   { name: "clear", description: "clear the visible chat" },
+  { name: "compact", description: "summarize the current session to free context" },
   { name: "fork", description: "branch from the current session" },
   { name: "help", description: "show chat commands" },
   { name: "model", description: "open model controls" },

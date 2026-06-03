@@ -4,6 +4,7 @@ import {
   type ChatStreamEvent,
   type ChatStreamEventMeta,
   cancelChatRun,
+  compactChatSession,
   forkChatSession,
   getChatRun,
   getChatSession,
@@ -17,6 +18,7 @@ import {
 import {
   agentCompletionMessage,
   appendPendingUserMessageFromEvent,
+  appendSystemMessage,
   appendUserMessageFromEvent,
   type ChatMessageView,
   type ChatRunState,
@@ -34,6 +36,7 @@ import {
 import {
   accumulateTokenUsage,
   createTokenUsageTotals,
+  formatTokens,
   normalizeModelUsage,
   type TokenUsageTotals,
   usageTotalsFromMessages,
@@ -61,6 +64,7 @@ export interface SessionRunState {
   sessionModel: string | null;
   transcript: ChatMessageView[];
   runState: ChatRunState;
+  compacting: boolean;
   activeRunId: string | null;
   activeRunStartedAt: string | null;
   error: string | null;
@@ -98,6 +102,23 @@ type Navigate = (sessionId: string | null, options?: { replace?: boolean }) => v
 
 const noopNavigate: Navigate = () => {};
 
+function autoCompactionStartedMessage(
+  event: Extract<ChatStreamEvent, { type: "compaction.started" }>,
+): string {
+  if (event.reason === "overflow") {
+    return "context overflow detected — auto-compacting and retrying…";
+  }
+  const latest =
+    event.latestContextTokens > 0 ? ` (${formatTokens(event.latestContextTokens)} used)` : "";
+  return `context window getting full${latest} — auto-compacting…`;
+}
+
+function autoCompactionCompletedMessage(
+  event: Extract<ChatStreamEvent, { type: "compaction.completed" }>,
+): string {
+  return `auto-compacted ${event.messagesSummarized} messages${event.incremental ? " (incremental)" : ""}`;
+}
+
 function isLiveRunState(state: ChatRunState): boolean {
   return (
     state === "starting" ||
@@ -115,6 +136,7 @@ function blankState(key: string): SessionRunState {
     sessionModel: null,
     transcript: [],
     runState: "idle",
+    compacting: false,
     activeRunId: null,
     activeRunStartedAt: null,
     error: null,
@@ -462,7 +484,10 @@ class ChatRunsStore {
       return;
     }
     const state = this.states.get(viewKey);
-    if (state !== undefined && (state.runState !== "idle" || state.externallyRunning)) {
+    if (
+      state !== undefined &&
+      (state.runState !== "idle" || state.externallyRunning || state.compacting)
+    ) {
       return;
     }
 
@@ -693,15 +718,35 @@ class ChatRunsStore {
         break;
       }
       case "compaction.started":
-        if (this.states.get(key)?.runState !== "streaming") {
-          this.update(key, { runState: "streaming" });
-        }
+        this.queueTranscriptUpdate(
+          key,
+          (current) =>
+            appendSystemMessage(current, autoCompactionStartedMessage(event), {
+              systemKind: "status",
+            }),
+          this.streamingPatch(key),
+        );
         break;
       case "compaction.completed":
-        this.update(key, { usageTotals: createTokenUsageTotals() });
+        this.queueTranscriptUpdate(
+          key,
+          (current) =>
+            appendSystemMessage(current, autoCompactionCompletedMessage(event), {
+              systemKind: "status",
+            }),
+          { usageTotals: createTokenUsageTotals() },
+        );
         break;
       case "compaction.failed":
-        this.update(key, { error: event.message });
+        this.queueTranscriptUpdate(
+          key,
+          (current) =>
+            appendSystemMessage(current, `auto-compact failed: ${event.message}`, {
+              status: "error",
+              systemKind: "status",
+            }),
+          { error: event.message },
+        );
         break;
       case "tool.call.started":
         this.queueTranscriptUpdate(key, transcriptUpdateForStreamEvent(event, refs.runId));
@@ -843,7 +888,7 @@ class ChatRunsStore {
     if (state === undefined) {
       return;
     }
-    if (state.runState !== "idle") {
+    if (state.runState !== "idle" || state.externallyRunning || state.compacting) {
       this.update(key, { error: "Cannot fork while a run is active." });
       return;
     }
@@ -870,6 +915,53 @@ class ChatRunsStore {
       },
       (cause: unknown) => {
         this.update(key, { error: errorMessage(cause) });
+      },
+    );
+  }
+
+  compact(key: string): void {
+    const state = this.states.get(key);
+    if (state === undefined) {
+      return;
+    }
+    if (state.runState !== "idle" || state.externallyRunning || state.compacting) {
+      this.update(key, { error: "Cannot compact while a run is active." });
+      return;
+    }
+    if (state.sessionId === null) {
+      this.update(key, { error: "No active session to compact." });
+      return;
+    }
+    const sessionId = state.sessionId;
+    this.update(key, { compacting: true, error: null });
+    this.updateTranscript(key, (current) =>
+      appendSystemMessage(current, "compacting session…", { systemKind: "status" }),
+    );
+    void compactChatSession(sessionId).then(
+      (result) => {
+        this.update(key, { compacting: false, usageTotals: createTokenUsageTotals() });
+        this.updateTranscript(key, (current) =>
+          appendSystemMessage(
+            appendSystemMessage(
+              current,
+              `compacted ${result.messagesSummarized} messages — context reset`,
+              { systemKind: "status" },
+            ),
+            result.summary,
+            { systemKind: "summary" },
+          ),
+        );
+        this.refreshSessions();
+      },
+      (cause: unknown) => {
+        const message = errorMessage(cause);
+        this.update(key, { compacting: false, error: message });
+        this.updateTranscript(key, (current) =>
+          appendSystemMessage(current, `compact failed: ${message}`, {
+            status: "error",
+            systemKind: "status",
+          }),
+        );
       },
     );
   }
@@ -930,7 +1022,7 @@ class ChatRunsStore {
       return;
     }
     const existing = this.states.get(sessionId);
-    if (existing === undefined) {
+    if (existing === undefined || existing.compacting) {
       return;
     }
     try {

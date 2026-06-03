@@ -45,6 +45,7 @@ describe("slash command provider", () => {
 
   test("parses supported commands and arguments", () => {
     expect(parseSlashCommand("/help")).toEqual({ name: "help", args: "" });
+    expect(parseSlashCommand("/compact")).toEqual({ name: "compact", args: "" });
     expect(parseSlashCommand("/model gpt-5.5")).toEqual({
       name: "model",
       args: "gpt-5.5",

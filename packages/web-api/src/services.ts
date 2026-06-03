@@ -15,6 +15,7 @@ import { SessionChangeFeed } from "./changeFeed.js";
 import { createChatService } from "./chat.js";
 import {
   chatModelStatus,
+  compactChatSession,
   deleteChatSession,
   forkChatSession,
   getChatSession,
@@ -137,6 +138,13 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     getChatSession: (input) => getChatSession(input, getSessionStore),
     getChatToolResult: (input) => getChatToolResult(input, getSessionStore),
     forkChatSession: (input) => forkChatSession(input, getSessionStore),
+    compactChatSession: (input) => {
+      const activeRun = chat.getActiveRunForSession(input.sessionId);
+      if (activeRun !== undefined) {
+        throw new Error(`Cannot compact a session with an active run: ${input.sessionId}`);
+      }
+      return compactChatSession(input, getSessionStore, options);
+    },
     deleteChatSession: (input) => {
       const activeRun = chat.getActiveRunForSession(input.sessionId);
       if (activeRun !== undefined) {

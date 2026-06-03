@@ -508,6 +508,35 @@ body {
 }
 
 /*
+ * Slim, design-token-aware scrollbar. Replaces the chunky default platform
+ * scrollbar (e.g. the ⌘K chat-session palette list) with a thin rounded thumb
+ * built from the hairline tokens. The thumb is inset via a transparent border
+ * + background-clip so it reads as a floating pill, and only firms up to
+ * --fg-mute on hover. Track stays transparent so it blends into the surface.
+ */
+.themed-scrollbar {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+.themed-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.themed-scrollbar::-webkit-scrollbar-track,
+.themed-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.themed-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--hairline-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.themed-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--fg-mute);
+}
+
+/*
  * Edge fades for the chat tab strip. The mask dissolves tab content into the
  * bar on whichever side can still scroll, signalling more tabs without a
  * scrollbar. Width tracks the chevron affordance so the button never sits on a
