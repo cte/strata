@@ -142,6 +142,7 @@ import {
 import { TerminalPanel } from "@/components/terminal-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -828,18 +829,26 @@ export function ChatPage(): React.ReactElement {
               className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pt-8 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6 md:pb-[max(1rem,env(safe-area-inset-bottom))]"
             >
               {/*
-               * Full-width frosted backdrop behind the composer column. It blurs
-               * and obscures any transcript text that scrolls under the docked
+               * Frosted backdrop behind the composer column. It blurs and
+               * obscures any transcript text that scrolls under the docked
                * composer (including behind the streaming-status row, which has no
                * opaque background of its own). A top mask fades the blur in over
                * the dock's top padding so messages dissolve gradually above the
                * streaming indicator instead of hitting a hard edge or clashing
                * with it.
+               *
+               * The blurred layer is constrained to the same centered max-w-3xl
+               * box as the composer (and the transcript) rather than spanning the
+               * full section: the transcript only ever renders inside that column,
+               * so matching it keeps the backdrop off the conversation scrollbar
+               * at the section's right edge without measuring scrollbar width.
                */}
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 bg-[color-mix(in_oklab,var(--bg)_72%,transparent)] backdrop-blur-md [mask-image:linear-gradient(to_bottom,transparent,black_2rem)]"
-              />
+                className="pointer-events-none absolute inset-0 flex justify-center px-3 md:px-6"
+              >
+                <div className="h-full w-full max-w-3xl bg-[color-mix(in_oklab,var(--bg)_72%,transparent)] backdrop-blur-md [mask-image:linear-gradient(to_bottom,transparent,black_2rem)]" />
+              </div>
               <div className="pointer-events-auto relative mx-auto flex w-full max-w-3xl flex-col gap-2">
                 <div className="flex justify-start px-1">
                   <RunStatusBadge
@@ -922,7 +931,7 @@ export function ChatPage(): React.ReactElement {
         </ResizablePanel>
         {terminalMounted ? (
           <>
-            {terminalMinimized ? null : <ResizableHandle withHandle />}
+            {terminalMinimized ? null : <ResizableHandle />}
             <ResizablePanel
               ref={terminalPanelRef}
               id="terminal"
@@ -2164,7 +2173,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
                 "border-l border-hairline-strong pl-3 text-fg",
             )}
           >
-            {message.role === "assistant" || message.systemKind === "summary" ? (
+            {message.systemKind === "summary" ? (
+              <CompactionSummary content={message.content} />
+            ) : message.role === "assistant" ? (
               <MessageResponse>{message.content}</MessageResponse>
             ) : (
               message.content
@@ -2172,7 +2183,16 @@ const TranscriptMessage = memo(function TranscriptMessage({
           </MessageContent>
         )}
         {message.pendingKind === "steering" ? (
-          <div className="mt-1 text-2xs leading-4 text-fg-mute">Steering when Strata is ready…</div>
+          <div
+            className={cn(
+              "mt-1 text-2xs leading-4",
+              message.status === "error" ? "text-bad" : "text-fg-mute",
+            )}
+          >
+            {message.status === "error"
+              ? "Cancelled before Strata was ready."
+              : "Steering when Strata is ready…"}
+          </div>
         ) : null}
         {message.toolCalls.length === 0 ? null : (
           <div className="mt-2 flex w-full flex-col gap-2">
@@ -2193,6 +2213,32 @@ const TranscriptMessage = memo(function TranscriptMessage({
     </Message>
   );
 });
+
+function CompactionSummary({ content }: { content: string }): React.ReactElement {
+  return (
+    <Collapsible className="flex w-full flex-col gap-2" defaultOpen={false}>
+      <CollapsibleTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="group h-7 justify-start rounded-md px-1.5 text-fg-mute hover:text-fg-dim"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            size={13}
+            strokeWidth={1.75}
+            className="transition-transform group-data-[state=open]:rotate-90"
+          />
+          <span className="label-status">Compaction summary</span>
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pl-7 text-fg data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1 data-[state=open]:slide-in-from-top-1 data-[state=closed]:animate-out data-[state=open]:animate-in">
+        <MessageResponse>{content}</MessageResponse>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 function MessageUsageBadge({ usage }: { usage: TokenUsage }): React.ReactElement | null {
   if (usage.input === 0 && usage.output === 0 && usage.cacheRead === 0 && usage.cacheWrite === 0) {
@@ -3023,7 +3069,7 @@ function RunStatusBadge({
     if (compacting) {
       return (
         <StreamingStatusPill
-          label="compacting context"
+          label="Compacting"
           title="Summarizing this session to reset context"
           elapsed={null}
           typingKey="manual-compaction"
@@ -3057,7 +3103,7 @@ function RunStatusBadge({
     <span className="inline-flex items-center gap-2">
       <AlertCircle size={13} strokeWidth={1.75} className="text-warn" />
       <span className="label-status text-fg-dim">
-        {runState === "cancelling" ? "stopping" : runState}
+        {runState === "cancelling" ? "Stopping" : runState}
       </span>
     </span>
   );

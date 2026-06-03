@@ -285,14 +285,16 @@ export async function startWebApiServer(
     console.log("Strata web auth: disabled by STRATA_WEB_AUTH");
   } else if (auth.source === "unset") {
     console.warn(
-      "Strata web auth: STRATA_PASSCODE is not set — the web UI is locked and cannot be unlocked until you set a 4-digit passcode in your .env.",
+      "Strata web auth: STRATA_PASSCODE is not set — external (proxied) access is locked and cannot be unlocked until you set a 4-digit passcode in your .env. Direct localhost access is always allowed.",
     );
   } else if (auth.passcodeMalformed) {
     console.warn(
-      "Strata web auth: STRATA_PASSCODE should be exactly 4 digits — unlock will fail until it is corrected.",
+      "Strata web auth: STRATA_PASSCODE should be exactly 4 digits — external unlock will fail until it is corrected.",
     );
   } else {
-    console.log("Strata web auth: STRATA_PASSCODE enabled");
+    console.log(
+      "Strata web auth: STRATA_PASSCODE enabled for external access; direct localhost access is open",
+    );
   }
   return server;
 }

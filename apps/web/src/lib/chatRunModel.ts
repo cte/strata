@@ -434,6 +434,29 @@ export function markPendingMessagesComplete(messages: ChatMessageView[]): ChatMe
   }));
 }
 
+export function markPendingMessagesCancelled(messages: ChatMessageView[]): ChatMessageView[] {
+  return messages.map((message) => {
+    if (message.pendingKind === "steering" && message.status === "streaming") {
+      return {
+        ...message,
+        status: "error",
+        toolCalls: message.toolCalls.map((toolCall) => ({
+          ...toolCall,
+          status: toolCall.status === "running" ? "error" : toolCall.status,
+        })),
+      };
+    }
+    return {
+      ...message,
+      status: message.status === "streaming" ? "complete" : message.status,
+      toolCalls: message.toolCalls.map((toolCall) => ({
+        ...toolCall,
+        status: toolCall.status === "running" ? "complete" : toolCall.status,
+      })),
+    };
+  });
+}
+
 function mergeToolCalls(
   existing: ChatToolCallView[],
   incoming: ChatToolCallView[],
