@@ -1057,6 +1057,82 @@ describe("runAgentLoop", () => {
     }
   });
 
+  test("emits compaction.started before awaiting the summary model", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-compact-visible-"));
+    try {
+      const summary = createDeferred<ModelResponse>();
+      const requests: ModelRequest[] = [];
+      const model: ModelAdapter = {
+        name: "blocking-summary-test",
+        contextWindow: 1_000,
+        complete: async (request) => {
+          const {
+            onAssistantDelta: _omit,
+            onReasoningDelta: _omitReasoning,
+            signal: _signal,
+            ...rest
+          } = request;
+          requests.push(structuredClone(rest));
+          if (requests.length === 1) {
+            return {
+              content: "final answer",
+              finishReason: "stop",
+              toolCalls: [],
+              usage: { total_tokens: 950 },
+            };
+          }
+          return summary.promise;
+        },
+      };
+
+      const iterator = runAgentLoopEvents({
+        question: "Use a lot of context.",
+        model,
+        repoRoot,
+        autoCompactReserveTokens: 100,
+      })[Symbol.asyncIterator]();
+      const events: AgentRunEvent[] = [];
+      try {
+        while (true) {
+          const next = await withTimeout(iterator.next(), 1_000);
+          if (next.done) {
+            throw new Error("agent ended before compaction started");
+          }
+          events.push(next.value);
+          if (next.value.type === "compaction.started") {
+            break;
+          }
+        }
+
+        expect(requests).toHaveLength(1);
+        expect(events.at(-1)).toMatchObject({ type: "compaction.started", reason: "threshold" });
+
+        summary.resolve({
+          content: "## Goal\nsummary",
+          finishReason: "stop",
+          toolCalls: [],
+        });
+        const remaining: AgentRunEvent[] = [];
+        while (true) {
+          const next = await withTimeout(iterator.next(), 1_000);
+          if (next.done) {
+            break;
+          }
+          remaining.push(next.value);
+          if (next.value.type === "agent.completed") {
+            break;
+          }
+        }
+        expect(remaining.some((event) => event.type === "compaction.completed")).toBe(true);
+        expect(remaining.at(-1)?.type).toBe("agent.completed");
+      } finally {
+        await iterator.return?.(undefined);
+      }
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("auto-compacts a continued session before seeding the next user turn", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-agent-precompact-"));
     try {
@@ -1226,4 +1302,12 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       clearTimeout(timeout);
     }
   }
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }

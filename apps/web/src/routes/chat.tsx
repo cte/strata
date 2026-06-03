@@ -153,8 +153,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -413,6 +411,7 @@ export function ChatPage(): React.ReactElement {
     sessionLoaded,
     transcript,
     runState,
+    compacting,
     externallyRunning,
     activeRunId,
     activeRunStartedAt,
@@ -423,6 +422,7 @@ export function ChatPage(): React.ReactElement {
     usageTotals,
     submit,
     cancel,
+    compactSession,
     clearSession,
     forkSession,
     loadOlderMessages,
@@ -491,7 +491,10 @@ export function ChatPage(): React.ReactElement {
   // A run is advancing this session in another process/tab; lock the composer
   // since the server allows only one active run per session.
   const composerDisabled =
-    runState === "cancelling" || externallyRunning || (urlSessionId !== null && !sessionLoaded);
+    runState === "cancelling" ||
+    externallyRunning ||
+    compacting ||
+    (urlSessionId !== null && !sessionLoaded);
   const selectedProvider = effectiveModelChoice?.provider ?? null;
   const selectedModel = effectiveModelChoice?.model ?? null;
   const contextWindow = useMemo(
@@ -543,6 +546,10 @@ export function ChatPage(): React.ReactElement {
           clearSession();
           setShowCommandHelp(false);
           return;
+        case "compact":
+          compactSession();
+          setShowCommandHelp(false);
+          return;
         case "fork":
           forkSession();
           setShowCommandHelp(false);
@@ -563,7 +570,15 @@ export function ChatPage(): React.ReactElement {
           return;
       }
     },
-    [clearSession, forkSession, isRunning, queueTarget, setError, submitSkillCommand],
+    [
+      clearSession,
+      compactSession,
+      forkSession,
+      isRunning,
+      queueTarget,
+      setError,
+      submitSkillCommand,
+    ],
   );
 
   const handleAutocompleteCommit = useCallback(
@@ -743,7 +758,9 @@ export function ChatPage(): React.ReactElement {
           <section ref={chatSectionRef} className="relative flex h-full min-h-0 min-w-0 flex-col">
             <ChatPinnedTabBar sessionId={urlSessionId} />
 
-            {error === null ? null : <InlineError message={error} />}
+            {error === null ? null : (
+              <InlineError message={error} onDismiss={() => setError(null)} />
+            )}
             {showCommandHelp ? <CommandHelp onClose={() => setShowCommandHelp(false)} /> : null}
 
             <Conversation className="min-h-0 flex-1">
@@ -808,13 +825,27 @@ export function ChatPage(): React.ReactElement {
 
             <div
               ref={composerRef}
-              className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6 md:pb-[max(1rem,env(safe-area-inset-bottom))]"
+              className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pt-8 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6 md:pb-[max(1rem,env(safe-area-inset-bottom))]"
             >
-              <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
+              {/*
+               * Full-width frosted backdrop behind the composer column. It blurs
+               * and obscures any transcript text that scrolls under the docked
+               * composer (including behind the streaming-status row, which has no
+               * opaque background of its own). A top mask fades the blur in over
+               * the dock's top padding so messages dissolve gradually above the
+               * streaming indicator instead of hitting a hard edge or clashing
+               * with it.
+               */}
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 bg-[color-mix(in_oklab,var(--bg)_72%,transparent)] backdrop-blur-md [mask-image:linear-gradient(to_bottom,transparent,black_2rem)]"
+              />
+              <div className="pointer-events-auto relative mx-auto flex w-full max-w-3xl flex-col gap-2">
                 <div className="flex justify-start px-1">
                   <RunStatusBadge
                     runState={runState}
                     externallyRunning={externallyRunning}
+                    compacting={compacting}
                     startedAt={activeRunStartedAt}
                     turnSeed={activeRunStartedAt ?? activeRunId}
                   />
@@ -879,6 +910,7 @@ export function ChatPage(): React.ReactElement {
                         prompt={prompt}
                         runState={runState}
                         externallyRunning={externallyRunning}
+                        compacting={compacting}
                         onStop={handleCancel}
                       />
                     </PromptInputTools>
@@ -1081,9 +1113,9 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Chat-local top bar with browser-like pinned session tabs and the existing
- * session actions overflow menu. Tabs are local browser UI state; closing one
- * does not delete the underlying session.
+ * Chat-local top bar with browser-like pinned session tabs, a new-chat button,
+ * and a session search button (opens the command palette). Tabs are local
+ * browser UI state; closing one does not delete the underlying session.
  */
 function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.ReactElement {
   const navigate = useNavigate();
@@ -1091,7 +1123,6 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
   const openCommandPalette = useOpenChatSessionCommandPalette();
   const { allSessions: sessions } = useChatSessions();
   const deleteSession = useDeleteChatSession();
-  const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -1213,7 +1244,7 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
 
   // Keyboard shortcuts (⌘K for the session picker lives with the palette):
   // ⌘⇧O starts a new session, ⌘⇧⌫ opens the delete confirm. Mirrors the
-  // dropdown actions and the hints shown next to them.
+  // new-chat button, the search button, and the per-tab delete action.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!event.metaKey && !event.ctrlKey) return;
@@ -1272,60 +1303,17 @@ function ChatPinnedTabBar({ sessionId }: { sessionId: string | null }): React.Re
           </ChatTabScroller>
         </SortableContext>
       </DndContext>
-      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Session options"
-            title="Session options"
-            className="h-7 w-7 rounded-md text-fg-dim hover:bg-fg/[0.03] hover:text-fg [&>svg]:!size-3.5"
-          >
-            <MoreHorizontal size={14} strokeWidth={1.75} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48 border-hairline bg-bg-elev text-fg">
-          <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault();
-              setMenuOpen(false);
-              handleNewChat();
-            }}
-            className="gap-2 text-xs"
-          >
-            <Plus size={13} strokeWidth={1.75} />
-            New
-            <DropdownMenuShortcut>⌘⇧O</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault();
-              setMenuOpen(false);
-              openCommandPalette();
-            }}
-            className="gap-2 text-xs"
-          >
-            <Search size={13} strokeWidth={1.75} />
-            Search
-            <DropdownMenuShortcut>⌘K</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-hairline" />
-          <DropdownMenuItem
-            disabled={!canDelete}
-            onSelect={(event) => {
-              event.preventDefault();
-              setMenuOpen(false);
-              setConfirmOpen(true);
-            }}
-            className="gap-2 text-xs text-bad focus:bg-bad/10 focus:text-bad"
-          >
-            <Trash2 size={13} strokeWidth={1.75} />
-            Delete
-            <DropdownMenuShortcut>⌘⇧⌫</DropdownMenuShortcut>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Search sessions"
+        title="Search sessions (⌘K)"
+        onClick={openCommandPalette}
+        className="h-7 w-7 rounded-md text-fg-dim hover:bg-fg/[0.03] hover:text-fg [&>svg]:!size-3.5"
+      >
+        <Search size={14} strokeWidth={1.75} />
+      </Button>
       <Dialog open={confirmOpen} onOpenChange={handleConfirmOpenChange}>
         <DialogContent className="max-w-sm border-hairline bg-bg-elev p-4 text-fg">
           <DialogHeader className="sr-only">
@@ -2096,11 +2084,13 @@ function ChatPromptSubmit({
   prompt,
   runState,
   externallyRunning,
+  compacting,
   onStop,
 }: {
   prompt: string;
   runState: ChatRunState;
   externallyRunning: boolean;
+  compacting: boolean;
   onStop(): void;
 }): React.ReactElement {
   const attachments = usePromptInputAttachments();
@@ -2109,6 +2099,7 @@ function ChatPromptSubmit({
     attachmentCount: attachments.files.length,
     runState,
     externallyRunning,
+    compacting,
   });
   return (
     <PromptInputSubmit
@@ -2163,8 +2154,17 @@ const TranscriptMessage = memo(function TranscriptMessage({
           </Reasoning>
         ) : null}
         {message.content === "" ? null : (
-          <MessageContent>
-            {message.role === "assistant" ? (
+          <MessageContent
+            className={cn(
+              message.role === "system" &&
+                message.systemKind === "status" &&
+                "font-mono text-xs leading-5 text-fg-mute",
+              message.role === "system" &&
+                message.systemKind === "summary" &&
+                "border-l border-hairline-strong pl-3 text-fg",
+            )}
+          >
+            {message.role === "assistant" || message.systemKind === "summary" ? (
               <MessageResponse>{message.content}</MessageResponse>
             ) : (
               message.content
@@ -2988,16 +2988,18 @@ function toLanguageModelUsage(usage: TokenUsageTotals): LanguageModelUsage {
 function RunStatusBadge({
   runState,
   externallyRunning,
+  compacting,
   startedAt,
   turnSeed,
 }: {
   runState: ChatRunState;
   externallyRunning: boolean;
+  compacting: boolean;
   startedAt: string | null;
   turnSeed: string | null;
 }): React.ReactElement | null {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const live = runState !== "idle" || externallyRunning;
+  const live = runState !== "idle" || externallyRunning || compacting;
   const startedMs = useMemo(() => timestampMs(startedAt), [startedAt]);
   const statusCycle =
     startedMs === null || !live ? 0 : Math.max(0, Math.floor((nowMs - startedMs) / 30_000));
@@ -3018,6 +3020,16 @@ function RunStatusBadge({
   const turnKey = startedAt ?? turnSeed ?? label;
 
   if (runState === "idle") {
+    if (compacting) {
+      return (
+        <StreamingStatusPill
+          label="compacting context"
+          title="Summarizing this session to reset context"
+          elapsed={null}
+          typingKey="manual-compaction"
+        />
+      );
+    }
     if (externallyRunning) {
       return (
         <StreamingStatusPill
@@ -3230,13 +3242,19 @@ function timestampMs(value: string | null): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-function InlineError({ message }: { message: string }): React.ReactElement {
+function InlineError({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss?: () => void;
+}): React.ReactElement {
   const friendly = friendlyChatError(message);
   return (
-    <div className="border-b border-bad/35 bg-bad/[0.08] px-4 py-3 text-xs text-fg-dim">
-      <div className="flex items-start gap-2 pr-11 md:pr-14">
+    <div className="border-b border-bad/35 bg-bad/[0.08] py-3 text-xs text-fg-dim">
+      <div className="mx-auto flex w-full max-w-3xl items-start gap-2 px-4 md:px-6">
         <AlertCircle size={13} strokeWidth={1.75} className="mt-0.5 shrink-0 text-bad" />
-        <div className="min-w-0 space-y-1">
+        <div className="min-w-0 flex-1 space-y-1">
           <div className="font-medium text-fg">{friendly.title}</div>
           <p className="max-w-5xl whitespace-pre-wrap break-words leading-5">{friendly.message}</p>
           <div className="flex flex-wrap items-center gap-2 text-2xs text-fg-mute">
@@ -3249,6 +3267,19 @@ function InlineError({ message }: { message: string }): React.ReactElement {
             {friendly.requestId === null ? null : <span>Request {friendly.requestId}</span>}
           </div>
         </div>
+        {onDismiss ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Dismiss error"
+            title="Dismiss"
+            className="-mr-1 h-7 w-7 shrink-0 [&>svg]:!size-[13px]"
+            onClick={onDismiss}
+          >
+            <X size={13} strokeWidth={1.75} />
+          </Button>
+        ) : null}
       </div>
     </div>
   );

@@ -22,9 +22,11 @@ export interface ChatToolCallView {
   liveOutput?: { stdout: string; stderr: string };
 }
 
+export type SystemMessageKind = "status" | "summary";
+
 export interface ChatMessageView {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   /** Streamed reasoning/thinking summary for this assistant turn, if any. */
   reasoning?: string;
@@ -34,6 +36,7 @@ export interface ChatMessageView {
   iteration?: number;
   clientMessageId?: string;
   pendingKind?: "steering";
+  systemKind?: SystemMessageKind;
   attachments?: AttachmentData[];
   usage?: TokenUsage;
 }
@@ -256,6 +259,24 @@ export function completeToolCall(
   );
 }
 
+export function appendSystemMessage(
+  messages: ChatMessageView[],
+  content: string,
+  options: { status?: MessageStatus; systemKind?: SystemMessageKind } = {},
+): ChatMessageView[] {
+  return [
+    ...messages,
+    {
+      id: clientId("system"),
+      role: "system",
+      content,
+      status: options.status ?? "complete",
+      toolCalls: [],
+      ...(options.systemKind === undefined ? {} : { systemKind: options.systemKind }),
+    },
+  ];
+}
+
 export function appendPendingUserMessageFromEvent(
   messages: ChatMessageView[],
   event: Extract<ChatStreamEvent, { type: "message.user.pending" }>,
@@ -464,6 +485,7 @@ export function messagesToTranscript(
   existing?: ChatMessageView[],
 ): ChatMessageView[] {
   const transcript: ChatMessageView[] = [];
+  const existingSystemMessages = existing?.filter((message) => message.role === "system") ?? [];
   const existingByRole = {
     user: collectByRole(existing, "user"),
     assistant: collectByRole(existing, "assistant"),
@@ -503,7 +525,9 @@ export function messagesToTranscript(
       attachStoredToolResult(transcript, message.toolCallId, parseJsonValue(message.content));
     }
   }
-  return transcript;
+  return existingSystemMessages.length === 0
+    ? transcript
+    : [...transcript, ...existingSystemMessages];
 }
 
 function collectByRole(

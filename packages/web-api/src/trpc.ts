@@ -324,6 +324,18 @@ export interface ChatToolResultDetail {
   summary: string | null;
 }
 
+export interface ChatSessionCompactResult {
+  sessionId: string;
+  summary: string;
+  messagesSummarized: number;
+  incremental: boolean;
+  firstKeptMessageId: number;
+  lastMessageId: number;
+  tokensBefore: number;
+  isSplitTurn: boolean;
+  turnPrefixMessagesSummarized: number;
+}
+
 export interface ChatSessionDeleteResult {
   id: string;
   title: string;
@@ -450,6 +462,14 @@ export const chatSessionForkInput = z.object({
 });
 
 export type ChatSessionForkInput = z.output<typeof chatSessionForkInput>;
+
+export const chatSessionCompactInput = z.object({
+  sessionId: z.string().min(1),
+  provider: z.enum(["openai-codex", "openai-compatible", "anthropic-claude"]).optional(),
+  model: z.string().min(1).optional(),
+});
+
+export type ChatSessionCompactInput = z.output<typeof chatSessionCompactInput>;
 
 export const chatSessionDeleteInput = z.object({
   sessionId: z.string().min(1),
@@ -960,6 +980,7 @@ export interface WebApiServices {
   getChatSession(input: ChatSessionGetInput): Promise<ChatSessionDetail | null>;
   getChatToolResult(input: ChatToolResultGetInput): Promise<ChatToolResultDetail | null>;
   forkChatSession(input: ChatSessionForkInput): Promise<ChatSessionDetail>;
+  compactChatSession(input: ChatSessionCompactInput): Promise<ChatSessionCompactResult>;
   deleteChatSession(input: ChatSessionDeleteInput): Promise<ChatSessionDeleteResult>;
   renameChatSession(input: ChatSessionRenameInput): Promise<ChatSessionSummary>;
   searchChatSessions(input: ChatSessionsSearchInput): Promise<{ sessions: ChatSessionSummary[] }>;
@@ -1113,6 +1134,9 @@ export const appRouter = t.router({
       fork: t.procedure
         .input(chatSessionForkInput)
         .mutation(({ ctx, input }) => ctx.services.forkChatSession(input)),
+      compact: t.procedure
+        .input(chatSessionCompactInput)
+        .mutation(({ ctx, input }) => ctx.services.compactChatSession(input)),
       delete: t.procedure
         .input(chatSessionDeleteInput)
         .mutation(({ ctx, input }) => ctx.services.deleteChatSession(input)),

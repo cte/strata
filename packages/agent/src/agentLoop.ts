@@ -50,7 +50,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
   let overflowRecoveryAttempted = false;
   const isAborted = (): boolean => signal !== undefined && signal.aborted;
   const retryPolicy = normalizeModelRetryPolicy(config.modelRetryPolicy);
-  const setupEvents: AgentRunEvent[] = [];
+  let sessionStartedYielded = false;
 
   const buildCancelledResult = (): AgentRunResult => ({
     sessionId: session?.id ?? "",
@@ -91,7 +91,14 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       // gets fresh memory/todos/skills, but seed the rest of the message log
       // from history so the model sees the prior turns.
       session = continuingSession;
-      const preCompactEvents = await maybeAutoCompactSession({
+      yield {
+        type: "session.started",
+        sessionId: session.id,
+        title: session.title,
+        model: config.model.name,
+      };
+      sessionStartedYielded = true;
+      for await (const event of runAutoCompactSessionEvents({
         store,
         sessionId: session.id,
         model: config.model,
@@ -101,8 +108,9 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         enabled: config.autoCompact,
         latestContextTokens: latestPostCompactionAssistantContextTokens(store, session.id),
         signal,
-      });
-      setupEvents.push(...preCompactEvents);
+      })) {
+        yield event;
+      }
       const systemMessages = runContext.messages.filter((m) => m.role === "system");
       let priorNonSystem = buildCompactedMessageRecords(store, session.id).map(
         messageRecordToAgentMessage,
@@ -168,14 +176,13 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
       });
     }
 
-    yield {
-      type: "session.started",
-      sessionId: session.id,
-      title: session.title,
-      model: config.model.name,
-    };
-    for (const event of setupEvents) {
-      yield event;
+    if (!sessionStartedYielded) {
+      yield {
+        type: "session.started",
+        sessionId: session.id,
+        title: session.title,
+        model: config.model.name,
+      };
     }
     if (continuingSession === undefined || appendedContinuationUser) {
       const userEvent: Extract<AgentRunEvent, { type: "message.user" }> = {
@@ -315,7 +322,8 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
               );
             }
             overflowRecoveryAttempted = true;
-            const compactEvents = await maybeAutoCompactSession({
+            const compactEvents: AgentRunEvent[] = [];
+            for await (const event of runAutoCompactSessionEvents({
               store,
               sessionId: session.id,
               model: config.model,
@@ -326,8 +334,8 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
               latestContextTokens: undefined,
               signal,
               reason: "overflow",
-            });
-            for (const event of compactEvents) {
+            })) {
+              compactEvents.push(event);
               yield event;
             }
             const failed = compactEvents.find((event) => event.type === "compaction.failed");
@@ -428,7 +436,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
         if (pendingMessages.length > 0) {
           continue;
         }
-        const compactEvents = await maybeAutoCompactSession({
+        for await (const event of runAutoCompactSessionEvents({
           store,
           sessionId: session.id,
           model: config.model,
@@ -439,8 +447,7 @@ export async function* runAgentLoopEvents(config: AgentRunConfig): AsyncGenerato
           latestContextTokens: normalizedUsage?.total,
           signal,
           reason: "threshold",
-        });
-        for (const event of compactEvents) {
+        })) {
           yield event;
         }
         await store.appendEvent(session.id, "agent.loop.completed", {
@@ -811,11 +818,11 @@ interface AutoCompactSessionOptions {
   reason?: "threshold" | "overflow";
 }
 
-async function maybeAutoCompactSession(
+async function* runAutoCompactSessionEvents(
   options: AutoCompactSessionOptions,
-): Promise<AgentRunEvent[]> {
+): AsyncGenerator<AgentRunEvent> {
   if (options.enabled === false || isSignalAborted(options.signal)) {
-    return [];
+    return;
   }
   const reason = options.reason ?? "threshold";
   const contextWindow = options.contextWindow;
@@ -827,7 +834,7 @@ async function maybeAutoCompactSession(
       reserveTokens,
     };
     if (!shouldAutoCompact(checkOptions) || contextWindow === undefined) {
-      return [];
+      return;
     }
   }
 
@@ -844,6 +851,7 @@ async function maybeAutoCompactSession(
     contextWindow: started.contextWindow,
     reserveTokens: started.reserveTokens,
   });
+  yield started;
 
   try {
     const compactOptions: Parameters<typeof compactSession>[0] = {
@@ -856,21 +864,18 @@ async function maybeAutoCompactSession(
       compactOptions.signal = options.signal;
     }
     const result = await compactSession(compactOptions);
-    return [started, compactCompletedEvent(result, reason)];
+    yield compactCompletedEvent(result, reason);
   } catch (error: unknown) {
     const message = errorMessage(error);
     await options.store.appendEvent(options.sessionId, "compaction.failed", {
       reason,
       message: message.slice(0, 500),
     });
-    return [
-      started,
-      {
-        type: "compaction.failed",
-        reason,
-        message,
-      },
-    ];
+    yield {
+      type: "compaction.failed",
+      reason,
+      message,
+    };
   }
 }
 

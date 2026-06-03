@@ -1,5 +1,7 @@
 import path from "node:path";
 import {
+  compactSession,
+  createModelAdapter,
   defaultModel,
   getAnthropicCredentials,
   getChatGptCredentials,
@@ -21,6 +23,8 @@ import type {
   ChatModelStatus,
   ChatModelSummary,
   ChatModelsListInput,
+  ChatSessionCompactInput,
+  ChatSessionCompactResult,
   ChatSessionDeleteInput,
   ChatSessionDeleteResult,
   ChatSessionDetail,
@@ -206,6 +210,56 @@ export async function getChatToolResult(
   };
 }
 
+export async function compactChatSession(
+  input: ChatSessionCompactInput,
+  getSessionStore: SessionStoreGetter,
+  options: WebApiOptions,
+): Promise<ChatSessionCompactResult> {
+  const store = await getSessionStore();
+  const session = store.getSession(input.sessionId);
+  if (session === undefined || !isChatSessionKind(session.kind)) {
+    throw new Error(`Session not found: ${input.sessionId}`);
+  }
+  if (session.status === "running") {
+    throw new Error(`Cannot compact a running session: ${input.sessionId}`);
+  }
+
+  const root = repoRoot(options);
+  const env = runtimeEnv(options);
+  const sessionModel = parseSessionModel(session.model);
+  const modelFactory = options.createModelAdapter ?? createModelAdapter;
+  const adapterOptions: Parameters<typeof createModelAdapter>[0] = { repoRoot: root, env };
+  const provider = input.provider ?? sessionModel?.provider;
+  const model = input.model ?? sessionModel?.model;
+  if (provider !== undefined) {
+    adapterOptions.provider = provider;
+  }
+  if (model !== undefined) {
+    adapterOptions.model = model;
+  }
+
+  const modelAdapter = await modelFactory(adapterOptions);
+  await store.appendEvent(session.id, "compaction.started", {
+    reason: "manual",
+    model: modelAdapter.name,
+  });
+  try {
+    return await compactSession({
+      sessionId: session.id,
+      model: modelAdapter,
+      repoRoot: root,
+      reason: "manual",
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    await store.appendEvent(session.id, "compaction.failed", {
+      reason: "manual",
+      message: message.slice(0, 500),
+    });
+    throw error;
+  }
+}
+
 export async function forkChatSession(
   input: ChatSessionForkInput,
   getSessionStore: SessionStoreGetter,
@@ -302,6 +356,29 @@ function escapeXmlAttribute(value: string): string {
 
 function isChatSessionKind(kind: string): kind is ChatSessionSummary["kind"] {
   return CHAT_SESSION_KINDS.has(kind);
+}
+
+function parseSessionModel(
+  value: string | null,
+): { provider: ChatSessionCompactInput["provider"]; model: string } | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const separator = value.indexOf(":");
+  if (separator === -1) {
+    return undefined;
+  }
+  const provider = value.slice(0, separator);
+  const model = value.slice(separator + 1);
+  if (
+    (provider === "openai-codex" ||
+      provider === "openai-compatible" ||
+      provider === "anthropic-claude") &&
+    model !== ""
+  ) {
+    return { provider, model };
+  }
+  return undefined;
 }
 
 function sessionToChatSummary(session: SessionRecord, store: SessionStore): ChatSessionSummary {
