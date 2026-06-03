@@ -43,6 +43,48 @@ describe("TerminalHttpBridge", () => {
     }
   });
 
+  test("sends heartbeat comments while the terminal is idle", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
+    const bridge = new TerminalHttpBridge(new TerminalSessionManager(repoRoot, testShellEnv()), {
+      heartbeatMs: 5,
+    });
+    const session = bridge.create({ cols: 80, rows: 24 });
+    try {
+      const response = bridge.stream(session.id, new AbortController().signal);
+      expect(response).toBeDefined();
+      const reader = response!.body!.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+
+      const text = await readUntil(reader, ": keepalive");
+      expect(text).toContain("event: ready");
+      expect(text).toContain(": keepalive");
+    } finally {
+      await bridge.close(session.id);
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("keeps the PTY alive across output stream reconnects", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
+    const bridge = new TerminalHttpBridge(new TerminalSessionManager(repoRoot, testShellEnv()));
+    const session = bridge.create({ cols: 80, rows: 24 });
+    try {
+      const first = bridge.stream(session.id, new AbortController().signal);
+      expect(first).toBeDefined();
+      const firstReader = first!.body!.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+      await readUntil(firstReader, "event: ready");
+
+      const second = bridge.stream(session.id, new AbortController().signal);
+      expect(second).toBeDefined();
+      const secondReader = second!.body!.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+      bridge.write(session.id, "echo reconnected\nexit\n");
+      const text = await readUntil(secondReader, "reconnected");
+      expect(text).toContain("reconnected");
+    } finally {
+      await bridge.close(session.id);
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("propagates resize to the child PTY", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-terminal-"));
     const bridge = new TerminalHttpBridge(new TerminalSessionManager(repoRoot, testShellEnv()));

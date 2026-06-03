@@ -12,7 +12,15 @@ export type JsonValue =
 export type JsonObject = { [key: string]: JsonValue };
 export type YamlValue = null | boolean | number | string | string[];
 
-export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+function resolveRepoRoot(): string {
+  const envRepoRoot = process.env.STRATA_REPO_ROOT;
+  if (envRepoRoot !== undefined && envRepoRoot.trim() !== "") {
+    return path.resolve(envRepoRoot);
+  }
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+}
+
+export const repoRoot = resolveRepoRoot();
 export const wikiRoot = path.join(repoRoot, "wiki");
 const DOTENVX_ENCRYPTED_PREFIX = "encrypted:";
 

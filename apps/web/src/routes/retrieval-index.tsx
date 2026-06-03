@@ -14,6 +14,7 @@ import { useState } from "react";
 import { PageContainer, PageHeader } from "@/components/page-layout";
 import { Callout } from "@/components/shared/callout";
 import { Eyebrow } from "@/components/shared/eyebrow";
+import { SectionCard } from "@/components/shared/section-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -253,16 +254,15 @@ function Panel({
   children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <section className="rounded-md border border-hairline bg-surface">
-      <div className="flex flex-wrap items-start justify-between gap-4 border-hairline border-b p-5">
-        <div className="min-w-0">
-          <h2 className="text-sm font-medium tracking-tight text-fg">{title}</h2>
-          <p className="mt-1 max-w-xl text-sm text-fg-dim">{description}</p>
-        </div>
-        {aside}
-      </div>
-      <div className="p-5">{children}</div>
-    </section>
+    <SectionCard
+      title={title}
+      description={<span className="text-sm">{description}</span>}
+      actions={aside}
+      bodyClassName="p-5"
+      className="[&>div:first-child]:p-5"
+    >
+      {children}
+    </SectionCard>
   );
 }
 

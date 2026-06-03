@@ -94,6 +94,8 @@ bun run dev:status
 bun run dev:logs
 bun run dev:stop
 bun run strata <args>
+bun run build:cli
+bun run install:dev
 bun run strata jobs list
 bun run strata routines trigger list <routineId>
 bun run web:api
@@ -101,7 +103,7 @@ bun run web:dev
 bun run build
 ```
 
-The CLI currently exposes `auth status|login|logout`, `init`, `query`, `tui` with Pi-style session launch flags, `jobs list|run|worker`, `routines list|show|create|update|enable|disable|run|runs|artifacts|trigger`, `trace`, `sessions list|search|delete`, and `tools list|call`. Use `bun run strata --help` for the source of truth.
+The CLI currently exposes `--version`, `auth status|login|logout`, `init`, `query`, `tui` with Pi-style session launch flags, `jobs list|run|worker`, `routines list|show|create|update|enable|disable|run|runs|artifacts|trigger`, `trace`, `sessions list|search|delete`, and `tools list|call`. Use `bun run strata --help` for the source of truth.
 
 ## Workspace Layout
 

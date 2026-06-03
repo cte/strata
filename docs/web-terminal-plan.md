@@ -1,6 +1,6 @@
 # Strata Web Terminal Plan
 
-Status: clean-room PTY prototype live; Ghostty/libghostty WASM is loaded by default in `/chat`; the browser renderer is a `<canvas>` renderer driven by libghostty's cells (windowed, only-changed-rows redraw); transport is HTTP/SSE plus POST input/resize.
+Status: clean-room PTY prototype live; Ghostty/libghostty WASM is loaded by default in `/chat`; the browser renderer is a `<canvas>` renderer driven by libghostty's cells (windowed, only-changed-rows redraw); transport is HTTP/SSE plus POST input/resize, with output-stream heartbeats and browser reconnect for transient disconnects.
 
 This plan covers the experimental terminal surface inside `apps/web`. It is subordinate to [roadmap.md](./roadmap.md), [web-chat-plan.md](./web-chat-plan.md), and [web-control-plane-plan.md](./web-control-plane-plan.md).
 
@@ -29,14 +29,14 @@ The current prototype provides:
 - local web API terminal routes: `POST /api/terminal/sessions`, `GET /api/terminal/sessions/:sessionId/stream`, `POST /api/terminal/sessions/:sessionId/input`, `POST /api/terminal/sessions/:sessionId/resize`, and `DELETE /api/terminal/sessions/:sessionId`, mounted as a thin adapter over `@strata/terminal-backend`;
 - a bottom-docked terminal drawer (DevTools-style) opened from a bottom-right toggle button on the chat surface. The chat surface is a vertical shadcn `ResizablePanelGroup` (over `react-resizable-panels@3`, pinned because v4 renamed the API); the chat and terminal are sibling `ResizablePanel`s split by a draggable `ResizableHandle`, with the split height persisted via the group's `autoSaveId`. The terminal panel has a restart-session control, a close control, a connection status dot with the shell path, and a session-ended/error overlay with an inline restart action; the PTY grid re-fits automatically when the panel is resized (the `useTerminalSession` hook observes the container and re-fits the canvas grid). Session lifecycle, transport, and imperative controls live in the `useTerminalSession` hook so `TerminalPanel` is layout-only.
 
-Transport note: a WebSocket bridge was attempted first, but the public exe.dev/Vite proxy path did not reliably upgrade WebSocket connections. The current prototype deliberately uses HTTPS-compatible requests: SSE for output and POST for input, and the old WebSocket route has been removed.
+Transport note: a WebSocket bridge was attempted first, but the public exe.dev/Vite proxy path did not reliably upgrade WebSocket connections. The current prototype deliberately uses HTTPS-compatible requests: SSE for output and POST for input, and the old WebSocket route has been removed. Terminal SSE streams now emit comment heartbeats (`: keepalive`) so idle shells survive proxy/browser quiet periods, and the browser treats a stale or closed output stream as recoverable: it reconnects to the same in-memory PTY session with exponential backoff while POST input continues to target that session.
 
 Known limitations:
 
 - the backend uses a Unix PTY host under Bun; portability beyond the current Linux VM still needs validation;
 - rebuilding the bundled Ghostty/libghostty artifact still requires network access (Ghostty source at the pinned commit, its submodules, and Zig package dependencies) and the pinned Zig toolchain; the build is now self-contained and reproducible, but the cross-network clone path has not been exercised in the offline sandbox;
 - full-screen/curses programs still need broader browser-level and PTY fixture coverage; mouse mode distinctions, wide/CJK glyph alignment and Unicode-width correctness, and richer selection/clipboard UX (word/line selection, auto-scroll while dragging) need more hardening (basic drag-select + copy and Cmd/Ctrl-click hyperlinks exist);
-- no durable reconnect/session model exists; a browser refresh loses the ephemeral terminal session;
+- transient output-stream reconnect is supported for the same mounted panel, but no durable reconnect/session model exists; a browser refresh still loses the ephemeral terminal session;
 - no command/output audit UI exists.
 
 ## Next Slices
@@ -46,7 +46,7 @@ Known limitations:
 3. Continue expanding terminal input behavior: selection/clipboard polish (word/line selection, auto-scroll while dragging), mouse mode distinctions (`1000`/`1002`/`1003`), non-SGR mouse fallback if needed, and richer keyboard/application-keypad modes. (Basic drag-select + copy, Cmd/Ctrl-click hyperlinks, and the canvas renderer are done.) Optional micro-opt: feed libghostty's exported `ghostty_render_state_is_row_dirty` into the canvas redraw instead of the JS per-row diff.
 4. Done: the Ghostty/libghostty rebuild is self-contained — pinned commit + vendored patch + asserted Zig version, fetched into a gitignored cache, byte-identical on rebuild (`scripts/README.md`). Remaining: exercise the cross-network clone path on a clean machine, and consider checking the build into CI.
 5. Validate PTY portability beyond the current Linux exe.dev VM and decide whether to replace the embedded PTY helper with a native module or WASM-backed PTY abstraction later.
-6. Decide whether to expose terminal session metadata in the web UI beyond the current ephemeral panel.
+6. Decide whether to expose terminal session metadata in the web UI beyond the current ephemeral panel; transient stream reconnect is handled, but refresh/crash resume would need explicit non-durable session metadata and output replay choices.
 
 ## Safety Rules
 

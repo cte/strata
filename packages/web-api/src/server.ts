@@ -29,6 +29,7 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4174;
 const WEB_API_IDLE_TIMEOUT_SECONDS = 255;
 const CHAT_STREAM_HEARTBEAT_MS = 5_000;
+const TERMINAL_STREAM_HEARTBEAT_MS = 15_000;
 
 export function createWebApiApp(options: WebApiOptions = {}): Hono {
   const app = new Hono();
@@ -37,6 +38,7 @@ export function createWebApiApp(options: WebApiOptions = {}): Hono {
   const root = repoRoot(options);
   const terminals = new TerminalHttpBridge(
     new TerminalSessionManager(root, options.env ?? Bun.env),
+    { heartbeatMs: TERMINAL_STREAM_HEARTBEAT_MS },
   );
 
   app.use(

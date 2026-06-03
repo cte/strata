@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 import { useState, useTransition } from "react";
+import { CheckToggle } from "@/components/shared/check-toggle";
+import { SectionCard } from "@/components/shared/section-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { type ConnectorRunInput, type ConnectorRunResult, runConnector } from "@/lib/api";
@@ -109,145 +111,114 @@ export function ConnectorOperationPanel({
   const defaultsBusy = isDefaultsPending || defaults?.isLoading === true;
 
   return (
-    <section className="rounded-md border border-hairline bg-surface">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-hairline p-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <FileDown size={14} strokeWidth={1.75} className="text-fg-mute" />
-            <h2 className="text-sm font-medium tracking-tight text-fg">{title}</h2>
-          </div>
-          <p className="mt-1 text-xs text-fg-dim">{description}</p>
-        </div>
-        {result ? (
+    <SectionCard
+      icon={<FileDown size={14} strokeWidth={1.75} />}
+      title={title}
+      description={description}
+      actions={
+        result ? (
           <Badge tone={result.connectorResult.dryRun ? "muted" : "ready"}>
             {result.operation.replace("_", " ")}
           </Badge>
-        ) : null}
-      </div>
+        ) : null
+      }
+      bodyClassName="space-y-4"
+    >
+      {children}
 
-      <div className="space-y-4 p-4">
-        {children}
-
-        {defaults ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-hairline bg-surface-2 px-3 py-2">
-            <div className="flex min-w-0 items-start gap-2">
-              <SlidersHorizontal
-                size={13}
-                strokeWidth={1.75}
-                className="mt-0.5 shrink-0 text-fg-mute"
-              />
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-fg">{defaults.label}</p>
-                <p className="truncate text-2xs text-fg-mute">
-                  {defaults.profileLabel ?? "No saved defaults"}
-                  {defaults.updatedAt ? ` · ${formatTimestamp(defaults.updatedAt)}` : ""}
+      {defaults ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-hairline bg-surface-2 px-3 py-2">
+          <div className="flex min-w-0 items-start gap-2">
+            <SlidersHorizontal
+              size={13}
+              strokeWidth={1.75}
+              className="mt-0.5 shrink-0 text-fg-mute"
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-fg">{defaults.label}</p>
+              <p className="truncate text-2xs text-fg-mute">
+                {defaults.profileLabel ?? "No saved defaults"}
+                {defaults.updatedAt ? ` · ${formatTimestamp(defaults.updatedAt)}` : ""}
+              </p>
+              {defaultsNotice ? <p className="mt-1 text-2xs text-good">{defaultsNotice}</p> : null}
+              {(defaultsError ?? defaults.error) ? (
+                <p className="mt-1 font-mono text-2xs text-bad">
+                  {defaultsError ?? defaults.error}
                 </p>
-                {defaultsNotice ? (
-                  <p className="mt-1 text-2xs text-good">{defaultsNotice}</p>
-                ) : null}
-                {(defaultsError ?? defaults.error) ? (
-                  <p className="mt-1 font-mono text-2xs text-bad">
-                    {defaultsError ?? defaults.error}
-                  </p>
-                ) : null}
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={defaultsBusy || defaults.canLoad === false}
-                onClick={loadDefaults}
-              >
-                <RotateCcw size={13} strokeWidth={2} />
-                Load
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={defaultsBusy || defaults.canSave === false}
-                onClick={saveDefaults}
-              >
-                <Save size={13} strokeWidth={2} />
-                Save
-              </Button>
+              ) : null}
             </div>
           </div>
-        ) : null}
-
-        <div className="grid gap-2 border-t border-hairline pt-3 sm:grid-cols-2">
-          <Toggle
-            checked={indexRaw}
-            disabled={isPending}
-            label="Create wiki pages"
-            onChange={setIndexRaw}
-          />
-          <Toggle
-            checked={refreshSearchIndex}
-            disabled={isPending}
-            label="Refresh search index"
-            onChange={setRefreshSearchIndex}
-          />
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="min-w-0 text-xs text-fg-mute">{disabledReason ?? ""}</p>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex shrink-0 flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
               variant="secondary"
-              disabled={busy}
-              onClick={() => run("dry_run")}
+              disabled={defaultsBusy || defaults.canLoad === false}
+              onClick={loadDefaults}
             >
-              <Eye size={13} strokeWidth={2} />
-              Dry run
+              <RotateCcw size={13} strokeWidth={2} />
+              Load
             </Button>
-            <Button type="button" size="sm" disabled={busy} onClick={() => run("pull")}>
-              <RefreshCw size={13} strokeWidth={2} />
-              Pull
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={defaultsBusy || defaults.canSave === false}
+              onClick={saveDefaults}
+            >
+              <Save size={13} strokeWidth={2} />
+              Save
             </Button>
           </div>
         </div>
+      ) : null}
 
-        {result ? <ConnectorRunResultBlock result={result} /> : null}
-
-        {error ? (
-          <p className="rounded-sm bg-bad/10 px-2 py-1.5 font-mono text-2xs text-bad">{error}</p>
-        ) : null}
+      <div className="grid gap-2 border-t border-hairline pt-3 sm:grid-cols-2">
+        <CheckToggle
+          checked={indexRaw}
+          disabled={isPending}
+          label="Create wiki pages"
+          onChange={setIndexRaw}
+        />
+        <CheckToggle
+          checked={refreshSearchIndex}
+          disabled={isPending}
+          label="Refresh search index"
+          onChange={setRefreshSearchIndex}
+        />
       </div>
-    </section>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 text-xs text-fg-mute">{disabledReason ?? ""}</p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => run("dry_run")}
+          >
+            <Eye size={13} strokeWidth={2} />
+            Dry run
+          </Button>
+          <Button type="button" size="sm" disabled={busy} onClick={() => run("pull")}>
+            <RefreshCw size={13} strokeWidth={2} />
+            Pull
+          </Button>
+        </div>
+      </div>
+
+      {result ? <ConnectorRunResultBlock result={result} /> : null}
+
+      {error ? (
+        <p className="rounded-sm bg-bad/10 px-2 py-1.5 font-mono text-2xs text-bad">{error}</p>
+      ) : null}
+    </SectionCard>
   );
 }
 
 function formatTimestamp(value: string): string {
   return new Date(value).toISOString().replace("T", " ").slice(0, 19);
-}
-
-function Toggle({
-  checked,
-  disabled,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  disabled: boolean;
-  label: string;
-  onChange(value: boolean): void;
-}): React.ReactElement {
-  return (
-    <label className="flex items-center gap-2 text-xs text-fg-dim">
-      <input
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.checked)}
-        type="checkbox"
-      />
-      {label}
-    </label>
-  );
 }
 
 function ConnectorRunResultBlock({ result }: { result: ConnectorRunResult }): React.ReactElement {

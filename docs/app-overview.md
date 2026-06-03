@@ -83,6 +83,8 @@ bun run dev:status
 bun run dev:logs
 bun run dev:stop
 bun run strata <args>
+bun run build:cli
+bun run install:dev
 bun run web:api
 bun run web:dev
 ```

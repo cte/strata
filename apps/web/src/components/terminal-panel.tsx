@@ -13,6 +13,7 @@ const DEFAULT_FONT = 13;
 const STATUS_META: Record<TerminalStatus, { label: string; dot: string }> = {
   connecting: { label: "Connecting", dot: "bg-warn animate-pulse" },
   connected: { label: "Connected", dot: "bg-good" },
+  reconnecting: { label: "Reconnecting", dot: "bg-warn animate-pulse" },
   closed: { label: "Session ended", dot: "bg-fg-mute" },
   error: { label: "Connection error", dot: "bg-bad" },
 };
@@ -130,7 +131,7 @@ function SessionOverlay({
       <div className="flex flex-col items-center gap-3 rounded-lg border border-hairline bg-bg-elev px-6 py-5 text-center shadow-lg">
         <p className="text-sm font-medium text-fg">Connection error</p>
         <p className="max-w-56 text-xs leading-5 text-fg-dim">
-          The terminal lost its connection to the local backend.
+          The terminal could not reconnect to the local backend.
         </p>
         <Button type="button" size="sm" variant="outline" onClick={onRestart} className="gap-1.5">
           <RotateCcw size={13} strokeWidth={1.75} />

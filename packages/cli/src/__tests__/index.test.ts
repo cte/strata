@@ -20,6 +20,21 @@ async function withTempRepo<T>(fn: (repoRoot: string) => Promise<T>): Promise<T>
   }
 }
 
+describe("strata --version", () => {
+  test("prints the current development version", async () => {
+    await withTempRepo(async (repoRoot) => {
+      const result = spawnSync("bun", [cliPath, "--version"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: process.env,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toMatch(/^strata 0\.1\.0-dev\+[0-9a-f]{12}(\.dirty)?$/);
+    });
+  });
+});
+
 describe("strata sessions delete", () => {
   test("deletes a session by unique id prefix with --yes", async () => {
     await withTempRepo(async (repoRoot) => {
@@ -60,6 +75,20 @@ describe("strata sessions delete", () => {
 });
 
 describe("strata tui options", () => {
+  test("routes top-level TUI options to the TUI command", async () => {
+    await withTempRepo(async (repoRoot) => {
+      const result = spawnSync("bun", [cliPath, "-r", "--help"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: process.env,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("usage: strata [tui] [options]");
+      expect(result.stdout).toContain("--resume, -r [id]");
+    });
+  });
+
   test("prints Pi-style TUI session launch options", async () => {
     await withTempRepo(async (repoRoot) => {
       const result = spawnSync("bun", [cliPath, "tui", "--help"], {

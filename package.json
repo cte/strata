@@ -22,6 +22,8 @@
     "knip": "bun --bun node_modules/.bin/knip --no-progress",
     "test": "bun test",
     "build": "bun build ./packages/ingest/src/lintWiki.ts ./packages/ingest/src/pullGranola.ts ./packages/ingest/src/pullSlack.ts ./packages/ingest/src/pullNotion.ts ./packages/cli/src/index.ts ./packages/web-api/src/server.ts --outdir=dist --target=bun",
+    "build:cli": "bun scripts/build-strata-cli.ts",
+    "install:dev": "bun scripts/install-strata-dev.ts",
     "dev": "pm2 start ecosystem.json",
     "dev:delete": "pm2 delete ecosystem.json",
     "dev:logs": "pm2 logs",

@@ -106,11 +106,18 @@ import {
 } from "@strata/tools";
 
 import { type RunTuiOptions, runTui } from "@strata/tui";
+import { formatCliVersion, readCliVersion } from "./version.js";
 
 type CommandResult = number;
 
 function usage(): string {
-  return `usage: strata <command>
+  return `usage: strata [command]
+
+With no command, launches the interactive Strata TUI. TUI launch options also work
+at the top level, e.g. \`strata -r\` or \`strata -c\`.
+
+flags:
+  --version, -v                print the installed Strata version
 
 commands:
     auth status                  show configured model auth without exposing tokens
@@ -154,7 +161,7 @@ commands:
   routines trigger <cmd>       manage a routine's recurring triggers
   maintain list                list maintenance jobs
   maintain run <job>           run one maintenance job and persist a trace
-  tui [options]                launch the interactive Strata TUI
+  tui [options]                launch the interactive Strata TUI (default)
   trace <title>                write a dummy trace session for harness smoke tests
   sessions list [--limit N]    list recent sessions
   sessions search <query>      search sessions using the current simple index
@@ -1719,7 +1726,7 @@ async function cmdRoutines(args: string[]): Promise<CommandResult> {
 }
 
 function tuiUsage(): string {
-  return `usage: strata tui [options]
+  return `usage: strata [tui] [options]
 
 options:
   --continue, -c        continue the most recent session
@@ -1783,6 +1790,36 @@ export function parseTuiOptions(args: string[]): TuiCliOptions {
   return parsed;
 }
 
+async function cmdTui(args: string[]): Promise<CommandResult> {
+  const options = parseTuiOptions(args);
+  if (options.help) {
+    console.log(tuiUsage());
+    return 0;
+  }
+  const runOptions: RunTuiOptions = { repoRoot: getStrataPaths().repoRoot };
+  if (options.initialSession !== undefined) {
+    runOptions.initialSession = options.initialSession;
+  }
+  const result = await runTui(runOptions);
+  if (result.exitMessage !== "") {
+    console.log(result.exitMessage);
+  }
+  return 0;
+}
+
+function isTopLevelTuiInvocation(args: readonly string[]): boolean {
+  const first = args[0];
+  return (
+    first === undefined ||
+    first === "--continue" ||
+    first === "-c" ||
+    first === "--resume" ||
+    first === "-r" ||
+    first === "--session" ||
+    first === "--fork"
+  );
+}
+
 async function cmdTools(args: string[]): Promise<CommandResult> {
   const subcommand = args.shift();
 
@@ -1824,11 +1861,23 @@ async function cmdTools(args: string[]): Promise<CommandResult> {
   throw new Error(`Unknown tools subcommand: ${subcommand}`);
 }
 
-async function main(argv: string[]): Promise<CommandResult> {
-  const command = argv.shift();
-  if (!command || command === "--help" || command === "-h") {
+export async function main(argv: string[]): Promise<CommandResult> {
+  const first = argv[0];
+  if (first === "--version" || first === "-v") {
+    console.log(formatCliVersion(await readCliVersion()));
+    return 0;
+  }
+  if (first === "--help" || first === "-h") {
     console.log(usage());
     return 0;
+  }
+  if (isTopLevelTuiInvocation(argv)) {
+    return cmdTui(argv);
+  }
+
+  const command = argv.shift();
+  if (command === undefined) {
+    return cmdTui([]);
   }
 
   if (command === "init") {
@@ -1865,20 +1914,7 @@ async function main(argv: string[]): Promise<CommandResult> {
     return cmdRoutines(argv);
   }
   if (command === "tui") {
-    const options = parseTuiOptions(argv);
-    if (options.help) {
-      console.log(tuiUsage());
-      return 0;
-    }
-    const runOptions: RunTuiOptions = { repoRoot: getStrataPaths().repoRoot };
-    if (options.initialSession !== undefined) {
-      runOptions.initialSession = options.initialSession;
-    }
-    const result = await runTui(runOptions);
-    if (result.exitMessage !== "") {
-      console.log(result.exitMessage);
-    }
-    return 0;
+    return cmdTui(argv);
   }
   if (command === "trace") {
     return cmdTrace(argv);

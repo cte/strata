@@ -10,6 +10,15 @@ function hasRepoMarkers(dir: string): boolean {
 }
 
 export function findRepoRoot(start = process.cwd()): string {
+  const envRepoRoot = process.env.STRATA_REPO_ROOT;
+  if (envRepoRoot !== undefined && envRepoRoot.trim() !== "") {
+    const resolved = path.resolve(envRepoRoot);
+    if (!hasRepoMarkers(resolved)) {
+      throw new Error(`STRATA_REPO_ROOT does not look like a Strata repo root: ${resolved}`);
+    }
+    return resolved;
+  }
+
   let current = path.resolve(start);
 
   while (true) {

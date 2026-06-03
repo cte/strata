@@ -216,6 +216,54 @@ describe("web api", () => {
     }
   });
 
+  test("keeps terminal sessions writable after the output stream disconnects", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
+    const handler = createWebApiHandler({
+      repoRoot,
+      env: { ...WEB_AUTH_OFF, SHELL: "/bin/sh" },
+    });
+    let sessionId: string | undefined;
+    try {
+      const created = await handler(
+        new Request("http://127.0.0.1/api/terminal/sessions", { method: "POST" }),
+      );
+      expect(created.status).toBe(200);
+      const session = (await created.json()) as { id: string };
+      sessionId = session.id;
+
+      const stream = await handler(
+        new Request(`http://127.0.0.1/api/terminal/sessions/${session.id}/stream`),
+      );
+      expect(stream.status).toBe(200);
+      await stream.body?.cancel();
+
+      const input = await handler(
+        new Request(`http://127.0.0.1/api/terminal/sessions/${session.id}/input`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ data: "echo still-here\n" }),
+        }),
+      );
+      expect(input.status).toBe(200);
+      await expect(input.json()).resolves.toMatchObject({ ok: true });
+
+      const reconnected = await handler(
+        new Request(`http://127.0.0.1/api/terminal/sessions/${session.id}/stream`),
+      );
+      expect(reconnected.status).toBe(200);
+      await reconnected.body?.cancel();
+    } finally {
+      if (sessionId !== undefined) {
+        await handler(
+          new Request(`http://127.0.0.1/api/terminal/sessions/${sessionId}`, {
+            method: "DELETE",
+          }),
+        );
+      }
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("dry-runs Notion through a trace-backed session", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     try {

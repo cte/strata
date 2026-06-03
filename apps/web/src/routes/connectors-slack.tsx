@@ -2,6 +2,7 @@ import type * as React from "react";
 import { useCallback, useState } from "react";
 import { ConnectorOperationPanel } from "@/components/connector-operation-panel";
 import { PageContainer, PageHeader } from "@/components/page-layout";
+import { CheckToggle } from "@/components/shared/check-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useConnectors } from "@/lib/queries/connectors";
@@ -190,18 +191,18 @@ export function ConnectorsSlackPage(): React.ReactElement {
         </div>
 
         <div className="grid gap-2 border-t border-hairline pt-3 sm:grid-cols-2">
-          <Toggle
+          <CheckToggle
             checked={allHistory}
             label="Allow all-history backfill"
             onChange={setAllHistory}
           />
-          <Toggle
+          <CheckToggle
             checked={includePrivate}
             label="Include private channels"
             onChange={setIncludePrivate}
           />
-          <Toggle checked={includeDms} label="Include DMs" onChange={setIncludeDms} />
-          <Toggle
+          <CheckToggle checked={includeDms} label="Include DMs" onChange={setIncludeDms} />
+          <CheckToggle
             checked={includeBotMessages}
             label="Include bot messages"
             onChange={setIncludeBotMessages}
@@ -209,27 +210,6 @@ export function ConnectorsSlackPage(): React.ReactElement {
         </div>
       </ConnectorOperationPanel>
     </PageContainer>
-  );
-}
-
-function Toggle({
-  checked,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  label: string;
-  onChange(value: boolean): void;
-}): React.ReactElement {
-  return (
-    <label className="flex items-center gap-2 text-xs text-fg-dim">
-      <input
-        checked={checked}
-        onChange={(event) => onChange(event.currentTarget.checked)}
-        type="checkbox"
-      />
-      {label}
-    </label>
   );
 }
 

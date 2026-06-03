@@ -1,11 +1,16 @@
 import { useForm } from "@tanstack/react-form";
-import { Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { ChevronRight, Plus, RefreshCw, Save, Trash2, Wrench } from "lucide-react";
 import type * as React from "react";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { FormField, fieldError, hasError } from "@/components/form";
 import { PageContainer, PageHeader } from "@/components/page-layout";
+import { Callout } from "@/components/shared/callout";
+import { CheckToggle } from "@/components/shared/check-toggle";
+import { TextField } from "@/components/shared/field";
+import { SectionCard } from "@/components/shared/section-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +30,7 @@ import {
   useMcpSettings,
   useUpdateMcpSettings,
 } from "@/lib/queries/mcps";
+import { cn } from "@/lib/utils";
 
 export function SettingsMcpsPage(): React.ReactElement {
   const statusQuery = useMcpSettings();
@@ -35,6 +41,7 @@ export function SettingsMcpsPage(): React.ReactElement {
 
   const status = statusQuery.data ?? null;
   const error = statusQuery.error ? messageOf(statusQuery.error) : mutationError;
+  const servers = status?.servers ?? fallbackServers();
 
   async function applyUpdate(input: McpSettingsUpdateInput): Promise<void> {
     setMutationError(null);
@@ -65,23 +72,22 @@ export function SettingsMcpsPage(): React.ReactElement {
         description={
           <>
             Manage local Model Context Protocol tool servers. Secrets are stored locally in
-            <span className="font-mono text-fg"> .strata/secrets/mcp-servers.json</span>
-            and are never returned to the browser.
+            <span className="font-mono text-fg"> .strata/secrets/mcp-servers.json</span> and are
+            never returned to the browser.
           </>
         }
+        actions={<NewMcpServerDialog onCreate={applyUpdate} />}
       />
 
       {notice ? (
-        <div className="rounded-md border border-good/30 bg-accent-soft p-3 text-sm text-fg-dim">
+        <Callout tone="good" label="saved">
           {notice}
-        </div>
+        </Callout>
       ) : null}
 
-      <NewMcpServerCard onCreate={applyUpdate} />
-
-      <div className="space-y-3">
-        {(status?.servers ?? fallbackServers()).map((server) => (
-          <McpServerCard
+      <div className="divide-y divide-hairline overflow-hidden rounded-md border border-hairline bg-surface">
+        {servers.map((server) => (
+          <McpServerRow
             key={server.slug}
             server={server}
             onDelete={applyDelete}
@@ -91,16 +97,15 @@ export function SettingsMcpsPage(): React.ReactElement {
       </div>
 
       {error ? (
-        <div className="rounded-md border border-bad/40 bg-bad/[0.06] p-3">
-          <p className="font-mono text-xs text-bad">Operation failed</p>
-          <p className="mt-1 text-sm text-fg-dim">{error}</p>
-        </div>
+        <Callout tone="bad" label="operation failed">
+          {error}
+        </Callout>
       ) : null}
     </PageContainer>
   );
 }
 
-function NewMcpServerCard({
+function NewMcpServerDialog({
   onCreate,
 }: {
   onCreate(input: McpSettingsUpdateInput): Promise<void>;
@@ -135,7 +140,7 @@ function NewMcpServerCard({
       <DialogTrigger asChild>
         <Button size="sm" variant="secondary">
           <Plus size={13} strokeWidth={2} />
-          Add MCP server
+          Add server
         </Button>
       </DialogTrigger>
       <DialogContent className="border-hairline bg-bg-elev text-fg">
@@ -235,7 +240,7 @@ function NewMcpServerCard({
   );
 }
 
-function McpServerCard({
+function McpServerRow({
   server,
   onUpdate,
   onDelete,
@@ -244,6 +249,7 @@ function McpServerCard({
   onUpdate(input: McpSettingsUpdateInput): Promise<void>;
   onDelete(slug: string): Promise<void>;
 }): React.ReactElement {
+  const [open, setOpen] = useState(false);
   const [displayName, setDisplayName] = useState(server.displayName);
   const [serverUrl, setServerUrl] = useState(server.serverUrl);
   const [apiKey, setApiKey] = useState("");
@@ -308,144 +314,132 @@ function McpServerCard({
     });
   }
 
+  const selectedCount = selectedTools.length;
+
   return (
-    <div className="rounded-md border border-hairline bg-surface p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium tracking-tight text-fg">{server.displayName}</p>
-          <p className="mt-1 text-xs text-fg-dim">{server.message}</p>
-          <p className="mt-1 font-mono text-2xs text-fg-mute">mcp.{server.slug}.*</p>
-          {server.updatedAt ? (
-            <p className="mt-1 font-mono text-2xs text-fg-mute">
-              updated {new Date(server.updatedAt).toISOString()}
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-3 text-left">
+          <ChevronRight
+            size={14}
+            strokeWidth={2}
+            className={cn(
+              "shrink-0 text-fg-mute transition-transform duration-150",
+              open && "rotate-90",
+            )}
+          />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium tracking-tight text-fg">
+              {server.displayName}
             </p>
-          ) : null}
-        </div>
-        <Badge tone={server.enabled ? "ready" : "muted"} pulse={server.enabled}>
-          {server.state}
-        </Badge>
-      </div>
-
-      <div className="mt-4 grid gap-3">
-        <LabeledInput label="Display name" value={displayName} onChange={setDisplayName} />
-        <LabeledInput label="Server URL" value={serverUrl} onChange={setServerUrl} />
-        <LabeledInput
-          label={`API key ${server.apiKeyConfigured ? "(configured)" : "(optional)"}`}
-          value={apiKey}
-          onChange={setApiKey}
-          placeholder={
-            server.apiKeyConfigured ? "Leave blank to keep existing key" : "Optional API key"
-          }
-          type="password"
-        />
-        {server.apiKeyConfigured ? (
-          <label className="flex items-center gap-2 text-xs text-fg-dim">
-            <input
-              checked={clearApiKey}
-              onChange={(event) => setClearApiKey(event.currentTarget.checked)}
-              type="checkbox"
-            />
-            Clear saved API key on save
-          </label>
-        ) : null}
-      </div>
-
-      <div className="mt-4 rounded-md border border-hairline bg-surface-2 p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-medium text-fg">Tools</p>
-            <p className="mt-1 text-xs text-fg-dim">
-              Select which remote MCP tools Strata exposes as read-only agent tools.
+            <p className="mt-0.5 truncate font-mono text-2xs text-fg-mute">
+              mcp.{server.slug}.* · {selectedCount} {selectedCount === 1 ? "tool" : "tools"}
             </p>
           </div>
-          <Button disabled={isPending} onClick={loadTools} size="sm" variant="ghost">
-            <RefreshCw size={13} strokeWidth={2} />
-            Refresh
-          </Button>
-        </div>
-
-        <div className="mt-3 space-y-2">
-          {knownToolNames.length === 0 ? (
-            <p className="text-xs text-fg-mute">Refresh tools to populate this list.</p>
-          ) : (
-            knownToolNames.map((name) => {
-              const summary = tools?.find((tool) => tool.name === name);
-              return (
-                <label key={name} className="flex items-start gap-2 text-xs text-fg-dim">
-                  <input
-                    checked={selectedTools.includes(name)}
-                    onChange={(event) => {
-                      setSelectedTools((current) =>
-                        event.currentTarget.checked
-                          ? [...new Set([...current, name])]
-                          : current.filter((tool) => tool !== name),
-                      );
-                    }}
-                    type="checkbox"
-                  />
-                  <span>
-                    <span className="font-mono text-fg">{name}</span>
-                    {summary?.description ? <span> — {summary.description}</span> : null}
-                  </span>
-                </label>
-              );
-            })
-          )}
-        </div>
-
-        {toolError ? <p className="mt-3 text-xs text-bad">{toolError}</p> : null}
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-2 text-xs text-fg-dim">
+        </CollapsibleTrigger>
+        <div className="flex shrink-0 items-center gap-3">
+          <Badge tone={server.enabled ? "ready" : "muted"} pulse={server.enabled}>
+            {server.state}
+          </Badge>
           <Switch
             checked={server.enabled}
             disabled={isPending}
             onCheckedChange={(enabled) => save({ enabled })}
+            aria-label={server.enabled ? "Disable server" : "Enable server"}
           />
-          <span>{server.enabled ? "Enabled" : "Disabled"}</span>
-        </label>
-        <div className="flex flex-wrap gap-2">
-          {canDelete ? (
-            <Button disabled={isPending} onClick={remove} size="sm" variant="ghost">
-              <Trash2 size={13} strokeWidth={2} />
-              Remove
-            </Button>
-          ) : null}
-          <Button disabled={isPending} onClick={() => save()} size="sm" variant="secondary">
-            <Save size={13} strokeWidth={2} />
-            Save
-          </Button>
         </div>
       </div>
-    </div>
-  );
-}
 
-function LabeledInput({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  onChange(value: string): void;
-  placeholder?: string;
-  type?: "password" | "text";
-}): React.ReactElement {
-  return (
-    <label className="grid gap-1.5 text-xs text-fg-dim">
-      {label}
-      <input
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        placeholder={placeholder}
-        type={type}
-        className="h-9 rounded-md border border-hairline bg-bg px-3 font-mono text-xs text-fg outline-none focus:border-accent"
-      />
-    </label>
+      <CollapsibleContent>
+        <div className="space-y-4 border-t border-hairline bg-surface-2/40 px-4 py-4">
+          <p className="text-xs text-fg-dim">{server.message}</p>
+
+          <div className="grid gap-3">
+            <TextField label="Display name" value={displayName} onChange={setDisplayName} mono />
+            <TextField label="Server URL" value={serverUrl} onChange={setServerUrl} mono />
+            <TextField
+              label={`API key ${server.apiKeyConfigured ? "(configured)" : "(optional)"}`}
+              value={apiKey}
+              onChange={setApiKey}
+              placeholder={
+                server.apiKeyConfigured ? "Leave blank to keep existing key" : "Optional API key"
+              }
+              type="password"
+              mono
+            />
+            {server.apiKeyConfigured ? (
+              <CheckToggle
+                checked={clearApiKey}
+                label="Clear saved API key on save"
+                onChange={setClearApiKey}
+              />
+            ) : null}
+          </div>
+
+          <SectionCard
+            icon={<Wrench size={13} strokeWidth={1.75} />}
+            title="Tools"
+            description="Select which remote MCP tools Strata exposes as read-only agent tools."
+            actions={
+              <Button disabled={isPending} onClick={loadTools} size="sm" variant="ghost">
+                <RefreshCw size={13} strokeWidth={2} />
+                Refresh
+              </Button>
+            }
+            className="bg-surface"
+          >
+            <div className="space-y-2">
+              {knownToolNames.length === 0 ? (
+                <p className="text-xs text-fg-mute">Refresh tools to populate this list.</p>
+              ) : (
+                knownToolNames.map((name) => {
+                  const summary = tools?.find((tool) => tool.name === name);
+                  return (
+                    <label key={name} className="flex items-start gap-2 text-xs text-fg-dim">
+                      <input
+                        checked={selectedTools.includes(name)}
+                        onChange={(event) => {
+                          setSelectedTools((current) =>
+                            event.currentTarget.checked
+                              ? [...new Set([...current, name])]
+                              : current.filter((tool) => tool !== name),
+                          );
+                        }}
+                        type="checkbox"
+                      />
+                      <span>
+                        <span className="font-mono text-fg">{name}</span>
+                        {summary?.description ? <span> — {summary.description}</span> : null}
+                      </span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+
+            {toolError ? <p className="mt-3 text-xs text-bad">{toolError}</p> : null}
+          </SectionCard>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="font-mono text-2xs text-fg-mute">
+              {server.updatedAt ? `updated ${new Date(server.updatedAt).toISOString()}` : ""}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {canDelete ? (
+                <Button disabled={isPending} onClick={remove} size="sm" variant="ghost">
+                  <Trash2 size={13} strokeWidth={2} />
+                  Remove
+                </Button>
+              ) : null}
+              <Button disabled={isPending} onClick={() => save()} size="sm" variant="secondary">
+                <Save size={13} strokeWidth={2} />
+                Save
+              </Button>
+            </div>
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

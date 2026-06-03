@@ -1,7 +1,7 @@
 import { Terminal } from "@strata/terminal-web";
 import * as React from "react";
 
-export type TerminalStatus = "connecting" | "connected" | "closed" | "error";
+export type TerminalStatus = "connecting" | "connected" | "reconnecting" | "closed" | "error";
 
 interface TerminalSessionResponse {
   id: string;
@@ -14,6 +14,10 @@ interface TerminalFrame {
   event: string;
   data: unknown;
 }
+
+const STREAM_STALE_MS = 45_000;
+const STREAM_RECONNECT_DELAY_MS = 1_000;
+const STREAM_MAX_RECONNECT_DELAY_MS = 10_000;
 
 export interface TerminalSessionController {
   /** Attach to the element that should host the terminal viewport. */
@@ -56,6 +60,7 @@ export function useTerminalSession(initialFontSize: number): TerminalSessionCont
     let sessionId: string | null = null;
     let lastSentSizeKey: string | null = null;
     let latestSize = { cols: 96, rows: 24 };
+    let terminalClosed = false;
 
     const terminal = new Terminal({
       cols: 96,
@@ -150,16 +155,26 @@ export function useTerminalSession(initialFontSize: number): TerminalSessionCont
         fitAndSyncResize();
         setStatus("connected");
         terminal.focus();
-        await streamTerminal(session.id, abort.signal, (frame) => {
-          if (disposed) return;
-          if (frame.event === "stdout" || frame.event === "stderr") {
-            if (typeof frame.data === "string") terminal.write(frame.data);
-            return;
-          }
-          if (frame.event === "closed") {
-            setStatus("closed");
-          }
-        });
+        await streamTerminalWithReconnect(
+          session.id,
+          abort.signal,
+          (frame) => {
+            if (disposed) return;
+            if (frame.event === "stdout" || frame.event === "stderr") {
+              if (typeof frame.data === "string") terminal.write(frame.data);
+              return;
+            }
+            if (frame.event === "closed") {
+              terminalClosed = true;
+              setStatus("closed");
+            }
+          },
+          (state) => {
+            if (disposed || terminalClosed) return;
+            setStatus(state);
+          },
+          () => terminalClosed,
+        );
       } catch (error: unknown) {
         if (disposed || abort.signal.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
@@ -198,6 +213,35 @@ export function useTerminalSession(initialFontSize: number): TerminalSessionCont
   return { containerRef, status, shell, restart, clear, focus, setFontSize };
 }
 
+async function streamTerminalWithReconnect(
+  sessionId: string,
+  signal: AbortSignal,
+  onFrame: (frame: TerminalFrame) => void,
+  onState: (state: "connected" | "reconnecting") => void,
+  shouldStop: () => boolean,
+): Promise<void> {
+  let retryDelay = STREAM_RECONNECT_DELAY_MS;
+  while (!signal.aborted && !shouldStop()) {
+    try {
+      await streamTerminal(sessionId, signal, (frame) => {
+        if (frame.event === "ready") {
+          retryDelay = STREAM_RECONNECT_DELAY_MS;
+          onState("connected");
+        }
+        onFrame(frame);
+      });
+      if (!signal.aborted && !shouldStop()) onState("reconnecting");
+    } catch (error: unknown) {
+      if (signal.aborted || shouldStop()) return;
+      if (isTerminalSessionGone(error)) throw error;
+      onState("reconnecting");
+    }
+    if (signal.aborted || shouldStop()) break;
+    await delay(retryDelay, signal);
+    retryDelay = Math.min(retryDelay * 2, STREAM_MAX_RECONNECT_DELAY_MS);
+  }
+}
+
 async function streamTerminal(
   sessionId: string,
   signal: AbortSignal,
@@ -212,17 +256,48 @@ async function streamTerminal(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (!signal.aborted) {
-    const next = await reader.read();
-    if (next.done) break;
-    buffer += decoder.decode(next.value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-    for (const part of parts) {
-      const frame = parseSseFrame(part);
-      if (frame !== null) onFrame(frame);
+  let staleTimer: ReturnType<typeof setTimeout> | undefined;
+  const resetStaleTimer = () => {
+    if (staleTimer !== undefined) clearTimeout(staleTimer);
+    staleTimer = setTimeout(() => {
+      void reader.cancel(new Error("terminal stream heartbeat timed out"));
+    }, STREAM_STALE_MS);
+  };
+  resetStaleTimer();
+  try {
+    while (!signal.aborted) {
+      const next = await reader.read();
+      if (next.done) break;
+      resetStaleTimer();
+      buffer += decoder.decode(next.value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const frame = parseSseFrame(part);
+        if (frame !== null) onFrame(frame);
+      }
     }
+  } finally {
+    if (staleTimer !== undefined) clearTimeout(staleTimer);
+    reader.releaseLock();
   }
+}
+
+function isTerminalSessionGone(error: unknown): boolean {
+  return error instanceof Error && /stream failed 404/.test(error.message);
+}
+
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timeout = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 function sizeKey(size: { cols: number; rows: number }): string {
