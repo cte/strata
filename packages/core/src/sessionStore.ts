@@ -44,6 +44,7 @@ export class SessionStore {
     this.db.run("PRAGMA foreign_keys = ON");
     this.drizzle = drizzle(this.db, { schema });
     const migrationOutcome = applyEmbeddedMigrations(this.db);
+    ensureWebChatRuntimeStateCompatibility(this.db);
     if (migrationOutcome.applied.includes("0001_cute_earthquake")) {
       this.backfillAssistantUsage();
     }
@@ -632,6 +633,61 @@ function applyEmbeddedMigrations(db: Database): MigrationOutcome {
     throw cause;
   }
   return { applied };
+}
+
+function ensureWebChatRuntimeStateCompatibility(db: Database): void {
+  if (tableExists(db, "web_chat_queued_messages")) {
+    const queuedColumns = tableColumns(db, "web_chat_queued_messages");
+    if (!queuedColumns.has("delivery")) {
+      db.run(
+        "alter table web_chat_queued_messages add column delivery text not null default 'follow-up'",
+      );
+    }
+    if (!queuedColumns.has("position")) {
+      db.run("alter table web_chat_queued_messages add column position integer not null default 0");
+    }
+  }
+
+  if (tableExists(db, "web_chat_runs")) {
+    db.run(`
+      create index if not exists idx_web_chat_runs_status_updated
+      on web_chat_runs(status, updated_at desc)
+    `);
+    db.run("create index if not exists idx_web_chat_runs_session on web_chat_runs(session_id)");
+  }
+  if (tableExists(db, "web_chat_run_events")) {
+    db.run(`
+      create index if not exists idx_web_chat_run_events_run_id
+      on web_chat_run_events(run_id, id)
+    `);
+  }
+  if (tableExists(db, "web_chat_queued_messages")) {
+    db.run(`
+      create index if not exists idx_web_chat_queued_messages_session
+      on web_chat_queued_messages(session_id, position, created_at, id)
+    `);
+    db.run(`
+      create index if not exists idx_web_chat_queued_messages_run
+      on web_chat_queued_messages(run_id, position, created_at, id)
+    `);
+  }
+  if (tableExists(db, "web_chat_queue_changes")) {
+    db.run(`
+      create index if not exists idx_web_chat_queue_changes_id
+      on web_chat_queue_changes(id)
+    `);
+  }
+}
+
+function tableExists(db: Database, name: string): boolean {
+  return (
+    db.query("select name from sqlite_master where type = 'table' and name = ?").get(name) !== null
+  );
+}
+
+function tableColumns(db: Database, tableName: string): Set<string> {
+  const rows = db.query(`pragma table_info(${tableName})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
 }
 
 export async function ensureRuntimeDirs(paths: StrataPaths = getStrataPaths()): Promise<void> {

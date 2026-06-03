@@ -47,9 +47,7 @@ export interface RoutineTriggerStoreOptions {
 }
 
 export class RoutineTriggerStore {
-  private constructor(private readonly store: SessionStore) {
-    ensureTriggerSchema(store.db);
-  }
+  private constructor(private readonly store: SessionStore) {}
 
   static async open(options: RoutineTriggerStoreOptions = {}): Promise<RoutineTriggerStore> {
     const root = getStrataPaths(options.repoRoot).repoRoot;
@@ -460,31 +458,4 @@ function parseJsonObject(text: string): JsonObject {
     return parsed as JsonObject;
   }
   return {};
-}
-
-function ensureTriggerSchema(db: SessionStore["db"]): void {
-  db.run(`
-    create table if not exists routine_triggers (
-      id text primary key not null,
-      routine_id text not null references routines(id) on delete cascade,
-      name text,
-      input_json text not null,
-      trigger_json text not null,
-      enabled integer not null,
-      created_at text not null,
-      updated_at text not null,
-      next_run_at text,
-      last_run_at text,
-      last_session_id text,
-      last_status text,
-      last_error text,
-      locked_at text
-    )
-  `);
-  db.run(
-    "create index if not exists idx_routine_triggers_due on routine_triggers (enabled, next_run_at)",
-  );
-  db.run(
-    "create index if not exists idx_routine_triggers_routine on routine_triggers (routine_id)",
-  );
 }

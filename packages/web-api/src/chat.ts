@@ -109,6 +109,7 @@ type ToolRegistryFactory = (options: {
 export interface CreateChatServiceOptions {
   repoRoot?: string;
   env?: Record<string, string | undefined>;
+  stateStore?: SessionStore;
   createModelAdapter?: ModelAdapterFactory;
   runAgentLoopEvents?: AgentLoopEventsRunner;
   createToolRegistry?: ToolRegistryFactory;
@@ -164,6 +165,7 @@ class DefaultChatService implements ChatService {
   private readonly runAgentLoopEvents: AgentLoopEventsRunner;
   private readonly createToolRegistry: ToolRegistryFactory;
   private readonly createRunId: () => string;
+  private readonly stateStore: SessionStore | undefined;
 
   private readonly runStore: ChatRunStore;
   private readonly runsById = new Map<string, ActiveChatRun>();
@@ -176,8 +178,11 @@ class DefaultChatService implements ChatService {
     this.runAgentLoopEvents = options.runAgentLoopEvents ?? runSharedAgentLoopEvents;
     this.createToolRegistry = options.createToolRegistry ?? createChatToolRegistry;
     this.createRunId = options.createRunId ?? randomUUID;
+    this.stateStore = options.stateStore;
 
-    this.runStore = new ChatRunStore(this.repoRoot);
+    this.runStore = new ChatRunStore(
+      this.stateStore === undefined ? this.repoRoot : { store: this.stateStore },
+    );
     this.runStore.recoverAbandonedRuns();
   }
 
@@ -749,13 +754,15 @@ class DefaultChatService implements ChatService {
   ): Promise<boolean> {
     let store: SessionStore | undefined;
     try {
-      store = await SessionStore.open(this.repoRoot);
+      store = this.stateStore ?? (await SessionStore.open(this.repoRoot));
       await store.appendEvent(sessionId, type, payload);
       return true;
     } catch {
       return false;
     } finally {
-      store?.close();
+      if (this.stateStore === undefined) {
+        store?.close();
+      }
     }
   }
 }

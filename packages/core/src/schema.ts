@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { check, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { JsonValue, MessageRole, SessionStatus, TokenUsage } from "./types.js";
 
 export const sessions = sqliteTable(
@@ -235,6 +235,92 @@ export const classificationCorrections = sqliteTable(
   ],
 );
 
+export const webChatRuns = sqliteTable(
+  "web_chat_runs",
+  {
+    runId: text("run_id").primaryKey(),
+    status: text("status").notNull(),
+    startedAt: text("started_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    endedAt: text("ended_at"),
+    cancelled: integer("cancelled").notNull().default(0),
+    sessionId: text("session_id"),
+    continueSessionId: text("continue_session_id"),
+    stoppedReason: text("stopped_reason"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("idx_web_chat_runs_status_updated").on(table.status, sql`${table.updatedAt} desc`),
+    index("idx_web_chat_runs_session").on(table.sessionId),
+  ],
+);
+
+export const webChatRunEvents = sqliteTable(
+  "web_chat_run_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => webChatRuns.runId, { onDelete: "cascade" }),
+    ts: text("ts").notNull(),
+    type: text("type").notNull(),
+    payloadJson: text("payload_json").notNull(),
+  },
+  (table) => [index("idx_web_chat_run_events_run_id").on(table.runId, table.id)],
+);
+
+export const webChatQueuedMessages = sqliteTable(
+  "web_chat_queued_messages",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id"),
+    runId: text("run_id"),
+    message: text("message").notNull(),
+    attachmentsJson: text("attachments_json").notNull(),
+    delivery: text("delivery").notNull().default("follow-up"),
+    provider: text("provider"),
+    model: text("model"),
+    reasoningEffort: text("reasoning_effort"),
+    createdAt: text("created_at").notNull(),
+    position: integer("position").notNull().default(0),
+  },
+  (table) => [
+    index("idx_web_chat_queued_messages_session").on(
+      table.sessionId,
+      table.position,
+      table.createdAt,
+      table.id,
+    ),
+    index("idx_web_chat_queued_messages_run").on(
+      table.runId,
+      table.position,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "web_chat_queued_messages_target_check",
+      sql`${table.sessionId} is not null or ${table.runId} is not null`,
+    ),
+  ],
+);
+
+export const webChatQueueChanges = sqliteTable(
+  "web_chat_queue_changes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    ts: text("ts").notNull(),
+    sessionId: text("session_id"),
+    runId: text("run_id"),
+  },
+  (table) => [
+    index("idx_web_chat_queue_changes_id").on(table.id),
+    check(
+      "web_chat_queue_changes_target_check",
+      sql`${table.sessionId} is not null or ${table.runId} is not null`,
+    ),
+  ],
+);
+
 export type SessionRow = typeof sessions.$inferSelect;
 export type SessionInsert = typeof sessions.$inferInsert;
 export type EventInsert = typeof events.$inferInsert;
@@ -248,3 +334,7 @@ export type RoutineRunRow = typeof routineRuns.$inferSelect;
 export type RoutineArtifactRow = typeof routineArtifacts.$inferSelect;
 export type ClassificationCorrectionRow = typeof classificationCorrections.$inferSelect;
 export type ClassificationCorrectionInsertRow = typeof classificationCorrections.$inferInsert;
+export type WebChatRunRow = typeof webChatRuns.$inferSelect;
+export type WebChatRunEventRow = typeof webChatRunEvents.$inferSelect;
+export type WebChatQueuedMessageRow = typeof webChatQueuedMessages.$inferSelect;
+export type WebChatQueueChangeRow = typeof webChatQueueChanges.$inferSelect;

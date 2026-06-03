@@ -1,7 +1,7 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { getStrataPaths } from "@strata/core";
+import { getStrataPaths, SessionStore } from "@strata/core";
 import { nowIso } from "@strata/core/events";
 
 export interface QueueChangeRecord {
@@ -22,20 +22,35 @@ export interface QueueChangesSinceResult {
   runIds: string[];
 }
 
+export interface QueueChangeStoreOptions {
+  repoRoot?: string;
+  store?: SessionStore;
+}
+
 export class QueueChangeStore {
+  private readonly store: SessionStore;
+  private readonly ownsStore: boolean;
   private readonly db: Database;
 
-  constructor(repoRoot?: string) {
-    const paths = getStrataPaths(repoRoot);
-    mkdirSync(path.dirname(paths.stateDbPath), { recursive: true });
-    this.db = new Database(paths.stateDbPath, { create: true });
-    this.db.run("PRAGMA busy_timeout = 5000");
-    this.db.run("PRAGMA journal_mode = WAL");
-    this.ensureSchema();
+  constructor(repoRootOrOptions?: string | QueueChangeStoreOptions) {
+    const options =
+      typeof repoRootOrOptions === "string" ? { repoRoot: repoRootOrOptions } : repoRootOrOptions;
+    if (options?.store !== undefined) {
+      this.store = options.store;
+      this.ownsStore = false;
+    } else {
+      const paths = getStrataPaths(options?.repoRoot);
+      mkdirSync(path.dirname(paths.stateDbPath), { recursive: true });
+      this.store = new SessionStore(paths);
+      this.ownsStore = true;
+    }
+    this.db = this.store.db;
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsStore) {
+      this.store.close();
+    }
   }
 
   appendQueueChange(target: QueueChangeTarget): QueueChangeRecord {
@@ -97,21 +112,5 @@ export class QueueChangeStore {
       sessionIds: [...sessionIds],
       runIds: [...runIds],
     };
-  }
-
-  private ensureSchema(): void {
-    this.db.run(`
-      create table if not exists web_chat_queue_changes (
-        id integer primary key autoincrement,
-        ts text not null,
-        session_id text,
-        run_id text,
-        check (session_id is not null or run_id is not null)
-      )
-    `);
-    this.db.run(`
-      create index if not exists idx_web_chat_queue_changes_id
-      on web_chat_queue_changes(id)
-    `);
   }
 }

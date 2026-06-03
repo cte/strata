@@ -1,6 +1,6 @@
 # Refactor Plan 01: Centralize Runtime State and SQLite Schema Ownership
 
-Status: proposed structural refactor.
+Status: implemented in branch `refactor/01-centralize-runtime-state`.
 
 Parent index: [Refactor Plan Index](./index.md)
 
@@ -72,10 +72,10 @@ All persistent SQLite tables in `.strata/state.sqlite` should be declared and mi
 
 ## Acceptance Criteria
 
-- A fresh `SessionStore.open()` applies every durable state migration required by CLI, TUI, web API, jobs, routines, and ingest activity.
-- `ChatRunStore` and `QueueChangeStore` no longer create or alter tables directly.
-- Existing web chat tests still pass, including durable run replay and abandoned-run recovery.
-- `bun run check:workspaces`, `bun test`, and `bun run knip` pass.
+- A fresh `SessionStore.open()` applies every durable state migration required by CLI, TUI, web API, jobs, routines, and ingest activity. ✅
+- `ChatRunStore` and `QueueChangeStore` no longer create or alter tables directly. ✅
+- Existing web chat tests still pass, including durable run replay and abandoned-run recovery. ✅
+- `bun run check:workspaces`, `bun test`, and `bun run knip` pass. ✅
 
 ## Risks
 

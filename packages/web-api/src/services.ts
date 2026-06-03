@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { getStrataPaths } from "@strata/core";
 import { SessionStore } from "@strata/core/session-store";
 import {
   configureGranola,
@@ -101,15 +103,10 @@ export interface WebApiServiceContainer extends WebApiServices {
 }
 
 export function createWebApiServices(options: WebApiOptions = {}): WebApiServiceContainer {
-  const chat = createChatService(options);
-  let sessionStorePromise: Promise<SessionStore> | undefined;
-  const getSessionStore = (): Promise<SessionStore> => {
-    if (sessionStorePromise === undefined) {
-      sessionStorePromise = SessionStore.open(repoRoot(options));
-    }
-    return sessionStorePromise;
-  };
-  const changes = new SessionChangeFeed(getSessionStore, undefined, repoRoot(options));
+  const stateStore = options.stateStore ?? openWebApiStateStore(options);
+  const chat = createChatService({ ...options, stateStore });
+  const getSessionStore = (): Promise<SessionStore> => Promise.resolve(stateStore);
+  const changes = new SessionChangeFeed(getSessionStore, undefined, undefined, stateStore);
   return {
     chat,
     changes,
@@ -221,6 +218,18 @@ export function createWebApiServices(options: WebApiOptions = {}): WebApiService
     configureGranola: (input: GranolaConfigureRpcInput) => configureGranola(input, options),
     disconnectGranola: () => disconnectGranola(options),
   };
+}
+
+function openWebApiStateStore(options: WebApiOptions): SessionStore {
+  const paths = getStrataPaths(repoRoot(options));
+  mkdirSync(paths.runtimeDir, { recursive: true });
+  mkdirSync(paths.traceDir, { recursive: true });
+  mkdirSync(paths.reflectionsDir, { recursive: true });
+  mkdirSync(paths.curatorReportsDir, { recursive: true });
+  mkdirSync(paths.memoryDir, { recursive: true });
+  mkdirSync(paths.skillsDir, { recursive: true });
+  mkdirSync(paths.proposalsDir, { recursive: true });
+  return new SessionStore(paths);
 }
 
 function queueTarget(input: ChatQueueTargetInput): { sessionId?: string; runId?: string } {

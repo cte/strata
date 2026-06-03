@@ -1,5 +1,6 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionStore } from "../sessionStore.js";
@@ -15,6 +16,85 @@ async function withTempStore<T>(fn: (store: SessionStore) => Promise<T>): Promis
     await rm(repoRoot, { recursive: true, force: true });
   }
 }
+
+function tableNames(store: SessionStore): string[] {
+  return store.db
+    .query<{ name: string }, []>("select name from sqlite_master where type = 'table'")
+    .all()
+    .map((row) => row.name)
+    .sort();
+}
+
+function indexNames(store: SessionStore): string[] {
+  return store.db
+    .query<{ name: string }, []>("select name from sqlite_master where type = 'index'")
+    .all()
+    .map((row) => row.name)
+    .sort();
+}
+
+function tableColumns(store: SessionStore, tableName: string): string[] {
+  return (store.db.query(`pragma table_info(${tableName})`).all() as Array<{ name: string }>).map(
+    (row) => row.name,
+  );
+}
+
+describe("SessionStore migrations", () => {
+  test("core migrations create web chat durable state tables", async () => {
+    await withTempStore(async (store) => {
+      const tables = tableNames(store);
+      expect(tables).toContain("web_chat_runs");
+      expect(tables).toContain("web_chat_run_events");
+      expect(tables).toContain("web_chat_queued_messages");
+      expect(tables).toContain("web_chat_queue_changes");
+      expect(indexNames(store)).toEqual(
+        expect.arrayContaining([
+          "idx_web_chat_runs_status_updated",
+          "idx_web_chat_runs_session",
+          "idx_web_chat_run_events_run_id",
+          "idx_web_chat_queued_messages_session",
+          "idx_web_chat_queued_messages_run",
+          "idx_web_chat_queue_changes_id",
+        ]),
+      );
+    });
+  });
+
+  test("web chat migration upgrades pre-core queued message tables", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-session-store-"));
+    const runtimeDir = path.join(repoRoot, ".strata");
+    await mkdir(runtimeDir, { recursive: true });
+    const db = new Database(path.join(runtimeDir, "state.sqlite"), { create: true });
+    try {
+      db.run(`
+        create table web_chat_queued_messages (
+          id text primary key,
+          session_id text,
+          run_id text,
+          message text not null,
+          attachments_json text not null,
+          provider text,
+          model text,
+          reasoning_effort text,
+          created_at text not null,
+          check (session_id is not null or run_id is not null)
+        )
+      `);
+    } finally {
+      db.close();
+    }
+
+    const store = await SessionStore.open(repoRoot);
+    try {
+      const columns = tableColumns(store, "web_chat_queued_messages");
+      expect(columns).toContain("delivery");
+      expect(columns).toContain("position");
+    } finally {
+      store.close();
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("SessionStore.appendMessage with usage", () => {
   test("persists per-turn usage on assistant messages and surfaces it on read", async () => {

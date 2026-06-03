@@ -40,8 +40,9 @@ export class SessionChangeFeed {
     private readonly getStore: () => Promise<SessionStore>,
     private readonly pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
     repoRoot?: string,
+    store?: SessionStore,
   ) {
-    this.queueChanges = new QueueChangeStore(repoRoot);
+    this.queueChanges = new QueueChangeStore(store === undefined ? repoRoot : { store });
   }
 
   subscribe(): AsyncIterable<SessionChangeNotice> {

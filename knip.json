@@ -55,7 +55,7 @@
       "project": ["src/**/*.{ts,tsx}"]
     }
   },
-  "ignoreDependencies": ["@typescript/native-preview", "tailwindcss", "tw-animate-css"],
+  "ignoreDependencies": ["@typescript/native-preview", "lint-staged", "tailwindcss", "tw-animate-css"],
   "treatConfigHintsAsErrors": true,
   "ignoreExportsUsedInFile": true,
   "ignoreIssues": {

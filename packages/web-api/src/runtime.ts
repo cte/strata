@@ -1,4 +1,4 @@
-import { getStrataPaths } from "@strata/core";
+import { getStrataPaths, type SessionStore } from "@strata/core";
 import type { CreateChatServiceOptions } from "./chat.js";
 
 /**
@@ -11,6 +11,7 @@ export interface WebApiOptions extends CreateChatServiceOptions {
   fetchImpl?: typeof fetch;
   now?: Date;
   chatStreamHeartbeatMs?: number;
+  stateStore?: SessionStore;
 }
 
 export function repoRoot(options: WebApiOptions): string {

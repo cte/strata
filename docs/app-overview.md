@@ -31,7 +31,7 @@ The CLI, TUI, and web chat should be presentation layers over the same agent run
 
 Core packages:
 
-- `packages/core`: paths, runtime directories, SQLite-backed `SessionStore`, memory/proposal/skill/todo stores, AGENTS.md instruction loading, and shared JSON/session types.
+- `packages/core`: paths, runtime directories, SQLite-backed `SessionStore`, embedded state migrations/schema (including durable web chat run/event/queue tables), memory/proposal/skill/todo stores, AGENTS.md instruction loading, and shared JSON/session types.
 - `packages/agent`: model adapters, ChatGPT/OpenAI Codex auth, OpenAI-compatible adapter, `runAgentLoopEvents()`, run-context injection, compaction, reflection, and maintenance jobs.
 - `packages/tools`: `ToolRegistry`, tool policy/profile handling, wiki tools, filesystem tools, shell tool, memory/todo/session/skill tools, and the planned native `user.ask` human-interaction tool (see [interactive-agent-ui-plan.md](./interactive-agent-ui-plan.md)).
 - `packages/jobs`: `JobRegistry`, `runJob()`, `RoutineTriggerStore`, and the scheduler loop. Registered jobs currently wrap connector pulls, raw-to-wiki indexing, wiki retrieval-index refresh, maintenance jobs, the safe `wiki.hygiene` proposal-plus-index job, and `routine.run` as the trigger/execution wrapper for Routines.
@@ -49,7 +49,7 @@ The loop also owns Pi-style mid-run steering. Interactive surfaces may supply `g
 
 ## Runtime State
 
-- `.strata/` contains local runtime state: SQLite DB, traces, auth, memory, Strata-owned skills, proposals, connector checkpoints, Routine triggers, and reports.
+- `.strata/` contains local runtime state: SQLite DB, traces, auth, memory, Strata-owned skills, proposals, connector checkpoints, Routine triggers, durable web chat run/event/queue state, and reports. Durable `.strata/state.sqlite` schema belongs in `@strata/core` migrations; feature packages should not create or alter state DB tables directly.
 - `.strata/ingest/taxonomy.json` is the local raw-to-wiki taxonomy: canonical project aliases, self-name ownership hints, and source-specific materiality/ignore patterns. It is intentionally local runtime state rather than product code.
 - `AGENTS.md` and `.agents/skills/**/SKILL.md` are read as project agent guidance. `.agents/skills` is a compatibility skill source; `.strata/skills` remains Strata's own procedural-memory store.
 - `.env` may contain dotenvx-encrypted secrets; runtime scripts that need secrets already wrap dotenvx.

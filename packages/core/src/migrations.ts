@@ -17,6 +17,7 @@ import migration0003 from "../drizzle/0003_ingest_activity_projection.sql" with 
 import migration0004 from "../drizzle/0004_routines.sql" with { type: "text" };
 import migration0005 from "../drizzle/0005_minor_katie_power.sql" with { type: "text" };
 import migration0006 from "../drizzle/0006_routine_triggers.sql" with { type: "text" };
+import migration0007 from "../drizzle/0007_web_chat_state.sql" with { type: "text" };
 import journal from "../drizzle/meta/_journal.json" with { type: "json" };
 
 const SOURCES: Record<string, string> = {
@@ -27,6 +28,7 @@ const SOURCES: Record<string, string> = {
   "0004_routines": migration0004,
   "0005_minor_katie_power": migration0005,
   "0006_routine_triggers": migration0006,
+  "0007_web_chat_state": migration0007,
 };
 
 export interface EmbeddedMigration {

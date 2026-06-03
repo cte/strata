@@ -1,7 +1,13 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { getStrataPaths, type JsonObject, type JsonValue, type StrataPaths } from "@strata/core";
+import {
+  getStrataPaths,
+  type JsonObject,
+  type JsonValue,
+  SessionStore,
+  type StrataPaths,
+} from "@strata/core";
 import { nowIso, safeJsonStringify } from "@strata/core/events";
 import { QueueChangeStore, type QueueChangeTarget } from "./queueChangeStore.js";
 
@@ -69,24 +75,40 @@ export interface FinishChatRunInput {
   cancelled?: boolean;
 }
 
+export interface ChatRunStoreOptions {
+  repoRoot?: string;
+  store?: SessionStore;
+}
+
 export class ChatRunStore {
   private readonly paths: StrataPaths;
+  private readonly store: SessionStore;
+  private readonly ownsStore: boolean;
   private readonly db: Database;
   private readonly queueChanges: QueueChangeStore;
 
-  constructor(repoRoot?: string) {
-    this.paths = getStrataPaths(repoRoot);
-    mkdirSync(path.dirname(this.paths.stateDbPath), { recursive: true });
-    this.db = new Database(this.paths.stateDbPath, { create: true });
-    this.db.run("PRAGMA journal_mode = WAL");
-    this.db.run("PRAGMA foreign_keys = ON");
-    this.queueChanges = new QueueChangeStore(repoRoot);
-    this.ensureSchema();
+  constructor(repoRootOrOptions?: string | ChatRunStoreOptions) {
+    const options =
+      typeof repoRootOrOptions === "string" ? { repoRoot: repoRootOrOptions } : repoRootOrOptions;
+    if (options?.store !== undefined) {
+      this.store = options.store;
+      this.ownsStore = false;
+      this.paths = options.store.paths;
+    } else {
+      this.paths = getStrataPaths(options?.repoRoot);
+      mkdirSync(path.dirname(this.paths.stateDbPath), { recursive: true });
+      this.store = new SessionStore(this.paths);
+      this.ownsStore = true;
+    }
+    this.db = this.store.db;
+    this.queueChanges = new QueueChangeStore({ store: this.store });
   }
 
   close(): void {
     this.queueChanges.close();
-    this.db.close();
+    if (this.ownsStore) {
+      this.store.close();
+    }
   }
 
   createRun(input: CreateChatRunRecordInput): ChatRunRecord {
@@ -496,88 +518,6 @@ export class ChatRunStore {
       return queryMax("session_id = ?", target.sessionId);
     }
     return queryMax("run_id = ?", target.runId as string);
-  }
-
-  private ensureQueuedMessageColumns(): void {
-    const columns = this.tableColumns("web_chat_queued_messages");
-    if (!columns.has("delivery")) {
-      this.db.run(
-        "alter table web_chat_queued_messages add column delivery text not null default 'follow-up'",
-      );
-    }
-    if (!columns.has("position")) {
-      this.db.run(
-        "alter table web_chat_queued_messages add column position integer not null default 0",
-      );
-    }
-  }
-
-  private tableColumns(tableName: string): Set<string> {
-    const rows = this.db.query(`pragma table_info(${tableName})`).all() as Array<{ name: string }>;
-    return new Set(rows.map((row) => row.name));
-  }
-
-  private ensureSchema(): void {
-    this.db.run(`
-      create table if not exists web_chat_runs (
-        run_id text primary key,
-        status text not null,
-        started_at text not null,
-        updated_at text not null,
-        ended_at text,
-        cancelled integer not null default 0,
-        session_id text,
-        continue_session_id text,
-        stopped_reason text,
-        error_message text
-      )
-    `);
-    this.db.run(`
-      create index if not exists idx_web_chat_runs_status_updated
-      on web_chat_runs(status, updated_at desc)
-    `);
-    this.db.run(`
-      create index if not exists idx_web_chat_runs_session
-      on web_chat_runs(session_id)
-    `);
-    this.db.run(`
-      create table if not exists web_chat_run_events (
-        id integer primary key autoincrement,
-        run_id text not null references web_chat_runs(run_id) on delete cascade,
-        ts text not null,
-        type text not null,
-        payload_json text not null
-      )
-    `);
-    this.db.run(`
-      create index if not exists idx_web_chat_run_events_run_id
-      on web_chat_run_events(run_id, id)
-    `);
-    this.db.run(`
-      create table if not exists web_chat_queued_messages (
-        id text primary key,
-        session_id text,
-        run_id text,
-        message text not null,
-        attachments_json text not null,
-        delivery text not null default 'follow-up',
-        provider text,
-        model text,
-        reasoning_effort text,
-        created_at text not null,
-        position integer not null default 0,
-        check (session_id is not null or run_id is not null)
-      )
-    `);
-    this.ensureQueuedMessageColumns();
-    this.db.run(`
-      create index if not exists idx_web_chat_queued_messages_session
-      on web_chat_queued_messages(session_id, position, created_at, id)
-    `);
-    this.db.run(`
-      create index if not exists idx_web_chat_queued_messages_run
-      on web_chat_queued_messages(run_id, position, created_at, id)
-    `);
   }
 
   private failAbandonedSession(sessionId: string, message: string): void {
