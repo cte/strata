@@ -77,6 +77,14 @@ export class WebAuthController {
       return true;
     }
 
+    // Local-first trust: the passcode only guards the app when it is served
+    // externally (through the exe.dev public proxy at https://<vm>.exe.xyz/).
+    // A request that reaches us directly over loopback with no proxy-forwarding
+    // headers never left this machine, so it is trusted without a passcode.
+    if (isLocalRequest(request)) {
+      return true;
+    }
+
     const bearer = bearerToken(request.headers.get("authorization"));
     if (bearer !== null && secureEqual(bearer, this.passcode)) {
       return true;
@@ -145,6 +153,57 @@ export class WebAuthController {
 export function isWebAuthDisabled(env: Record<string, string | undefined>): boolean {
   const value = env[WEB_AUTH_DISABLE_ENV]?.trim().toLowerCase();
   return value === "off" || value === "false" || value === "0" || value === "disabled";
+}
+
+/**
+ * True when a request originated on this machine and did not traverse a reverse
+ * proxy. Used to skip the unlock passcode for direct localhost access while
+ * still requiring it for anything served externally.
+ *
+ * The decision fails closed: any `X-Forwarded-*`/`Forwarded` header (added by
+ * the exe.dev public proxy for external traffic, and preserved by the Vite dev
+ * proxy) marks the request as remote, and the `Host` must resolve to a loopback
+ * hostname. A request with no `Host` header (e.g. a bare programmatic
+ * `new Request(url)`) is treated as remote.
+ */
+export function isLocalRequest(request: Request): boolean {
+  const headers = request.headers;
+  if (
+    headers.get("x-forwarded-for") !== null ||
+    headers.get("x-forwarded-host") !== null ||
+    headers.get("x-forwarded-proto") !== null ||
+    headers.get("forwarded") !== null
+  ) {
+    return false;
+  }
+  const host = headers.get("host");
+  if (host === null) {
+    return false;
+  }
+  const hostname = hostnameFromHostHeader(host);
+  return hostname !== null && isLoopbackHostname(hostname);
+}
+
+function hostnameFromHostHeader(host: string): string | null {
+  const trimmed = host.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  try {
+    return new URL(`http://${trimmed}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname === "::1"
+  );
 }
 
 export function isWebAuthExemptPath(pathname: string, method: string): boolean {

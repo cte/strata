@@ -25,6 +25,7 @@ import {
   type ChatSubmitInput,
   clientId,
   errorMessage,
+  markPendingMessagesCancelled,
   markPendingMessagesComplete,
   markPendingMessagesErrored,
   messagesToTranscript,
@@ -777,7 +778,7 @@ class ChatRunsStore {
         if (event.result.status !== "completed") {
           this.updateTranscript(
             key,
-            message === null ? markPendingMessagesComplete : markPendingMessagesErrored,
+            message === null ? markPendingMessagesCancelled : markPendingMessagesErrored,
           );
         }
         break;
@@ -863,7 +864,7 @@ class ChatRunsStore {
         refs.replacingRun = false;
       }
       this.update(key, { runState: "idle", activeRunId: null, activeRunStartedAt: null });
-      this.updateTranscript(key, markPendingMessagesComplete);
+      this.updateTranscript(key, markPendingMessagesCancelled);
       this.refreshSessions();
     };
 

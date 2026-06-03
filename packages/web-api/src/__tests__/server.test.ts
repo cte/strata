@@ -114,6 +114,70 @@ describe("web api", () => {
     }
   });
 
+  test("trusts direct loopback requests without a passcode", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-auth-"));
+    try {
+      const handler = createWebApiHandler({ repoRoot, env: { STRATA_PASSCODE: "4271" } });
+
+      // A direct loopback request (a localhost browser, no reverse proxy) is
+      // served without unlocking.
+      const local = await handler(
+        new Request("http://localhost:5173/api/connectors", {
+          headers: { host: "localhost:5173" },
+        }),
+      );
+      expect(local.status).toBe(200);
+
+      // The gate status reflects the bypass so the lock screen never renders.
+      const status = await handler(
+        new Request("http://localhost:5173/api/auth/status", {
+          headers: { host: "localhost:5173" },
+        }),
+      );
+      expect(status.status).toBe(200);
+      await expect(status.json()).resolves.toMatchObject({
+        enabled: true,
+        authenticated: true,
+        source: "env",
+      });
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("still requires a passcode for proxied external requests", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-auth-"));
+    try {
+      const handler = createWebApiHandler({ repoRoot, env: { STRATA_PASSCODE: "4271" } });
+
+      // The exe.dev public proxy forwards external traffic with X-Forwarded-*
+      // headers; even though the upstream host is loopback, the request did not
+      // originate locally and must be unlocked.
+      const proxied = await handler(
+        new Request("http://127.0.0.1/api/connectors", {
+          headers: {
+            host: "vivid-bear.exe.xyz",
+            "x-forwarded-for": "203.0.113.7",
+            "x-forwarded-host": "vivid-bear.exe.xyz",
+            "x-forwarded-proto": "https",
+          },
+        }),
+      );
+      expect(proxied.status).toBe(401);
+
+      // A loopback Host that is nonetheless proxied (forwarding header present)
+      // is also treated as remote — the header wins, fail closed.
+      const proxiedLoopbackHost = await handler(
+        new Request("http://127.0.0.1/api/connectors", {
+          headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" },
+        }),
+      );
+      expect(proxiedLoopbackHost.status).toBe(401);
+    } finally {
+      await rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   test("resizes terminal sessions over HTTP", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "strata-web-api-"));
     const handler = createWebApiHandler({

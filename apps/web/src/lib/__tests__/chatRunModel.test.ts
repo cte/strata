@@ -10,6 +10,7 @@ import {
   type ChatMessageView,
   finalizeAssistantResponse,
   friendlyChatError,
+  markPendingMessagesCancelled,
   messagesToTranscript,
   type TranscriptUpdate,
   transcriptUpdateForStreamEvent,
@@ -78,6 +79,46 @@ describe("streaming transcript updates", () => {
     assert.equal(confirmed[0]?.id, "pending-user-queued-1");
     assert.equal(confirmed[0]?.status, "complete");
     assert.equal(confirmed[0]?.pendingKind, undefined);
+  });
+
+  test("marks unconfirmed pending steering messages cancelled without failing confirmed turns", () => {
+    const pending = appendPendingUserMessageFromEvent(
+      [
+        {
+          id: "assistant-streaming",
+          role: "assistant",
+          content: "working",
+          status: "streaming",
+          toolCalls: [],
+        },
+        {
+          id: "user-confirmed",
+          role: "user",
+          content: "already accepted",
+          status: "complete",
+          toolCalls: [],
+          clientMessageId: "queued-confirmed",
+        },
+      ],
+      {
+        type: "message.user.pending",
+        content: "not accepted yet",
+        clientMessageId: "queued-pending",
+      },
+    );
+
+    const cancelled = markPendingMessagesCancelled(pending);
+
+    assert.equal(
+      cancelled.find((message) => message.id === "assistant-streaming")?.status,
+      "complete",
+    );
+    assert.equal(cancelled.find((message) => message.id === "user-confirmed")?.status, "complete");
+    const pendingMessage = cancelled.find(
+      (message) => message.clientMessageId === "queued-pending",
+    );
+    assert.equal(pendingMessage?.status, "error");
+    assert.equal(pendingMessage?.pendingKind, "steering");
   });
 
   test("dedupes the optimistic first submitted user message", () => {

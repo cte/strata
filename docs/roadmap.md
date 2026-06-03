@@ -245,6 +245,7 @@ Scheduled maintenance should be treated as a first-class product feature. The po
 - [ingest-activity-log-plan.md](./ingest-activity-log-plan.md): trace-backed activity log for source ingestion and raw-to-wiki organization.
 - [tool-packs-mcp-plan.md](./tool-packs-mcp-plan.md): external third-party tool-pack architecture and Notion MCP agent-tool plan.
 - [extensions-plan.md](./extensions-plan.md): Pi-style trusted local extension runtime for tools, commands, hooks, providers, UI affordances, and subagent-style workflows.
+- [refactors/index.md](./refactors/index.md): ambitious maintainability refactor index for runtime state, agent loop, web chat, raw-to-wiki, proposals, CLI/tRPC, tools, web features, typed JSON boundaries, and architecture gates.
 - [slack-connector.md](./slack-connector.md): Slack backfill, checkpointing, Socket Mode, and app setup notes.
 
 When the plans conflict, update this document first, then reconcile the lower-level plan.

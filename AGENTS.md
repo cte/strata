@@ -66,7 +66,7 @@ This repo uses a single-context domain-doc layout. See `docs/agents/domain.md`.
 
 ## Environment
 
-This repo runs in an exe.dev VM. Only use documented exe.dev features. The exe.dev HTTPS proxy is documented at <https://exe.dev/docs/proxy.md>, and the general docs are at <https://exe.dev/docs.md>. Undocumented local endpoints are internal infrastructure and should not be used.
+This repo runs in an exe.dev VM. Only use documented exe.dev features. The full set of docs can be reached from the <https://exe.dev/llms.txt> entrypoint. The exe.dev HTTPS proxy is documented at <https://exe.dev/docs/proxy.md>, and the general docs are at <https://exe.dev/docs.md>. Undocumented local endpoints are internal infrastructure and should not be used.
 
 ## Toolchain
 
