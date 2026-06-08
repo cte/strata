@@ -24,6 +24,7 @@ import {
   BookOpen,
   Brain,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
@@ -1723,25 +1724,26 @@ function ChatPinnedTabButton({
       )}
       {editing || isPlaceholder ? null : (
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label={`${title} options`}
-              title="Tab options"
-              disabled={saving}
-              onPointerDown={(event) => event.stopPropagation()}
-              className={cn(
-                CHAT_TAB_ACTION_BUTTON_CLASS,
-                menuOpen ? "opacity-100" : CHAT_TAB_ACTION_REVEAL_CLASS,
-              )}
-            >
-              <MoreHorizontal size={12} strokeWidth={1.75} />
-            </button>
-          </DropdownMenuTrigger>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label={`${title} options`}
+                title="Tab options"
+                disabled={saving}
+                onPointerDown={(event) => event.stopPropagation()}
+                className={cn(
+                  CHAT_TAB_ACTION_BUTTON_CLASS,
+                  menuOpen ? "opacity-100" : CHAT_TAB_ACTION_REVEAL_CLASS,
+                )}
+              >
+                <MoreHorizontal size={12} strokeWidth={1.75} />
+              </button>
+            }
+          />
           <DropdownMenuContent align="end" className="w-40 border-hairline bg-bg-elev text-fg">
             <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
+              onClick={() => {
                 setMenuOpen(false);
                 startRename();
               }}
@@ -1753,12 +1755,11 @@ function ChatPinnedTabButton({
             {onDelete === undefined ? null : (
               <DropdownMenuItem
                 disabled={!canDelete}
-                onSelect={(event) => {
-                  event.preventDefault();
+                onClick={() => {
                   setMenuOpen(false);
                   setConfirmOpen(true);
                 }}
-                className="gap-2 text-xs text-bad focus:bg-bad/10 focus:text-bad"
+                className="gap-2 text-xs text-bad data-highlighted:bg-bad/10 data-highlighted:text-bad"
               >
                 <Trash2 size={13} strokeWidth={1.75} />
                 Delete
@@ -1826,15 +1827,18 @@ function ChatTabPromptHoverCard({
   children,
 }: {
   prompt: string | null;
-  children: React.ReactNode;
+  // A single element so the Base UI hover-card trigger can merge onto it
+  // (asChild-equivalent) without adding an unconstrained wrapper that would
+  // defeat the tab's `truncate`/`min-w-0` layout.
+  children: React.ReactElement;
 }): React.ReactElement {
   const preview = prompt === null ? "" : truncatePromptPreview(prompt);
   if (preview === "") {
-    return <>{children}</>;
+    return children;
   }
   return (
-    <HoverCard openDelay={400} closeDelay={120}>
-      <HoverCardTrigger asChild>{children}</HoverCardTrigger>
+    <HoverCard>
+      <HoverCardTrigger render={children} />
       <HoverCardContent align="start" side="bottom" className="w-80 max-w-[min(24rem,90vw)] p-3">
         <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-fg-dim">
           {preview}
@@ -2195,11 +2199,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
           </div>
         ) : null}
         {message.toolCalls.length === 0 ? null : (
-          <div className="mt-2 flex w-full flex-col gap-2">
-            {message.toolCalls.map((tool) => (
-              <ToolPanel key={tool.id} tool={tool} sessionId={sessionId} />
-            ))}
-          </div>
+          <ToolGroup toolCalls={message.toolCalls} sessionId={sessionId} />
         )}
         {showActions ? (
           <MessageActions>
@@ -2217,23 +2217,25 @@ const TranscriptMessage = memo(function TranscriptMessage({
 function CompactionSummary({ content }: { content: string }): React.ReactElement {
   return (
     <Collapsible className="flex w-full flex-col gap-2" defaultOpen={false}>
-      <CollapsibleTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="group h-7 justify-start rounded-md px-1.5 text-fg-mute hover:text-fg-dim"
-        >
-          <ChevronRight
-            aria-hidden="true"
-            size={13}
-            strokeWidth={1.75}
-            className="transition-transform group-data-[state=open]:rotate-90"
+      <CollapsibleTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="group h-7 justify-start rounded-md px-1.5 text-fg-mute hover:text-fg-dim"
           />
-          <span className="label-status">Compaction summary</span>
-        </Button>
+        }
+      >
+        <ChevronRight
+          aria-hidden="true"
+          size={13}
+          strokeWidth={1.75}
+          className="transition-transform group-data-panel-open:rotate-90"
+        />
+        <span className="label-status">Compaction summary</span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="pl-7 text-fg data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1 data-[state=open]:slide-in-from-top-1 data-[state=closed]:animate-out data-[state=open]:animate-in">
+      <CollapsibleContent className="pl-7 text-fg data-ending-style:fade-out-0 data-ending-style:slide-out-to-top-1 data-starting-style:slide-in-from-top-1 data-closed:animate-out data-open:animate-in">
         <MessageResponse>{content}</MessageResponse>
       </CollapsibleContent>
     </Collapsible>
@@ -2282,6 +2284,145 @@ function CopyMessageAction({ text }: { text: string }): React.ReactElement {
         <Copy size={13} strokeWidth={1.75} />
       )}
     </MessageAction>
+  );
+}
+
+type ToolGroupStatus = "running" | "complete" | "error";
+
+function aggregateToolStatus(toolCalls: ChatToolCallView[]): ToolGroupStatus {
+  if (toolCalls.some((tool) => tool.status === "running")) {
+    return "running";
+  }
+  if (toolCalls.some((tool) => tool.status === "error")) {
+    return "error";
+  }
+  return "complete";
+}
+
+/** Collapse a tool name into a short, human verb for the grouped summary. */
+function toolVerb(name: string): string {
+  if (name === "shell.run") return "run";
+  if (name === "wiki.search" || name === "fs.grep" || name === "sessions.search") return "search";
+  if (name === "fs.edit" || name === "wiki.patchPage" || name === "fs.write") return "edit";
+  if (name === "fs.read" || name === "wiki.readPage") return "read";
+  if (name === "fs.list" || name === "fs.find") return "list";
+  if (name.startsWith("memory.")) return "memory";
+  if (name.startsWith("todo.")) return "todo";
+  if (name.startsWith("skills.")) return "skills";
+  if (name.startsWith("wiki.")) return "wiki";
+  return name;
+}
+
+/** Build an ordered, de-duplicated "read ×3 · search · edit ×2" breakdown. */
+function toolGroupBreakdown(toolCalls: ChatToolCallView[]): string {
+  const order: string[] = [];
+  const counts = new Map<string, number>();
+  for (const tool of toolCalls) {
+    const verb = toolVerb(tool.name);
+    if (!counts.has(verb)) {
+      order.push(verb);
+    }
+    counts.set(verb, (counts.get(verb) ?? 0) + 1);
+  }
+  return order
+    .map((verb) => {
+      const count = counts.get(verb) ?? 0;
+      return count > 1 ? `${verb} ×${count}` : verb;
+    })
+    .join(" · ");
+}
+
+/**
+ * Groups a turn's tool calls behind a single collapsible summary row so the
+ * transcript stays quiet. A lone tool call renders inline as before. While any
+ * tool in the turn is still running the group auto-expands for live feedback,
+ * then auto-collapses once the turn settles — unless the user toggles it.
+ */
+function ToolGroup({
+  toolCalls,
+  sessionId,
+}: {
+  toolCalls: ChatToolCallView[];
+  sessionId: string | null;
+}): React.ReactElement {
+  const anyRunning = toolCalls.some((tool) => tool.status === "running");
+  const [userInteracted, setUserInteracted] = useState(false);
+  const [open, setOpen] = useState(anyRunning);
+
+  useEffect(() => {
+    if (!userInteracted) {
+      setOpen(anyRunning);
+    }
+  }, [anyRunning, userInteracted]);
+
+  const handleToggle = useCallback(() => {
+    setUserInteracted(true);
+    setOpen((prev) => !prev);
+  }, []);
+
+  if (toolCalls.length <= 1) {
+    return (
+      <div className="mt-2 flex w-full flex-col gap-2">
+        {toolCalls.map((tool) => (
+          <ToolPanel key={tool.id} tool={tool} sessionId={sessionId} />
+        ))}
+      </div>
+    );
+  }
+
+  const status = aggregateToolStatus(toolCalls);
+  const runningCount = toolCalls.filter((tool) => tool.status === "running").length;
+  const errorCount = toolCalls.filter((tool) => tool.status === "error").length;
+  const statusLabel =
+    status === "running"
+      ? `running · ${runningCount} of ${toolCalls.length}`
+      : status === "error"
+        ? `${errorCount} failed`
+        : "complete";
+
+  return (
+    <div className="mt-2 flex w-full flex-col">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={open}
+        className={cn(
+          "flex w-full cursor-pointer items-center gap-2 border border-hairline bg-bg px-3 py-2 text-fg-dim transition-colors hover:bg-surface-2",
+          status === "running" && "border-warn/35",
+          open && "border-b-0",
+        )}
+      >
+        <Wrench size={13} strokeWidth={1.75} className="shrink-0 text-accent" />
+        <span className="shrink-0 whitespace-nowrap font-mono text-xs text-fg">
+          {toolCalls.length} tools
+        </span>
+        <span className="hidden min-w-0 truncate text-xs text-fg-mute sm:inline">
+          {toolGroupBreakdown(toolCalls)}
+        </span>
+        <span
+          className={cn(
+            "label-eyebrow ml-auto",
+            status === "running" && "!text-warn",
+            status === "complete" && "!text-good",
+            status === "error" && "!text-bad",
+          )}
+        >
+          {statusLabel}
+        </span>
+        <ChevronDown
+          size={13}
+          strokeWidth={1.75}
+          className={cn("shrink-0 transition-transform duration-150", open && "rotate-180")}
+        />
+      </button>
+      {open ? (
+        <div className="flex w-full flex-col gap-2 border border-hairline border-t-0 p-2">
+          {toolCalls.map((tool) => (
+            <ToolPanel key={tool.id} tool={tool} sessionId={sessionId} />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

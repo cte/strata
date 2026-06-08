@@ -27,9 +27,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   render: () => (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline">Actions</Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger render={<Button variant="outline">Actions</Button>} />
       <DropdownMenuContent className="w-56">
         <DropdownMenuLabel>Routine</DropdownMenuLabel>
         <DropdownMenuItem>
@@ -51,7 +49,7 @@ export const Default: Story = {
           Settings
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="text-bad focus:text-bad">
+        <DropdownMenuItem className="text-bad data-highlighted:text-bad">
           <Trash2 />
           Delete
           <DropdownMenuShortcut>⌫</DropdownMenuShortcut>
@@ -65,9 +63,7 @@ export const Default: Story = {
 export const Open: Story = {
   render: () => (
     <DropdownMenu defaultOpen>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline">Actions</Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger render={<Button variant="outline">Actions</Button>} />
       <DropdownMenuContent className="w-56">
         <DropdownMenuLabel>Routine</DropdownMenuLabel>
         <DropdownMenuItem>
@@ -79,7 +75,7 @@ export const Open: Story = {
           Duplicate
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="text-bad focus:text-bad">
+        <DropdownMenuItem className="text-bad data-highlighted:text-bad">
           <Trash2 />
           Delete
         </DropdownMenuItem>

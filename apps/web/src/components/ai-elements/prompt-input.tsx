@@ -390,19 +390,15 @@ export const PromptInputActionAddAttachments = ({
 }: PromptInputActionAddAttachmentsProps) => {
   const attachments = usePromptInputAttachments();
 
-  const handleSelect = useCallback(
-    (e: Event) => {
-      e.preventDefault();
-      attachments.openFileDialog();
-    },
-    [attachments],
-  );
+  const handleClick = useCallback(() => {
+    attachments.openFileDialog();
+  }, [attachments]);
 
   return (
     <DropdownMenuItem
       className={cn("text-sm [&>svg]:!size-3.5", className)}
       {...props}
-      onSelect={handleSelect}
+      onClick={handleClick}
     >
       <ImageIcon className="mr-2 !size-3.5" /> {label}
     </DropdownMenuItem>
@@ -416,14 +412,14 @@ export type PromptInputActionAddScreenshotProps = ComponentProps<typeof Dropdown
 export const PromptInputActionAddScreenshot = ({
   label = "Take screenshot",
   className,
-  onSelect,
+  onClick,
   ...props
 }: PromptInputActionAddScreenshotProps) => {
   const attachments = usePromptInputAttachments();
 
-  const handleSelect = useCallback(
-    async (event: Event) => {
-      onSelect?.(event);
+  const handleClick = useCallback(
+    async (event: Parameters<NonNullable<typeof onClick>>[0]) => {
+      onClick?.(event);
       if (event.defaultPrevented) {
         return;
       }
@@ -443,14 +439,14 @@ export const PromptInputActionAddScreenshot = ({
         throw error;
       }
     },
-    [onSelect, attachments],
+    [onClick, attachments],
   );
 
   return (
     <DropdownMenuItem
       className={cn("text-sm [&>svg]:!size-3.5", className)}
       {...props}
-      onSelect={handleSelect}
+      onClick={handleClick}
     >
       <Monitor className="mr-2 !size-3.5" />
       {label}
@@ -1099,7 +1095,7 @@ export const PromptInputButton = ({
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipTrigger render={button} />
       <TooltipContent side={side}>
         {tooltipContent}
         {shortcut && <span className="ml-2 text-fg-mute">{shortcut}</span>}
@@ -1120,11 +1116,13 @@ export const PromptInputActionMenuTrigger = ({
   children,
   ...props
 }: PromptInputActionMenuTriggerProps) => (
-  <DropdownMenuTrigger asChild>
-    <PromptInputButton className={className} {...props}>
-      {children ?? <PlusIcon className="!size-3.5" />}
-    </PromptInputButton>
-  </DropdownMenuTrigger>
+  <DropdownMenuTrigger
+    render={
+      <PromptInputButton className={className} {...props}>
+        {children ?? <PlusIcon className="!size-3.5" />}
+      </PromptInputButton>
+    }
+  />
 );
 
 export type PromptInputActionMenuContentProps = ComponentProps<typeof DropdownMenuContent>;
@@ -1241,13 +1239,7 @@ export const PromptInputSelectValue = ({ className, ...props }: PromptInputSelec
 
 export type PromptInputHoverCardProps = ComponentProps<typeof HoverCard>;
 
-export const PromptInputHoverCard = ({
-  openDelay = 0,
-  closeDelay = 0,
-  ...props
-}: PromptInputHoverCardProps) => (
-  <HoverCard closeDelay={closeDelay} openDelay={openDelay} {...props} />
-);
+export const PromptInputHoverCard = (props: PromptInputHoverCardProps) => <HoverCard {...props} />;
 
 export type PromptInputHoverCardTriggerProps = ComponentProps<typeof HoverCardTrigger>;
 

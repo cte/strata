@@ -220,20 +220,22 @@ function ResultFilterSelect({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          className="w-full justify-between px-2.5 sm:w-auto sm:min-w-[190px]"
-        >
-          <span className="inline-flex min-w-0 items-center gap-2">
-            <ListFilter size={13} strokeWidth={2} />
-            <span className="truncate">{label}</span>
-          </span>
-          <ChevronDown size={13} strokeWidth={2} className="text-fg-mute" />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="w-full justify-between px-2.5 sm:w-auto sm:min-w-[190px]"
+          >
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <ListFilter size={13} strokeWidth={2} />
+              <span className="truncate">{label}</span>
+            </span>
+            <ChevronDown size={13} strokeWidth={2} className="text-fg-mute" />
+          </Button>
+        }
+      />
       <DropdownMenuContent align="end" className="w-72 border-hairline bg-surface p-1.5 text-fg">
         <DropdownMenuLabel className="px-2 py-1 label-eyebrow">Result type</DropdownMenuLabel>
         {RESULT_FILTER_OPTIONS.map((option) => (
@@ -241,8 +243,8 @@ function ResultFilterSelect({
             key={option.value}
             checked={selected.has(option.value)}
             onCheckedChange={(checked) => toggleFilter(option.value, checked === true)}
-            onSelect={(event) => event.preventDefault()}
-            className="items-start rounded-md py-2 pr-2 text-sm focus:bg-surface-2"
+            closeOnClick={false}
+            className="items-start rounded-md py-2 pr-2 text-sm data-highlighted:bg-surface-2"
           >
             <span className="grid gap-0.5">
               <span className="font-medium text-fg">{option.label}</span>

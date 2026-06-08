@@ -486,17 +486,19 @@ export function RoutinesPage(): React.ReactElement {
               Refresh
             </Button>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={createFromTemplateMutation.isPending}
-                >
-                  <LayoutTemplate size={13} strokeWidth={2} />
-                  From template
-                </Button>
-              </DropdownMenuTrigger>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={createFromTemplateMutation.isPending}
+                  >
+                    <LayoutTemplate size={13} strokeWidth={2} />
+                    From template
+                  </Button>
+                }
+              />
               <DropdownMenuContent
                 align="end"
                 className="w-80 border-hairline bg-surface p-1.5 text-fg"
@@ -508,8 +510,8 @@ export function RoutinesPage(): React.ReactElement {
                   <DropdownMenuItem
                     key={template.key}
                     disabled={createFromTemplateMutation.isPending}
-                    onSelect={() => instantiateTemplate(template.key)}
-                    className="items-start rounded-md py-2 pr-2 text-sm focus:bg-surface-2"
+                    onClick={() => instantiateTemplate(template.key)}
+                    className="items-start rounded-md py-2 pr-2 text-sm data-highlighted:bg-surface-2"
                   >
                     <span className="grid min-w-0 gap-0.5">
                       <span className="font-medium text-fg">{template.label}</span>

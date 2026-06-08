@@ -92,7 +92,14 @@ export function contextWindowForModel(
   model: string,
 ): number | undefined {
   if (provider === "anthropic-claude") {
-    if (model.includes("opus-4-7") || model.includes("sonnet-4-6")) {
+    // Keep in sync with contextWindowForModel in
+    // packages/agent/src/modelFactory.ts (the canonical runtime copy).
+    if (
+      model.includes("opus-4-6") ||
+      model.includes("opus-4-7") ||
+      model.includes("opus-4-8") ||
+      model.includes("sonnet-4-6")
+    ) {
       return 1_000_000;
     }
     return 200_000;

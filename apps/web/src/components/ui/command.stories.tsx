@@ -1,13 +1,15 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Calendar, FileText, Settings, User } from "lucide-react";
+import type { ReactNode } from "react";
 import {
   Command,
+  CommandCollection,
   CommandEmpty,
   CommandGroup,
+  CommandGroupLabel,
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
   CommandShortcut,
 } from "./command";
 
@@ -23,62 +25,111 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+interface Action {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  shortcut?: string;
+  disabled?: boolean;
+}
+
+interface ActionGroup {
+  label: string;
+  items: Action[];
+}
+
 /**
- * An inline `cmdk` palette: a search input filters the grouped items as you
+ * A Base UI combobox palette: a search input filters the grouped items as you
  * type, with `CommandEmpty` shown when nothing matches.
  */
 export const Default: Story = {
-  render: () => (
-    <Command className="w-80 rounded-md border border-hairline bg-surface text-fg">
-      <CommandInput placeholder="Type a command or search..." />
-      <CommandList>
+  render: () => {
+    const groups: ActionGroup[] = [
+      {
+        label: "Suggestions",
+        items: [
+          { id: "meetings", label: "Open today's meetings", icon: <Calendar /> },
+          { id: "search", label: "Search the wiki", icon: <FileText />, shortcut: "⌘K" },
+        ],
+      },
+      {
+        label: "Settings",
+        items: [
+          { id: "profile", label: "Profile", icon: <User /> },
+          { id: "connectors", label: "Connectors", icon: <Settings />, shortcut: "⌘," },
+        ],
+      },
+    ];
+    return (
+      <Command<Action>
+        items={groups}
+        itemToStringLabel={(item) => item.label}
+        className="w-80 rounded-md border border-hairline bg-surface"
+      >
+        <CommandInput placeholder="Type a command or search..." />
+        <CommandList<ActionGroup>>
+          {(group) => (
+            <CommandGroup key={group.label} items={group.items}>
+              <CommandGroupLabel>{group.label}</CommandGroupLabel>
+              <CommandCollection<Action>>
+                {(item) => (
+                  <CommandItem key={item.id} value={item} disabled={item.disabled}>
+                    {item.icon}
+                    <span>{item.label}</span>
+                    {item.shortcut ? <CommandShortcut>{item.shortcut}</CommandShortcut> : null}
+                  </CommandItem>
+                )}
+              </CommandCollection>
+            </CommandGroup>
+          )}
+        </CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
-        <CommandGroup heading="Suggestions">
-          <CommandItem>
-            <Calendar />
-            <span>Open today's meetings</span>
-          </CommandItem>
-          <CommandItem>
-            <FileText />
-            <span>Search the wiki</span>
-            <CommandShortcut>⌘K</CommandShortcut>
-          </CommandItem>
-        </CommandGroup>
-        <CommandSeparator />
-        <CommandGroup heading="Settings">
-          <CommandItem>
-            <User />
-            <span>Profile</span>
-          </CommandItem>
-          <CommandItem>
-            <Settings />
-            <span>Connectors</span>
-            <CommandShortcut>⌘,</CommandShortcut>
-          </CommandItem>
-        </CommandGroup>
-      </CommandList>
-    </Command>
-  ),
+      </Command>
+    );
+  },
 };
 
 /** Disabled items render dimmed and are not selectable. */
 export const WithDisabledItem: Story = {
-  render: () => (
-    <Command className="w-80 rounded-md border border-hairline bg-surface text-fg">
-      <CommandInput placeholder="Search routines..." />
-      <CommandList>
+  render: () => {
+    const groups: ActionGroup[] = [
+      {
+        label: "Routines",
+        items: [
+          { id: "granola", label: "Granola daily TODO", icon: <FileText /> },
+          {
+            id: "actions",
+            label: "Action extraction (disabled)",
+            icon: <FileText />,
+            disabled: true,
+          },
+        ],
+      },
+    ];
+    return (
+      <Command<Action>
+        items={groups}
+        itemToStringLabel={(item) => item.label}
+        className="w-80 rounded-md border border-hairline bg-surface"
+      >
+        <CommandInput placeholder="Search routines..." />
+        <CommandList<ActionGroup>>
+          {(group) => (
+            <CommandGroup key={group.label} items={group.items}>
+              <CommandGroupLabel>{group.label}</CommandGroupLabel>
+              <CommandCollection<Action>>
+                {(item) => (
+                  <CommandItem key={item.id} value={item} disabled={item.disabled}>
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </CommandItem>
+                )}
+              </CommandCollection>
+            </CommandGroup>
+          )}
+        </CommandList>
         <CommandEmpty>No routines found.</CommandEmpty>
-        <CommandGroup heading="Routines">
-          <CommandItem>
-            <FileText />
-            <span>Granola daily TODO</span>
-          </CommandItem>
-          <CommandItem disabled>
-            <FileText />
-            <span>Action extraction (disabled)</span>
-          </CommandItem>
-        </CommandGroup>
-      </CommandList>
-    </Command>
-  ),
+      </Command>
+    );
+  },
 };

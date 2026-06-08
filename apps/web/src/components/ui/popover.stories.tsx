@@ -19,12 +19,14 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   render: () => (
     <Popover>
-      <PopoverTrigger asChild>
-        <Button variant="outline">
-          <Settings2 />
-          Display
-        </Button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <Button variant="outline">
+            <Settings2 />
+            Display
+          </Button>
+        }
+      />
       <PopoverContent>
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium text-fg">Display options</p>
@@ -41,12 +43,14 @@ export const Default: Story = {
 export const Open: Story = {
   render: () => (
     <Popover defaultOpen>
-      <PopoverTrigger asChild>
-        <Button variant="outline">
-          <Settings2 />
-          Display
-        </Button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <Button variant="outline">
+            <Settings2 />
+            Display
+          </Button>
+        }
+      />
       <PopoverContent>
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium text-fg">Display options</p>

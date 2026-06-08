@@ -79,7 +79,7 @@ export function SelectInput({
     typeof option === "string" ? { value: option, label: option } : option,
   );
   return (
-    <Select value={value} onValueChange={onChange} disabled={disabled}>
+    <Select value={value} onValueChange={(next) => onChange(next ?? "")} disabled={disabled}>
       <SelectTrigger className="h-9 w-full border-hairline bg-bg text-xs text-fg">
         <SelectValue />
       </SelectTrigger>

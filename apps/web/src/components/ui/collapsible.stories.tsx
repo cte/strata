@@ -21,10 +21,8 @@ export const Default: Story = {
     <Collapsible className="w-80 rounded-md border border-hairline bg-surface p-4">
       <div className="flex items-center justify-between gap-4">
         <span className="text-sm font-medium text-fg">Trigger configuration</span>
-        <CollapsibleTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label="Toggle">
-            <ChevronsUpDown />
-          </Button>
+        <CollapsibleTrigger render={<Button variant="ghost" size="icon" aria-label="Toggle" />}>
+          <ChevronsUpDown />
         </CollapsibleTrigger>
       </div>
       <CollapsibleContent className="mt-3 space-y-2 text-sm text-fg-dim">
@@ -42,10 +40,8 @@ export const Open: Story = {
     <Collapsible defaultOpen className="w-80 rounded-md border border-hairline bg-surface p-4">
       <div className="flex items-center justify-between gap-4">
         <span className="text-sm font-medium text-fg">Required skills</span>
-        <CollapsibleTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label="Toggle">
-            <ChevronsUpDown />
-          </Button>
+        <CollapsibleTrigger render={<Button variant="ghost" size="icon" aria-label="Toggle" />}>
+          <ChevronsUpDown />
         </CollapsibleTrigger>
       </div>
       <CollapsibleContent className="mt-3 space-y-2 text-sm text-fg-dim">

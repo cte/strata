@@ -4,14 +4,16 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   ModelSelector,
+  ModelSelectorCollection,
+  ModelSelectorCommand,
   ModelSelectorContent,
   ModelSelectorEmpty,
   ModelSelectorGroup,
+  ModelSelectorGroupLabel,
   ModelSelectorInput,
   ModelSelectorItem,
   ModelSelectorList,
   ModelSelectorName,
-  ModelSelectorSeparator,
   ModelSelectorShortcut,
   ModelSelectorTrigger,
 } from "./model-selector";
@@ -28,26 +30,77 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-type ModelEntry = {
+interface ModelItem {
   id: string;
   name: string;
-  provider: "anthropic" | "openai" | "google";
   shortcut?: string;
-};
+  search: string;
+}
 
-const ANTHROPIC_MODELS: ModelEntry[] = [
-  { id: "claude-opus", name: "Claude Opus 4.8", provider: "anthropic", shortcut: "⌘1" },
-  { id: "claude-sonnet", name: "Claude Sonnet 4.6", provider: "anthropic", shortcut: "⌘2" },
+interface ModelGroup {
+  label: string;
+  items: ModelItem[];
+}
+
+function makeItem(label: string, item: Omit<ModelItem, "search">): ModelItem {
+  return { ...item, search: `${label} ${item.name} ${item.id}` };
+}
+
+const GROUPS: ModelGroup[] = [
+  {
+    label: "Anthropic",
+    items: [
+      makeItem("Anthropic", { id: "claude-opus", name: "Claude Opus 4.8", shortcut: "⌘1" }),
+      makeItem("Anthropic", { id: "claude-sonnet", name: "Claude Sonnet 4.6", shortcut: "⌘2" }),
+    ],
+  },
+  {
+    label: "OpenAI",
+    items: [
+      makeItem("OpenAI", { id: "gpt-5", name: "GPT-5", shortcut: "⌘3" }),
+      makeItem("OpenAI", { id: "gpt-5-mini", name: "GPT-5 Mini" }),
+    ],
+  },
+  {
+    label: "Google",
+    items: [makeItem("Google", { id: "gemini-pro", name: "Gemini 2.5 Pro" })],
+  },
 ];
 
-const MODELS: Record<string, ModelEntry[]> = {
-  Anthropic: ANTHROPIC_MODELS,
-  OpenAI: [
-    { id: "gpt-5", name: "GPT-5", provider: "openai", shortcut: "⌘3" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
-  ],
-  Google: [{ id: "gemini-pro", name: "Gemini 2.5 Pro", provider: "google" }],
-};
+function ModelList({ selected, onSelect }: { selected: string; onSelect(id: string): void }) {
+  return (
+    <ModelSelectorCommand<ModelItem>
+      items={GROUPS}
+      itemToStringLabel={(item) => item.search}
+      onValueChange={(item) => {
+        if (item) {
+          onSelect(item.id);
+        }
+      }}
+    >
+      <ModelSelectorInput placeholder="Search models..." />
+      <ModelSelectorList<ModelGroup>>
+        {(group) => (
+          <ModelSelectorGroup key={group.label} items={group.items}>
+            <ModelSelectorGroupLabel>{group.label}</ModelSelectorGroupLabel>
+            <ModelSelectorCollection<ModelItem>>
+              {(item) => (
+                <ModelSelectorItem key={item.id} value={item}>
+                  <ModelSelectorName>{item.name}</ModelSelectorName>
+                  {selected === item.id ? <CheckIcon className="size-3.5 text-fg-mute" /> : null}
+                  {item.shortcut ? (
+                    <ModelSelectorShortcut>{item.shortcut}</ModelSelectorShortcut>
+                  ) : null}
+                </ModelSelectorItem>
+              )}
+            </ModelSelectorCollection>
+          </ModelSelectorGroup>
+        )}
+      </ModelSelectorList>
+      <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+    </ModelSelectorCommand>
+  );
+}
 
 /**
  * A command-palette model picker. Click the trigger to open the dialog and
@@ -57,44 +110,17 @@ export const Default: Story = {
   render: () => {
     const [selected, setSelected] = useState("claude-opus");
     const [open, setOpen] = useState(false);
-
-    const groups = Object.entries(MODELS);
-
     return (
       <ModelSelector open={open} onOpenChange={setOpen}>
-        <ModelSelectorTrigger asChild>
-          <Button variant="outline">Select model</Button>
-        </ModelSelectorTrigger>
+        <ModelSelectorTrigger render={<Button variant="outline">Select model</Button>} />
         <ModelSelectorContent>
-          <ModelSelectorInput placeholder="Search models..." />
-          <ModelSelectorList>
-            <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
-            {groups.map(([group, models], index) => (
-              <div key={group}>
-                {index > 0 ? <ModelSelectorSeparator /> : null}
-                <ModelSelectorGroup heading={group}>
-                  {models.map((model) => (
-                    <ModelSelectorItem
-                      key={model.id}
-                      value={`${group} ${model.name}`}
-                      onSelect={() => {
-                        setSelected(model.id);
-                        setOpen(false);
-                      }}
-                    >
-                      <ModelSelectorName>{model.name}</ModelSelectorName>
-                      {selected === model.id ? (
-                        <CheckIcon className="size-3.5 text-fg-mute" />
-                      ) : null}
-                      {model.shortcut ? (
-                        <ModelSelectorShortcut>{model.shortcut}</ModelSelectorShortcut>
-                      ) : null}
-                    </ModelSelectorItem>
-                  ))}
-                </ModelSelectorGroup>
-              </div>
-            ))}
-          </ModelSelectorList>
+          <ModelList
+            selected={selected}
+            onSelect={(id) => {
+              setSelected(id);
+              setOpen(false);
+            }}
+          />
         </ModelSelectorContent>
       </ModelSelector>
     );
@@ -105,24 +131,9 @@ export const Default: Story = {
 export const Open: Story = {
   render: () => (
     <ModelSelector defaultOpen>
-      <ModelSelectorTrigger asChild>
-        <Button variant="outline">Select model</Button>
-      </ModelSelectorTrigger>
+      <ModelSelectorTrigger render={<Button variant="outline">Select model</Button>} />
       <ModelSelectorContent>
-        <ModelSelectorInput placeholder="Search models..." />
-        <ModelSelectorList>
-          <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
-          <ModelSelectorGroup heading="Anthropic">
-            {ANTHROPIC_MODELS.map((model) => (
-              <ModelSelectorItem key={model.id} value={model.name}>
-                <ModelSelectorName>{model.name}</ModelSelectorName>
-                {model.shortcut ? (
-                  <ModelSelectorShortcut>{model.shortcut}</ModelSelectorShortcut>
-                ) : null}
-              </ModelSelectorItem>
-            ))}
-          </ModelSelectorGroup>
-        </ModelSelectorList>
+        <ModelList selected="claude-opus" onSelect={() => {}} />
       </ModelSelectorContent>
     </ModelSelector>
   ),

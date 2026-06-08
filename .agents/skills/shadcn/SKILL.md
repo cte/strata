@@ -7,6 +7,8 @@ allowed-tools: Bash(npx shadcn@latest *), Bash(pnpm dlx shadcn@latest *), Bash(b
 
 # shadcn/ui
 
+> **Strata project rule (apps/web):** This repo standardizes on the **Base UI** registry, not Radix. UI primitives in `apps/web/src/components/ui/` are built on `@base-ui/react`; `@radix-ui/*` and `cmdk` have been removed. When adding components, use the shadcn **Base UI** variant (`https://ui.shadcn.com/docs/components/base/<name>`) and never the classic Radix variant. Follow the Base UI conventions in the repo's `AGENTS.md` "Web UI (Tailwind) Conventions" and [ADR-0004](../../../docs/adr/0004-base-ui-over-radix.md): compose with the `render` prop (no `asChild`/`Slot`), style state with Base UI `data-*` attributes (`data-open`, `data-highlighted`, …), and structure popups as `Portal > Positioner > Popup`.
+
 A framework for building ui, components and design systems. Components are added as source code to the user's project via the CLI.
 
 > **IMPORTANT:** Run all CLI commands using the project's package runner: `npx shadcn@latest`, `pnpm dlx shadcn@latest`, or `bunx --bun shadcn@latest` — based on the project's `packageManager`. Examples below use `npx shadcn@latest` but substitute the correct runner for the project.

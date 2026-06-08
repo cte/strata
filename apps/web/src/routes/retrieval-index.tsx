@@ -221,12 +221,16 @@ export function RetrievalIndexPage(): React.ReactElement {
           title="Automation"
           description="Schedule index and hygiene refreshes as Routines."
           aside={
-            <Button asChild variant="outline" size="sm">
-              <Link to="/routines">
-                <CalendarClock size={14} strokeWidth={1.75} />
-                Routines
-              </Link>
-            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              render={
+                <Link to="/routines">
+                  <CalendarClock size={14} strokeWidth={1.75} />
+                  Routines
+                </Link>
+              }
+            />
           }
         >
           <p className="rounded-md border border-dashed border-hairline bg-bg-elev px-3 py-4 text-sm text-fg-dim">

@@ -22,7 +22,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A radix select with a placeholder and a short list of options. */
+/** A Base UI select with a placeholder and a short list of options. */
 export const Default: Story = {
   render: () => (
     <Select>

@@ -1,11 +1,14 @@
 import { Brain, Check, ChevronDown, LoaderCircle, Plug } from "lucide-react";
 import type * as React from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ModelSelector,
+  ModelSelectorCollection,
+  ModelSelectorCommand,
   ModelSelectorContent,
   ModelSelectorEmpty,
   ModelSelectorGroup,
+  ModelSelectorGroupLabel,
   ModelSelectorInput,
   ModelSelectorItem,
   ModelSelectorList,
@@ -43,6 +46,22 @@ const REASONING_LABELS: Record<ChatReasoningEffort, string> = {
   xhigh: "xhigh",
 };
 
+// One selectable model in the combobox. The `value` object is what Base UI
+// filters and selects on; `search` is the string used for substring matching.
+interface ModelItem {
+  provider: ChatProviderModelState["provider"];
+  id: string;
+  description: string;
+  search: string;
+  selected: boolean;
+}
+
+// A provider group: its header (label/status/connect) plus its filtered models.
+interface ModelGroup {
+  state: ChatProviderModelState;
+  items: ModelItem[];
+}
+
 export function ChatModelPicker({
   choice,
   providerStates,
@@ -58,62 +77,89 @@ export function ChatModelPicker({
     onOpenChange(false);
     setAuthOpen(true);
   };
+
+  const groups = useMemo<ModelGroup[]>(
+    () =>
+      providerStates.map((state) => ({
+        state,
+        items: !state.available
+          ? []
+          : state.models.map((model) => ({
+              provider: state.provider,
+              id: model.id,
+              description: model.description,
+              search: `${state.label} ${state.provider} ${model.id} ${model.description}`,
+              selected: choice?.provider === state.provider && choice.model === model.id,
+            })),
+      })),
+    [providerStates, choice],
+  );
+
   return (
     <>
       <ModelSelector open={open} onOpenChange={onOpenChange}>
-        <ModelSelectorTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={disabled}
-            aria-label="Choose model"
-            title="Choose model"
-            className="h-7 max-w-full justify-start gap-1.5 px-2 font-mono text-xs text-fg-dim [&>svg]:!size-[13px]"
-          >
-            <span className="truncate">
-              {choice === null ? "model" : `${providerShortLabel(choice.provider)}:${choice.model}`}
-            </span>
-            {choice === null || currentEffort === "off" ? null : (
-              <span className="shrink-0 text-fg-mute">/{REASONING_LABELS[currentEffort]}</span>
-            )}
-            <ChevronDown
-              size={13}
-              strokeWidth={1.75}
-              className={cn("shrink-0 transition-transform", open && "rotate-180")}
+        <ModelSelectorTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={disabled}
+              aria-label="Choose model"
+              title="Choose model"
+              className="h-7 max-w-full justify-start gap-1.5 px-2 font-mono text-xs text-fg-dim [&>svg]:!size-[13px]"
             />
-          </Button>
+          }
+        >
+          <span className="truncate">
+            {choice === null ? "model" : `${providerShortLabel(choice.provider)}:${choice.model}`}
+          </span>
+          {choice === null || currentEffort === "off" ? null : (
+            <span className="shrink-0 text-fg-mute">/{REASONING_LABELS[currentEffort]}</span>
+          )}
+          <ChevronDown
+            size={13}
+            strokeWidth={1.75}
+            className={cn("shrink-0 transition-transform", open && "rotate-180")}
+          />
         </ModelSelectorTrigger>
         <ModelSelectorContent
           title="Choose model"
           className="w-[min(680px,calc(100vw-2rem))] overflow-hidden rounded-lg border border-hairline-strong bg-surface text-fg shadow-2xl shadow-black/45"
         >
-          <ModelSelectorInput placeholder="Search models..." />
-          <ModelSelectorList className="max-h-[min(420px,60dvh)]">
+          <ModelSelectorCommand<ModelItem>
+            items={groups}
+            itemToStringLabel={(item) => item.search}
+            onValueChange={(item) => {
+              if (item === null) {
+                return;
+              }
+              onSelect({
+                provider: item.provider,
+                model: item.id,
+                reasoningEffort: currentEffort,
+              });
+              onOpenChange(false);
+            }}
+          >
+            <ModelSelectorInput placeholder="Search models..." />
+            <ModelSelectorList<ModelGroup> className="max-h-[min(420px,60dvh)]">
+              {(group) => (
+                <ProviderModelGroup
+                  key={group.state.provider}
+                  group={group}
+                  onManageProviders={openProviderAuth}
+                />
+              )}
+            </ModelSelectorList>
             <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
-            {providerStates.map((state) => (
-              <ProviderModelGroup
-                key={state.provider}
-                state={state}
-                choice={choice}
-                onManageProviders={openProviderAuth}
-                onSelect={(model) => {
-                  onSelect({
-                    provider: state.provider,
-                    model,
-                    reasoningEffort: currentEffort,
-                  });
-                  onOpenChange(false);
-                }}
-              />
-            ))}
-          </ModelSelectorList>
-          <ModelSelectorSeparator />
-          <PickerFooter
-            currentEffort={currentEffort}
-            onReasoningEffortChange={onReasoningEffortChange}
-            onManageProviders={openProviderAuth}
-          />
+            <ModelSelectorSeparator />
+            <PickerFooter
+              currentEffort={currentEffort}
+              onReasoningEffortChange={onReasoningEffortChange}
+              onManageProviders={openProviderAuth}
+            />
+          </ModelSelectorCommand>
         </ModelSelectorContent>
       </ModelSelector>
       <ModelAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
@@ -122,76 +168,68 @@ export function ChatModelPicker({
 }
 
 function ProviderModelGroup({
-  state,
-  choice,
-  onSelect,
+  group,
   onManageProviders,
 }: {
-  state: ChatProviderModelState;
-  choice: ChatModelChoice | null;
-  onSelect(model: string): void;
+  group: ModelGroup;
   onManageProviders(): void;
 }): React.ReactElement {
+  const { state } = group;
   // openai-compatible auth is an env API key, not OAuth — no connect action.
   const canConnect = !state.available && state.provider !== "openai-compatible";
   const statusText = state.error ?? state.message;
   return (
-    <ModelSelectorGroup
-      heading={
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate">{state.label}</span>
-          {state.loading ? (
-            <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin" />
-          ) : null}
-          {canConnect ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onManageProviders();
-              }}
-              className="ml-auto min-w-0 truncate text-2xs normal-case tracking-normal text-warn underline-offset-2 hover:underline"
-            >
-              Connect →
-            </button>
-          ) : (
-            <span
-              className={cn(
-                "ml-auto min-w-0 truncate text-2xs normal-case tracking-normal",
-                state.available ? "text-fg-mute" : "text-warn",
-              )}
-            >
-              {statusText}
-            </span>
-          )}
-        </span>
-      }
-    >
+    <ModelSelectorGroup items={group.items}>
+      <ModelSelectorGroupLabel className="flex min-w-0 items-center gap-2 normal-case tracking-normal">
+        <span className="truncate text-fg-mute">{state.label}</span>
+        {state.loading ? (
+          <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin" />
+        ) : null}
+        {canConnect ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onManageProviders();
+            }}
+            className="ml-auto min-w-0 truncate text-2xs text-warn underline-offset-2 hover:underline"
+          >
+            Connect →
+          </button>
+        ) : (
+          <span
+            className={cn(
+              "ml-auto min-w-0 truncate text-2xs",
+              state.available ? "text-fg-mute" : "text-warn",
+            )}
+          >
+            {statusText}
+          </span>
+        )}
+      </ModelSelectorGroupLabel>
       {!state.available ? null : state.models.length === 0 && !state.loading ? (
         <ModelSelectorItem disabled>No models returned.</ModelSelectorItem>
       ) : (
-        state.models.map((model) => {
-          const selected = choice?.provider === state.provider && choice.model === model.id;
-          return (
+        <ModelSelectorCollection<ModelItem>>
+          {(item) => (
             <ModelSelectorItem
-              key={`${state.provider}:${model.id}`}
-              value={`${state.label} ${state.provider} ${model.id} ${model.description}`}
-              onSelect={() => onSelect(model.id)}
+              key={`${item.provider}:${item.id}`}
+              value={item}
               className="gap-2 py-2 font-mono text-xs"
             >
-              <ModelSelectorName>{model.id}</ModelSelectorName>
-              {model.description === "" ? null : (
+              <ModelSelectorName>{item.id}</ModelSelectorName>
+              {item.description === "" ? null : (
                 <ModelSelectorShortcut className="hidden max-w-48 truncate normal-case tracking-normal sm:inline">
-                  {model.description}
+                  {item.description}
                 </ModelSelectorShortcut>
               )}
-              {selected ? (
+              {item.selected ? (
                 <Check size={13} strokeWidth={1.75} className="ml-1 shrink-0 text-accent" />
               ) : null}
             </ModelSelectorItem>
-          );
-        })
+          )}
+        </ModelSelectorCollection>
       )}
     </ModelSelectorGroup>
   );

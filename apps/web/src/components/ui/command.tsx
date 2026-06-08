@@ -1,142 +1,173 @@
-import { type DialogProps } from "@radix-ui/react-dialog";
-import { Command as CommandPrimitive } from "cmdk";
+import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox";
 import { Search } from "lucide-react";
-import * as React from "react";
+import type * as React from "react";
+
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-const Command = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive
-    ref={ref}
-    className={cn(
-      "flex h-full w-full flex-col overflow-hidden rounded-md bg-surface text-fg",
-      className,
-    )}
-    {...props}
-  />
-));
-Command.displayName = CommandPrimitive.displayName;
+/**
+ * Command palette built on Base UI's `Combobox`.
+ *
+ * Unlike the previous cmdk implementation, Base UI's combobox is data-driven:
+ * the `Command` root receives an `items` array (flat or grouped) and filters it
+ * automatically, while `CommandList` renders the filtered results through a
+ * render-function child. The picker stays inline and always-open (it lives
+ * inside a dialog), so there is no positioner/popup — `CommandList` renders the
+ * list directly.
+ */
 
-const CommandDialog = ({
-  children,
-  commandProps,
-  title = "Command menu",
-  ...props
-}: DialogProps & {
-  commandProps?: React.ComponentPropsWithoutRef<typeof Command>;
-  title?: string;
-}) => {
-  return (
-    <Dialog {...props}>
-      <DialogContent className="overflow-hidden p-0 sm:p-0 [&>button]:hidden">
-        <DialogTitle className="sr-only">{title}</DialogTitle>
-        <Command
-          {...commandProps}
-          className={cn(
-            "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-fg-mute [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:h-3.5 [&_[cmdk-input-wrapper]_svg]:w-3.5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-3.5 [&_[cmdk-item]_svg]:w-3.5",
-            commandProps?.className,
-          )}
-        >
-          {children}
-        </Command>
-      </DialogContent>
-    </Dialog>
-  );
+type CommandProps<ItemValue> = Omit<
+  React.ComponentProps<typeof ComboboxPrimitive.Root<ItemValue>>,
+  "render"
+> & {
+  className?: string;
 };
 
-const CommandInput = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Input>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
->(({ className, ...props }, ref) => (
-  <div
-    className="flex items-center overflow-hidden border-b px-3 [scrollbar-gutter:stable_both-edges]"
-    cmdk-input-wrapper=""
-  >
-    <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
-    <CommandPrimitive.Input
-      ref={ref}
+function Command<ItemValue>({
+  className,
+  children,
+  ...props
+}: CommandProps<ItemValue>): React.ReactElement {
+  return (
+    <ComboboxPrimitive.Root
+      // Inline, always-open list inside the dialog.
+      open
+      openOnInputClick={false}
+      {...props}
+    >
+      <div className={cn("flex h-full w-full flex-col overflow-hidden text-fg", className)}>
+        {children}
+      </div>
+    </ComboboxPrimitive.Root>
+  );
+}
+
+function CommandInput({
+  className,
+  ...props
+}: React.ComponentProps<typeof ComboboxPrimitive.Input>): React.ReactElement {
+  return (
+    <div className="flex items-center border-b px-3" data-slot="command-input-wrapper">
+      <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+      <ComboboxPrimitive.Input
+        className={cn(
+          "flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-fg-mute disabled:cursor-not-allowed disabled:opacity-50",
+          className,
+        )}
+        {...props}
+      />
+    </div>
+  );
+}
+
+type CommandListProps<ItemValue> = Omit<
+  React.ComponentProps<typeof ComboboxPrimitive.List>,
+  "children"
+> & {
+  // Data-driven (render function over filtered items) OR children-driven
+  // (plain nodes, with filtering handled externally via `filter={null}`).
+  children: ((item: ItemValue, index: number) => React.ReactNode) | React.ReactNode;
+};
+
+function CommandList<ItemValue>({
+  className,
+  children,
+  ...props
+}: CommandListProps<ItemValue>): React.ReactElement {
+  return (
+    <ComboboxPrimitive.List
       className={cn(
-        "flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-fg-mute disabled:cursor-not-allowed disabled:opacity-50",
+        "themed-scrollbar max-h-[300px] overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]",
+        className,
+      )}
+      {...props}
+    >
+      {children as React.ReactNode}
+    </ComboboxPrimitive.List>
+  );
+}
+
+function CommandEmpty({
+  className,
+  ...props
+}: React.ComponentProps<typeof ComboboxPrimitive.Empty>): React.ReactElement {
+  return (
+    <ComboboxPrimitive.Empty
+      className={cn("py-6 text-center text-sm text-fg-mute", className)}
+      {...props}
+    />
+  );
+}
+
+function CommandGroup({
+  className,
+  ...props
+}: React.ComponentProps<typeof ComboboxPrimitive.Group>): React.ReactElement {
+  return <ComboboxPrimitive.Group className={cn("overflow-hidden p-1", className)} {...props} />;
+}
+
+function CommandCollection<ItemValue>(props: {
+  children: (item: ItemValue, index: number) => React.ReactNode;
+}): React.ReactElement {
+  return (
+    <ComboboxPrimitive.Collection>
+      {props.children as (item: unknown, index: number) => React.ReactNode}
+    </ComboboxPrimitive.Collection>
+  );
+}
+
+function CommandGroupLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof ComboboxPrimitive.GroupLabel>): React.ReactElement {
+  return (
+    <ComboboxPrimitive.GroupLabel
+      className={cn("px-2 py-1.5 text-2xs font-medium text-fg-mute", className)}
+      {...props}
+    />
+  );
+}
+
+type CommandItemProps = React.ComponentProps<typeof ComboboxPrimitive.Item> & {
+  // cmdk-style alias: fired when the item is chosen. Base UI uses onClick.
+  onSelect?: () => void;
+};
+
+function CommandItem({
+  className,
+  onSelect,
+  onClick,
+  ...props
+}: CommandItemProps): React.ReactElement {
+  return (
+    <ComboboxPrimitive.Item
+      onClick={(event) => {
+        onClick?.(event);
+        onSelect?.();
+      }}
+      className={cn(
+        "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-disabled:pointer-events-none data-highlighted:bg-accent-soft data-highlighted:text-fg data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
         className,
       )}
       {...props}
     />
-  </div>
-));
+  );
+}
 
-CommandInput.displayName = CommandPrimitive.Input.displayName;
+function CommandItemIndicator(
+  props: React.ComponentProps<typeof ComboboxPrimitive.ItemIndicator>,
+): React.ReactElement {
+  return <ComboboxPrimitive.ItemIndicator {...props} />;
+}
 
-const CommandList = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.List>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.List
-    ref={ref}
-    className={cn(
-      "themed-scrollbar max-h-[300px] overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]",
-      className,
-    )}
-    {...props}
-  />
-));
-
-CommandList.displayName = CommandPrimitive.List.displayName;
-
-const CommandEmpty = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Empty>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>
->((props, ref) => (
-  <CommandPrimitive.Empty ref={ref} className="py-6 text-center text-sm" {...props} />
-));
-
-CommandEmpty.displayName = CommandPrimitive.Empty.displayName;
-
-const CommandGroup = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Group>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Group
-    ref={ref}
-    className={cn(
-      "overflow-hidden p-1 text-fg [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-fg-mute",
-      className,
-    )}
-    {...props}
-  />
-));
-
-CommandGroup.displayName = CommandPrimitive.Group.displayName;
-
-const CommandSeparator = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Separator>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Separator
-    ref={ref}
-    className={cn("-mx-1 h-px bg-hairline", className)}
-    {...props}
-  />
-));
-CommandSeparator.displayName = CommandPrimitive.Separator.displayName;
-
-const CommandItem = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Item
-    ref={ref}
-    className={cn(
-      "relative flex cursor-default gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[selected=true]:bg-accent-soft data-[selected=true]:text-fg data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
-      className,
-    )}
-    {...props}
-  />
-));
-
-CommandItem.displayName = CommandPrimitive.Item.displayName;
+function CommandSeparator({
+  className,
+  ...props
+}: React.ComponentProps<typeof ComboboxPrimitive.Separator>): React.ReactElement {
+  return (
+    <ComboboxPrimitive.Separator className={cn("-mx-1 h-px bg-hairline", className)} {...props} />
+  );
+}
 
 const CommandShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
   return (
@@ -145,13 +176,38 @@ const CommandShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanE
 };
 CommandShortcut.displayName = "CommandShortcut";
 
+type CommandDialogProps<ItemValue> = React.ComponentProps<typeof Dialog> & {
+  title?: React.ReactNode;
+  commandProps?: Omit<CommandProps<ItemValue>, "children">;
+  children?: React.ReactNode;
+};
+
+function CommandDialog<ItemValue>({
+  children,
+  commandProps,
+  title = "Command menu",
+  ...props
+}: CommandDialogProps<ItemValue>): React.ReactElement {
+  return (
+    <Dialog {...props}>
+      <DialogContent className="overflow-hidden p-0! sm:p-0! [&>button]:hidden">
+        <DialogTitle className="sr-only">{title}</DialogTitle>
+        <Command {...commandProps}>{children}</Command>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export {
   Command,
+  CommandCollection,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
+  CommandGroupLabel,
   CommandInput,
   CommandItem,
+  CommandItemIndicator,
   CommandList,
   CommandSeparator,
   CommandShortcut,

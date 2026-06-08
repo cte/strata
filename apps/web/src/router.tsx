@@ -214,21 +214,19 @@ function NavItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        asChild
+        render={<Link to={to} />}
         isActive={isActive}
         tooltip={label}
         className="group/nav rounded-md text-sm font-medium tracking-tight text-fg-dim data-[active=true]:bg-surface-2 data-[active=true]:text-fg hover:bg-surface-2 hover:text-fg"
       >
-        <Link to={to}>
-          <Icon size={14} strokeWidth={1.75} />
-          <span>{label}</span>
-          {isActive ? (
-            <span
-              aria-hidden="true"
-              className="ml-auto h-1.5 w-1.5 rounded-full bg-selection shadow-[0_0_0_3px_color-mix(in_srgb,var(--selection)_22%,transparent)] group-data-[collapsible=icon]:hidden"
-            />
-          ) : null}
-        </Link>
+        <Icon size={14} strokeWidth={1.75} />
+        <span>{label}</span>
+        {isActive ? (
+          <span
+            aria-hidden="true"
+            className="ml-auto h-1.5 w-1.5 rounded-full bg-selection shadow-[0_0_0_3px_color-mix(in_srgb,var(--selection)_22%,transparent)] group-data-[collapsible=icon]:hidden"
+          />
+        ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
@@ -272,21 +270,19 @@ function ChatNavItem(): React.ReactElement {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        asChild
+        render={<Link to="/chat" onClick={handleOpenChat} />}
         isActive={isActive}
         tooltip="Chat"
         className="group/nav rounded-md text-sm font-medium tracking-tight text-fg-dim data-[active=true]:bg-surface-2 data-[active=true]:text-fg hover:bg-surface-2 hover:text-fg"
       >
-        <Link to="/chat" onClick={handleOpenChat}>
-          <MessageSquare size={14} strokeWidth={1.75} />
-          <span>Chat</span>
-          {isActive ? (
-            <span
-              aria-hidden="true"
-              className="ml-auto h-1.5 w-1.5 rounded-full bg-selection shadow-[0_0_0_3px_color-mix(in_srgb,var(--selection)_22%,transparent)] group-data-[collapsible=icon]:hidden"
-            />
-          ) : null}
-        </Link>
+        <MessageSquare size={14} strokeWidth={1.75} />
+        <span>Chat</span>
+        {isActive ? (
+          <span
+            aria-hidden="true"
+            className="ml-auto h-1.5 w-1.5 rounded-full bg-selection shadow-[0_0_0_3px_color-mix(in_srgb,var(--selection)_22%,transparent)] group-data-[collapsible=icon]:hidden"
+          />
+        ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
@@ -333,16 +329,18 @@ function ChatSessionCommandPalette({
 
   return (
     <CommandDialog
-      commandProps={{ shouldFilter: false }}
+      commandProps={{
+        // External filtering: we control the query and the rows, so disable
+        // Base UI's built-in combobox filtering.
+        filter: null,
+        inputValue: searchQuery,
+        onInputValueChange: setSearchQuery,
+      }}
       open={open}
       onOpenChange={setOpen}
       title="Chat session picker"
     >
-      <CommandInput
-        value={searchQuery}
-        onValueChange={setSearchQuery}
-        placeholder="Search chat sessions..."
-      />
+      <CommandInput placeholder="Search chat sessions..." />
       <CommandList className="max-h-[min(420px,70dvh)] py-2">
         <ChatSessionListBody
           sessions={sessions}

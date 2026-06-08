@@ -1,11 +1,13 @@
 import type { ComponentProps, ReactNode } from "react";
 import {
   Command,
-  CommandDialog,
+  CommandCollection,
   CommandEmpty,
   CommandGroup,
+  CommandGroupLabel,
   CommandInput,
   CommandItem,
+  CommandItemIndicator,
   CommandList,
   CommandSeparator,
   CommandShortcut,
@@ -35,53 +37,31 @@ export const ModelSelectorContent = ({
 }: ModelSelectorContentProps) => (
   <DialogContent
     aria-describedby={undefined}
-    className={cn("outline! border-none! p-0 outline-hairline! outline-solid!", className)}
+    className={cn(
+      "overflow-hidden border-none! p-0! outline! outline-hairline! outline-solid! sm:p-0!",
+      className,
+    )}
     {...props}
   >
     <DialogTitle className="sr-only">{title}</DialogTitle>
-    <Command className="**:data-[slot=command-input-wrapper]:h-auto">{children}</Command>
+    {children}
   </DialogContent>
 );
 
-export type ModelSelectorDialogProps = ComponentProps<typeof CommandDialog>;
-
-export const ModelSelectorDialog = (props: ModelSelectorDialogProps) => (
-  <CommandDialog {...props} />
-);
-
-export type ModelSelectorInputProps = ComponentProps<typeof CommandInput>;
-
-export const ModelSelectorInput = ({ className, ...props }: ModelSelectorInputProps) => (
-  <CommandInput className={cn("h-auto py-3.5", className)} {...props} />
-);
-
-export type ModelSelectorListProps = ComponentProps<typeof CommandList>;
-
-export const ModelSelectorList = (props: ModelSelectorListProps) => <CommandList {...props} />;
-
-export type ModelSelectorEmptyProps = ComponentProps<typeof CommandEmpty>;
-
-export const ModelSelectorEmpty = (props: ModelSelectorEmptyProps) => <CommandEmpty {...props} />;
-
-export type ModelSelectorGroupProps = ComponentProps<typeof CommandGroup>;
-
-export const ModelSelectorGroup = (props: ModelSelectorGroupProps) => <CommandGroup {...props} />;
-
-export type ModelSelectorItemProps = ComponentProps<typeof CommandItem>;
-
-export const ModelSelectorItem = (props: ModelSelectorItemProps) => <CommandItem {...props} />;
-
-export type ModelSelectorShortcutProps = ComponentProps<typeof CommandShortcut>;
-
-export const ModelSelectorShortcut = (props: ModelSelectorShortcutProps) => (
-  <CommandShortcut {...props} />
-);
-
-export type ModelSelectorSeparatorProps = ComponentProps<typeof CommandSeparator>;
-
-export const ModelSelectorSeparator = (props: ModelSelectorSeparatorProps) => (
-  <CommandSeparator {...props} />
-);
+export const ModelSelectorCommand = Command;
+export const ModelSelectorInput = ({
+  className,
+  ...props
+}: ComponentProps<typeof CommandInput>) => <CommandInput className={cn(className)} {...props} />;
+export const ModelSelectorList = CommandList;
+export const ModelSelectorCollection = CommandCollection;
+export const ModelSelectorEmpty = CommandEmpty;
+export const ModelSelectorGroup = CommandGroup;
+export const ModelSelectorGroupLabel = CommandGroupLabel;
+export const ModelSelectorItem = CommandItem;
+export const ModelSelectorItemIndicator = CommandItemIndicator;
+export const ModelSelectorSeparator = CommandSeparator;
+export const ModelSelectorShortcut = CommandShortcut;
 
 export type ModelSelectorNameProps = ComponentProps<"span">;
 

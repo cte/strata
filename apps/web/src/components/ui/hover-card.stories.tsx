@@ -19,9 +19,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   render: () => (
     <HoverCard>
-      <HoverCardTrigger asChild>
-        <Button variant="link">@strata</Button>
-      </HoverCardTrigger>
+      <HoverCardTrigger render={<Button variant="link">@strata</Button>} />
       <HoverCardContent>
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium text-fg">Strata</p>
@@ -42,9 +40,7 @@ export const Default: Story = {
 export const Open: Story = {
   render: () => (
     <HoverCard defaultOpen>
-      <HoverCardTrigger asChild>
-        <Button variant="link">@strata</Button>
-      </HoverCardTrigger>
+      <HoverCardTrigger render={<Button variant="link">@strata</Button>} />
       <HoverCardContent>
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium text-fg">Strata</p>

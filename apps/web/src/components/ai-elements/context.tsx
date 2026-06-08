@@ -2,7 +2,7 @@
 
 import type { LanguageModelUsage } from "ai";
 import { GaugeIcon } from "lucide-react";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import { createContext, useContext, useMemo } from "react";
 import { getUsage } from "tokenlens";
 import { Button } from "@/components/ui/button";
@@ -48,7 +48,7 @@ export const Context = ({ usedTokens, maxTokens, usage, modelId, ...props }: Con
 
   return (
     <ContextContext.Provider value={contextValue}>
-      <HoverCard closeDelay={0} openDelay={0} {...props} />
+      <HoverCard {...props} />
     </ContextContext.Provider>
   );
 };
@@ -69,20 +69,22 @@ export const ContextTrigger = ({
   }).format(usedPercent);
 
   return (
-    <HoverCardTrigger asChild>
-      {children ?? (
-        <Button
-          type="button"
-          variant="ghost"
-          aria-label={ariaLabel ?? `Model context usage: ${renderedPercent}`}
-          className={cn("[&>svg]:!size-[13px]", className)}
-          {...props}
-        >
-          <span className="font-medium text-xs text-fg-mute">{renderedPercent}</span>
-          <GaugeIcon aria-hidden="true" size={13} strokeWidth={1.75} />
-        </Button>
-      )}
-    </HoverCardTrigger>
+    <HoverCardTrigger
+      render={
+        (children as ReactElement | undefined) ?? (
+          <Button
+            type="button"
+            variant="ghost"
+            aria-label={ariaLabel ?? `Model context usage: ${renderedPercent}`}
+            className={cn("[&>svg]:!size-[13px]", className)}
+            {...props}
+          >
+            <span className="font-medium text-xs text-fg-mute">{renderedPercent}</span>
+            <GaugeIcon aria-hidden="true" size={13} strokeWidth={1.75} />
+          </Button>
+        )
+      }
+    />
   );
 };
 

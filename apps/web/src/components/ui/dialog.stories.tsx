@@ -27,9 +27,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   render: () => (
     <Dialog>
-      <DialogTrigger asChild>
-        <Button variant="outline">Open dialog</Button>
-      </DialogTrigger>
+      <DialogTrigger render={<Button variant="outline">Open dialog</Button>} />
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Delete stratum</DialogTitle>
@@ -42,12 +40,8 @@ export const Default: Story = {
           You can re-ingest the source material later, but local annotations will be lost.
         </p>
         <DialogFooter>
-          <DialogClose asChild>
-            <Button variant="ghost">Cancel</Button>
-          </DialogClose>
-          <DialogClose asChild>
-            <Button variant="destructive">Delete</Button>
-          </DialogClose>
+          <DialogClose render={<Button variant="ghost">Cancel</Button>} />
+          <DialogClose render={<Button variant="destructive">Delete</Button>} />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -58,9 +52,7 @@ export const Default: Story = {
 export const Open: Story = {
   render: () => (
     <Dialog defaultOpen>
-      <DialogTrigger asChild>
-        <Button variant="outline">Open dialog</Button>
-      </DialogTrigger>
+      <DialogTrigger render={<Button variant="outline">Open dialog</Button>} />
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Connector settings</DialogTitle>
@@ -70,12 +62,8 @@ export const Open: Story = {
         </DialogHeader>
         <div className="text-sm text-fg-dim">Changes apply on the next scheduled pull.</div>
         <DialogFooter>
-          <DialogClose asChild>
-            <Button variant="ghost">Cancel</Button>
-          </DialogClose>
-          <DialogClose asChild>
-            <Button>Save</Button>
-          </DialogClose>
+          <DialogClose render={<Button variant="ghost">Cancel</Button>} />
+          <DialogClose render={<Button>Save</Button>} />
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -29,9 +29,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   render: () => (
     <Sheet>
-      <SheetTrigger asChild>
-        <Button variant="outline">Open sheet</Button>
-      </SheetTrigger>
+      <SheetTrigger render={<Button variant="outline">Open sheet</Button>} />
       <SheetContent>
         <SheetHeader>
           <SheetTitle>Edit routine</SheetTitle>
@@ -41,12 +39,8 @@ export const Default: Story = {
         </SheetHeader>
         <div className="py-4 text-sm text-fg-dim">Settings panel content goes here.</div>
         <SheetFooter>
-          <SheetClose asChild>
-            <Button variant="ghost">Cancel</Button>
-          </SheetClose>
-          <SheetClose asChild>
-            <Button>Save</Button>
-          </SheetClose>
+          <SheetClose render={<Button variant="ghost">Cancel</Button>} />
+          <SheetClose render={<Button>Save</Button>} />
         </SheetFooter>
       </SheetContent>
     </Sheet>
@@ -57,9 +51,7 @@ export const Default: Story = {
 export const Open: Story = {
   render: () => (
     <Sheet defaultOpen>
-      <SheetTrigger asChild>
-        <Button variant="outline">Open sheet</Button>
-      </SheetTrigger>
+      <SheetTrigger render={<Button variant="outline">Open sheet</Button>} />
       <SheetContent>
         <SheetHeader>
           <SheetTitle>Ingest history</SheetTitle>
@@ -77,9 +69,7 @@ export const Sides: Story = {
     <div className="flex flex-wrap items-center gap-3">
       {SIDES.map((side) => (
         <Sheet key={side}>
-          <SheetTrigger asChild>
-            <Button variant="outline">{side}</Button>
-          </SheetTrigger>
+          <SheetTrigger render={<Button variant="outline">{side}</Button>} />
           <SheetContent side={side}>
             <SheetHeader>
               <SheetTitle>Side: {side}</SheetTitle>

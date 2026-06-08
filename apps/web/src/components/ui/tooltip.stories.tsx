@@ -16,18 +16,20 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Hover or focus the trigger to show the tooltip. The radix tooltip requires a
+ * Hover or focus the trigger to show the tooltip. The Base UI tooltip requires a
  * `TooltipProvider` ancestor (it owns the shared hover/delay timing).
  */
 export const Default: Story = {
   render: () => (
     <TooltipProvider>
       <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="outline" size="icon" aria-label="Add routine">
-            <Plus />
-          </Button>
-        </TooltipTrigger>
+        <TooltipTrigger
+          render={
+            <Button variant="outline" size="icon" aria-label="Add routine">
+              <Plus />
+            </Button>
+          }
+        />
         <TooltipContent>Add routine</TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -39,9 +41,7 @@ export const Open: Story = {
   render: () => (
     <TooltipProvider>
       <Tooltip defaultOpen>
-        <TooltipTrigger asChild>
-          <Button variant="outline">Hover me</Button>
-        </TooltipTrigger>
+        <TooltipTrigger render={<Button variant="outline">Hover me</Button>} />
         <TooltipContent>This tooltip starts open for the docs page.</TooltipContent>
       </Tooltip>
     </TooltipProvider>

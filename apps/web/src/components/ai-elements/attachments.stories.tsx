@@ -128,11 +128,13 @@ export const WithHoverCard: Story = {
       <Attachments variant="grid">
         <Attachment data={data} onRemove={noop}>
           <AttachmentHoverCard>
-            <AttachmentHoverCardTrigger asChild>
-              <div className="size-full">
-                <AttachmentPreview />
-              </div>
-            </AttachmentHoverCardTrigger>
+            <AttachmentHoverCardTrigger
+              render={
+                <div className="size-full">
+                  <AttachmentPreview />
+                </div>
+              }
+            />
             <AttachmentHoverCardContent>
               <div className="text-sm text-fg">{data.filename}</div>
               <div className="text-xs text-fg-mute">{data.mediaType}</div>

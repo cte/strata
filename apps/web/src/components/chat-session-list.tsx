@@ -165,49 +165,42 @@ export function SessionCommandRow({
         </span>
       </span>
       <Popover open={deleteOpen} onOpenChange={handleDeleteOpenChange}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label={`Delete ${title}`}
-            title={canDelete ? "Delete session" : "Cannot delete a running session"}
-            disabled={!canDelete}
-            onClick={(event) => {
-              // Stop the click from reaching the cmdk row (which would call
-              // onSelect → navigate). Do NOT preventDefault — Radix's
-              // composeEventHandlers skips the popover-open handler when the
-              // event has been default-prevented.
-              event.stopPropagation();
-            }}
-            onPointerDown={(event) => {
-              // Block cmdk's pointer handling so clicking the trash does not
-              // also navigate to the session via the row's onSelect.
-              event.stopPropagation();
-            }}
-            className={cn(
-              "absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-fg-mute opacity-0 transition-[opacity,color,background-color] duration-150 hover:bg-bad/10 hover:text-bad focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-30 group-hover/session-command:opacity-100 group-data-[selected=true]/session-command:opacity-100",
-              deleteOpen && "bg-bad/10 text-bad opacity-100",
-            )}
-          >
-            <Trash2 size={12} strokeWidth={1.75} />
-          </button>
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              aria-label={`Delete ${title}`}
+              title={canDelete ? "Delete session" : "Cannot delete a running session"}
+              disabled={!canDelete}
+              onClick={(event) => {
+                // Stop the click from reaching the cmdk row (which would call
+                // onSelect → navigate).
+                event.stopPropagation();
+              }}
+              onPointerDown={(event) => {
+                // Block cmdk's pointer handling so clicking the trash does not
+                // also navigate to the session via the row's onSelect.
+                event.stopPropagation();
+              }}
+              className={cn(
+                "absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-fg-mute opacity-0 transition-[opacity,color,background-color] duration-150 hover:bg-bad/10 hover:text-bad focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-30 group-hover/session-command:opacity-100 group-data-[selected=true]/session-command:opacity-100",
+                deleteOpen && "bg-bad/10 text-bad opacity-100",
+              )}
+            >
+              <Trash2 size={12} strokeWidth={1.75} />
+            </button>
+          }
+        />
         <PopoverContent
           side="right"
           align="start"
           sideOffset={10}
           collisionPadding={12}
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-          }}
-          onEscapeKeyDown={(event) => {
-            // Stop the cmd-k dialog from closing when popover handles Escape.
-            event.stopPropagation();
-          }}
-          onPointerDownOutside={(event) => {
-            // Stop the cmd-k dialog from treating popover-anchored clicks as
-            // outside interactions that would close the dialog.
-            event.stopPropagation();
-          }}
+          initialFocus={false}
+          // Base UI's layered dismissal handles this correctly without the
+          // Radix onEscapeKeyDown/onPointerDownOutside stopPropagation guards:
+          // Escape/outside-click on this popover closes only the popover, not
+          // the enclosing cmd-k dialog (verified in the Base UI migration).
           className="w-64 rounded-lg border border-hairline bg-bg-elev p-3 text-fg shadow-lg"
         >
           <ChatSessionDeleteConfirm

@@ -10,6 +10,29 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /*
+ * Base UI state variants. Base UI exposes component state through bare
+ * `data-*` attributes (e.g. `data-open`, `data-highlighted`) rather than
+ * Radix's `data-[state=open]`. Tailwind v4 does not ship these as built-in
+ * variants, so without registering them every `data-open:`/`data-closed:`/
+ * `data-highlighted:` utility silently compiles to nothing — which breaks
+ * menu/list highlight styling and, for dialogs/menus/popovers, the
+ * open/close animations (causing a hard "flash" on close instead of a fade).
+ * Register them here so the bare-attribute utilities used across
+ * `components/ui/*` actually emit CSS.
+ */
+@custom-variant data-open (&[data-open], &[data-popup-open]);
+@custom-variant data-closed (&[data-closed]);
+@custom-variant data-highlighted (&[data-highlighted]);
+@custom-variant data-selected (&[data-selected]);
+@custom-variant data-disabled (&[data-disabled]);
+@custom-variant data-checked (&[data-checked]);
+@custom-variant data-unchecked (&[data-unchecked]);
+@custom-variant data-panel-open (&[data-panel-open]);
+@custom-variant data-popup-open (&[data-popup-open]);
+@custom-variant data-starting-style (&[data-starting-style]);
+@custom-variant data-ending-style (&[data-ending-style]);
+
+/*
  * Self-hosted GeistMono Nerd Font (Mono variant) — the patched build from
  * nerdfonts.com that adds Powerline/Nerd Font icon glyphs the Google-hosted
  * Geist Mono lacks. Served from apps/web/public/fonts; consumed by the terminal

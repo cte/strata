@@ -137,12 +137,14 @@ function NewMcpServerDialog({
         }
       }}
     >
-      <DialogTrigger asChild>
-        <Button size="sm" variant="secondary">
-          <Plus size={13} strokeWidth={2} />
-          Add server
-        </Button>
-      </DialogTrigger>
+      <DialogTrigger
+        render={
+          <Button size="sm" variant="secondary">
+            <Plus size={13} strokeWidth={2} />
+            Add server
+          </Button>
+        }
+      />
       <DialogContent className="border-hairline bg-bg-elev text-fg">
         <DialogHeader>
           <DialogTitle>Add MCP server</DialogTitle>

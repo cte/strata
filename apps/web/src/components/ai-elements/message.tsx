@@ -121,9 +121,9 @@ export const MessageAction = ({
     return button;
   }
   return (
-    <TooltipProvider delayDuration={200}>
+    <TooltipProvider delay={200}>
       <Tooltip>
-        <TooltipTrigger asChild>{button}</TooltipTrigger>
+        <TooltipTrigger render={button} />
         <TooltipContent>
           <p>{tooltip}</p>
         </TooltipContent>
